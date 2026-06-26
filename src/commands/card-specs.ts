@@ -553,7 +553,7 @@ export function adminEndpointCardSpec(rows: readonly EndpointShowRow[]): Command
         heading: t('card.examples'),
         codeExamples: [
           '/admin endpoint add my-ep --type openai --key sk-xxx',
-          '/admin endpoint add codex-ep --type codex --auth-path ~/.codex/auth.json',
+          '/admin endpoint add codex-ep --type codex --auth-path /path/to/auth.json',
           '/admin endpoint set my-ep --proxy http://127.0.0.1:1080',
           '/admin endpoint rm my-ep',
         ],
@@ -563,8 +563,6 @@ export function adminEndpointCardSpec(rows: readonly EndpointShowRow[]): Command
 }
 
 export function adminBackendCardSpec(rows: readonly BackendShowRow[]): CommandListCardSpec {
-  // No `check` sub-command — admin backend check only prints a "run it via
-  // /config backend check" hint (not a real probe), so it stays off the card.
   return {
     title: t('card.cmdHelp.title', { cmd: '/admin backend' }),
     sections: [
@@ -584,6 +582,7 @@ export function adminBackendCardSpec(rows: readonly BackendShowRow[]): CommandLi
         rows: [
           [t('card.admin.backend.sub.add.cmd'), t('card.admin.backend.sub.add.desc')],
           [t('card.admin.backend.sub.set.cmd'), t('card.admin.backend.sub.set.desc')],
+          [t('card.admin.backend.sub.check.cmd'), t('card.admin.backend.sub.check.desc')],
           [t('card.admin.backend.sub.rm.cmd'), t('card.admin.backend.sub.rm.desc')],
         ],
       },

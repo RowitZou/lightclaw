@@ -138,6 +138,8 @@ export const LOCALES = {
     'card.admin.backend.sub.add.desc': '把一个模型加进公共可用列表',
     'card.admin.backend.sub.set.cmd': 'set <名称> [参数]',
     'card.admin.backend.sub.set.desc': '修改已有模型',
+    'card.admin.backend.sub.check.cmd': 'check <名称>',
+    'card.admin.backend.sub.check.desc': '检测该公共模型是否可用',
     'card.admin.backend.sub.rm.cmd': 'rm <名称>',
     'card.admin.backend.sub.rm.desc': '从公共可用列表删除模型',
     'card.admin.backend.param.endpoint':
@@ -169,7 +171,6 @@ export const LOCALES = {
       '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
       '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
       '  /admin backend rm <name>',
-    'admin.backend.checkHint': '提示：连通性检查请在你自己的 /config backend check <名称> 上运行；公共模型用 list 查看。',
     'admin.lane.usage': '用法：/admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
     'admin.proxy.set': '已设置公共代理：{proxy}。未单独配置代理的模型服务将统一通过其连接。',
     'admin.proxy.cleared': '已清除公共代理。未单独配置代理的模型服务恢复直接连接。',
@@ -1101,6 +1102,8 @@ export const LOCALES = {
     'card.admin.backend.sub.add.desc': 'add a model to the public usable list',
     'card.admin.backend.sub.set.cmd': 'set <name> [params]',
     'card.admin.backend.sub.set.desc': 'modify an existing model',
+    'card.admin.backend.sub.check.cmd': 'check <name>',
+    'card.admin.backend.sub.check.desc': 'probe whether this public model is reachable',
     'card.admin.backend.sub.rm.cmd': 'rm <name>',
     'card.admin.backend.sub.rm.desc': 'remove a model from the public usable list',
     'card.admin.backend.param.endpoint':
@@ -1132,7 +1135,6 @@ export const LOCALES = {
       '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
       '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
       '  /admin backend rm <name>',
-    'admin.backend.checkHint': 'Hint: run a connectivity check on your own /config backend check <name>; use list to view public models.',
     'admin.lane.usage': 'Usage: /admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
     'admin.proxy.set': 'Public proxy set: {proxy}. Model services without their own proxy will connect through it.',
     'admin.proxy.cleared': 'Public proxy cleared. Model services without their own proxy connect directly again.',

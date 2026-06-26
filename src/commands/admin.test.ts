@@ -12,6 +12,7 @@ import {
   getProviderFor,
 } from '../provider/index.js'
 import { createBuiltinReplRegistry } from './builtin.js'
+import { __setModelProbeHooksForTests } from './config.js'
 import { runAdminCommand } from './admin.js'
 
 let tmpHome = ''
@@ -20,11 +21,19 @@ beforeEach(() => {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-admin-command-'))
   setLightclawHomeOverride(tmpHome)
   setLang('en')
+  // /admin endpoint|backend add/set auto-probe just like /config. Stub the
+  // probes so the bulk of tests stay hermetic (no real network); probe-gate
+  // tests override these hooks inline.
+  __setModelProbeHooksForTests({
+    endpointModels: async () => ({ ok: true, summary: '' }),
+    connectivity: async () => ({ ok: true }),
+  })
 })
 
 afterEach(() => {
   setLang('cn')
   setLightclawHomeOverride(undefined)
+  __setModelProbeHooksForTests(null)
   rmSync(tmpHome, { recursive: true, force: true })
   _resetProviderCacheForTests()
 })
@@ -252,6 +261,66 @@ describe('/admin backend add (system-scope write-back)', () => {
     const persisted = readConfig()
     assert.equal('models' in persisted, false, 'no model should be written')
     assert.equal(persisted.keepMe, 1)
+  })
+})
+
+describe('/admin endpoint|backend connectivity gate (parity with /config)', () => {
+  it('endpoint add: a failed reachability probe is NOT a successful import (no write)', async () => {
+    writeFileSync(configPath(), JSON.stringify({ endpoints: { existing: { apiKey: 'X' } } }), 'utf8')
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: false, detail: 'HTTP 401 — bad key' }),
+    })
+    const out = await runAdminCommand('endpoint add ep --type openai --key BAD --base-url https://x', {
+      config: liveConfig(),
+      userId: 'admin',
+    })
+    assert.match(out, /HTTP 401/)
+    // The endpoint must NOT be persisted (gate fails before write); the prior
+    // config is left untouched — a service we can't reach is not added.
+    const endpoints = readConfig().endpoints as Record<string, unknown>
+    assert.equal(endpoints.ep, undefined, 'failed endpoint must not be persisted')
+    assert.ok(endpoints.existing, 'prior config untouched')
+  })
+
+  it('backend add: a failed connectivity probe rolls back the model AND the auto-default', async () => {
+    writeFileSync(configPath(), JSON.stringify({ endpoints: { ep: { apiKey: 'K' } } }), 'utf8')
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: false, detail: 'model not found' }),
+    })
+    const out = await runAdminCommand('backend add m --endpoint ep', { config: liveConfig(), userId: 'admin' })
+    assert.match(out, /model not found/)
+    const persisted = readConfig()
+    assert.equal((persisted.models as Record<string, unknown>)?.m, undefined, 'model rolled back')
+    assert.equal(persisted.defaultModel, undefined, 'auto-default rolled back too')
+  })
+
+  it('backend add: first model auto-promotes to defaultModel without --default (parity)', async () => {
+    writeFileSync(configPath(), JSON.stringify({ endpoints: { ep: { apiKey: 'K' } } }), 'utf8')
+    await runAdminCommand('backend add m --endpoint ep', { config: liveConfig(), userId: 'admin' })
+    assert.equal(readConfig().defaultModel, 'm')
+  })
+
+  it('backend check: a real connectivity probe (not the old hint string)', async () => {
+    writeFileSync(configPath(), JSON.stringify({
+      endpoints: { ep: { apiKey: 'K' } },
+      models: { m: { endpoint: 'ep', schema: 'openai', upstreamModel: 'gpt' } },
+      defaultModel: 'm',
+    }), 'utf8')
+    __setModelProbeHooksForTests({ connectivity: async () => ({ ok: true }) })
+    const out = await runAdminCommand('backend check m', { config: liveConfig(), userId: 'admin' })
+    assert.match(out, /ok|可用|reachable|connectivity/i)
+    assert.doesNotMatch(out, /\/config backend check/)
+  })
+
+  it('endpoint add/set + backend add result cards show config values (no secret)', async () => {
+    const out = await runAdminCommand('endpoint add ep --type openai --key K --base-url https://x', {
+      config: liveConfig(),
+      userId: 'admin',
+    })
+    assert.match(out, /type=openai/)
+    assert.match(out, /baseUrl=https:\/\/x/)
+    assert.doesNotMatch(out, /\bK\b/, 'the raw key must never appear in the card')
   })
 })
 

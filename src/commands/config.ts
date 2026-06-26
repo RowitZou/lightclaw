@@ -8,6 +8,7 @@ import {
   parseCodexAuthRef,
 } from '../auth/codex/user-store.js'
 import { listCodexSlugs } from '../auth/codex/models.js'
+import type { AuthCredentials } from '../auth/types.js'
 import { listApiKeyModels, type ListModelsResult } from '../provider/list-models.js'
 import { streamChat as defaultStreamChat } from '../api.js'
 import { getConfig, type LightClawConfig } from '../config.js'
@@ -124,12 +125,12 @@ export function __setProbeStreamChatForTests(
 ): void {
   probeStreamChatImpl = impl ?? defaultStreamChat
 }
-function probeEndpointModels(
+export function probeEndpointModels(
   input: Parameters<typeof probeEndpointModelsImpl>[0],
 ): ReturnType<typeof probeEndpointModelsImpl> {
   return (testProbeHooks?.endpointModels ?? probeEndpointModelsImpl)(input)
 }
-function probeModelConnectivity(
+export function probeModelConnectivity(
   resolved: ReturnType<typeof resolveUserConfig>,
   displayName: string,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
@@ -528,7 +529,7 @@ async function addEndpoint(
   )
 }
 
-type EndpointProbeResult =
+export type EndpointProbeResult =
   // `summary` is the model-list + next-step block (leading newline) appended to
   // the add confirmation.
   | { ok: true; summary: string }
@@ -552,6 +553,11 @@ async function probeEndpointModelsImpl(input: {
   baseUrl?: string
   proxy?: string
   codexAuthName?: string
+  // Override the codex credential source. Default (per-user `/config`) resolves
+  // from the user's own codex store via `getUserCodexCredentials`; `/admin`
+  // passes a loader for the deployment-global codex store so the admin codex
+  // endpoint probe mirrors its real wire path.
+  codexCredsLoader?: (proxy: string | undefined) => Promise<AuthCredentials>
   // `add` chains to "now add a backend"; `set` (update) omits it — the endpoint
   // already exists and likely has backends referencing it.
   includeNextStep?: boolean
@@ -565,11 +571,13 @@ async function probeEndpointModelsImpl(input: {
   let result: ListModelsResult
   if (input.kind === 'codex') {
     try {
-      const creds = await getUserCodexCredentials({
-        canonicalUser: input.userId,
-        name: input.codexAuthName ?? 'default',
-        proxy: probeProxy,
-      })
+      const creds = input.codexCredsLoader
+        ? await input.codexCredsLoader(probeProxy)
+        : await getUserCodexCredentials({
+            canonicalUser: input.userId,
+            name: input.codexAuthName ?? 'default',
+            proxy: probeProxy,
+          })
       const slugs = await listCodexSlugs(creds, { proxy: probeProxy, limit: MODEL_LIST_FETCH_CAP })
       result = slugs === null
         ? { ok: false, error: t('config.endpoint.probeUnreachable') }
@@ -1176,8 +1184,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 // — only the values the user can safely re-read. Field tokens mirror the
 // `--flags` the user types (baseUrl / proxy / upstream / reasoning / ...).
 
-function endpointDetails(ep: Record<string, unknown>): string {
-  const isCodex = typeof ep.authRef === 'string' && (ep.authRef as string).length > 0
+export function endpointDetails(ep: Record<string, unknown>): string {
+  // codex is detected via the per-user `authRef` (config) OR the admin-global
+  // `auth: 'codex-oauth'` shape (admin endpoints) — both render as type=codex.
+  const isCodex =
+    (typeof ep.authRef === 'string' && (ep.authRef as string).length > 0) || ep.auth === 'codex-oauth'
   const parts = [`type=${isCodex ? 'codex' : ep.type === 'anthropic' ? 'anthropic' : 'openai'}`]
   // codex: the imported auth-file path (provenance, not a secret).
   if (isCodex && typeof ep.authPath === 'string' && ep.authPath) parts.push(`authPath=${ep.authPath}`)
@@ -1186,7 +1197,7 @@ function endpointDetails(ep: Record<string, unknown>): string {
   return parts.join(', ')
 }
 
-function backendDetails(m: Record<string, unknown>): string {
+export function backendDetails(m: Record<string, unknown>): string {
   const parts: string[] = []
   if (m.endpoint) parts.push(`endpoint=${String(m.endpoint)}`)
   if (m.upstreamModel) parts.push(`upstream=${String(m.upstreamModel)}`)
@@ -1200,8 +1211,8 @@ function backendDetails(m: Record<string, unknown>): string {
  *  a title line, the entry's current config values (success → new, set-failure →
  *  unchanged original), and optional tail lines (probe summary / next step).
  *  Returns the textified spec for the terminal. */
-function entryResultCard(
-  ctx: ConfigCommandContext,
+export function entryResultCard(
+  ctx: { setCommandListCard?: (spec: CommandListCardSpec) => void },
   title: string,
   details: string,
   tailLines: string[],

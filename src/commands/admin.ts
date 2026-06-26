@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { loadCodexCliTokens } from '../auth/codex/provider.js'
+import { createCodexAuthProvider, loadCodexCliTokens } from '../auth/codex/provider.js'
 import { writeTokenFile } from '../auth/storage.js'
 import {
   getConfig,
@@ -35,7 +35,15 @@ import {
   type EndpointShowRow,
   type LaneShowRow,
 } from './card-specs.js'
-import { parseEndpointType } from './config.js'
+import {
+  backendDetails,
+  endpointDetails,
+  entryResultCard,
+  parseEndpointType,
+  probeEndpointModels,
+  probeModelConnectivity,
+  type EndpointProbeResult,
+} from './config.js'
 import { requireConfirm } from './confirm.js'
 import { clearProviderCache } from '../provider/index.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
@@ -381,7 +389,11 @@ async function runAdminEndpoint(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, ep]) => {
         const e = asRecord(ep)
-        return { name, type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai') }
+        return {
+          name,
+          type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai'),
+          details: endpointDetails(e),
+        }
       })
     const spec = adminEndpointCardSpec(rows)
     ctx.setCommandListCard?.(spec)
@@ -393,9 +405,9 @@ async function runAdminEndpoint(
       case '':
         return usageCard()
       case 'add':
-        return addAdminEndpoint(rest, config) ?? usageCard()
+        return (await addAdminEndpoint(rest, config, ctx)) ?? usageCard()
       case 'set':
-        return setAdminEndpoint(rest, config) ?? usageCard()
+        return (await setAdminEndpoint(rest, config, ctx)) ?? usageCard()
       case 'rm':
       case 'remove':
         return removeAdminEndpoint(rest, config) ?? usageCard()
@@ -407,7 +419,18 @@ async function runAdminEndpoint(
   }
 }
 
-function addAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
+/** Loader for the deployment-global codex store, so the admin codex endpoint
+ *  probe resolves credentials the same way its real wire path does (admin codex
+ *  endpoints carry no `credentialOwner`/`authRef`, so `getProviderFor` falls to
+ *  the global `<home>/auth/codex.json` via `createCodexAuthProvider`). */
+const adminCodexCredsLoader = (proxy: string | undefined) =>
+  createCodexAuthProvider({ proxy }).getCredentials()
+
+async function addAdminEndpoint(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -431,36 +454,75 @@ function addAdminEndpoint(parts: string[], config: LightClawConfig): string | nu
     } catch (error) {
       return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
     }
-    const endpoint: Record<string, unknown> = { auth: 'codex-oauth' }
+    // Gate on reachability BEFORE persisting the endpoint (mirrors /config): a
+    // service we can't reach is not a successful import. The codex credential is
+    // already in the global store (reused on a retry); config.json gains nothing.
+    const probe = await probeEndpointModels({
+      userId: alias,
+      alias,
+      kind: 'codex',
+      codexCredsLoader: adminCodexCredsLoader,
+      proxy: parsed.proxy,
+    })
+    if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
+    const endpoint: Record<string, unknown> = { auth: 'codex-oauth', authPath: parsed.authPath }
     if (parsed.proxy) endpoint.proxy = parsed.proxy
     endpoints[alias] = endpoint
     cfg.endpoints = endpoints
     const err = commitAdminConfig(cfg, config)
     if (err) return err
-    return `${t('admin.endpoint.addedCodex', { name: alias })}\n`
+    return entryResultCard(
+      ctx,
+      t('admin.endpoint.addedCodex', { name: alias }),
+      endpointDetails(endpoint),
+      [probe.summary],
+    )
   }
 
-  // openai | anthropic: store the raw key directly in the admin endpoint.
+  // openai | anthropic: the raw key is stored directly in the admin endpoint
+  // (admin config.json is host-only). Probe + gate BEFORE persisting.
   const endpoint: Record<string, unknown> = { apiKey: parsed.key }
   if (parsed.baseUrl) endpoint.baseUrl = parsed.baseUrl
   if (parsed.proxy) endpoint.proxy = parsed.proxy
+  const probe = await probeEndpointModels({
+    userId: alias,
+    alias,
+    kind: 'apiKey',
+    apiType: parsed.type,
+    apiKey: parsed.key,
+    baseUrl: parsed.baseUrl,
+    proxy: parsed.proxy,
+  })
+  if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
   endpoints[alias] = endpoint
   cfg.endpoints = endpoints
   const err = commitAdminConfig(cfg, config)
   if (err) return err
-  return `${t('admin.endpoint.added', { name: alias })}\n`
+  return entryResultCard(
+    ctx,
+    t('admin.endpoint.added', { name: alias }),
+    endpointDetails(endpoint),
+    [probe.summary],
+  )
 }
 
-function setAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
+async function setAdminEndpoint(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const endpoints = asRecord(cfg.endpoints)
+  const current = asRecord(endpoints[alias])
   if (!endpoints[alias]) {
     return `${t('config.endpoint.missing', { name: alias })}\n`
   }
-  const next = asRecord(endpoints[alias])
+  // Apply the flags to a candidate copy; persist only AFTER the re-check passes
+  // (mirrors /config endpoint set — a rejected update leaves config untouched).
+  const next: Record<string, unknown> = { ...current }
   const baseUrl = flagValue(rest, '--base-url')
   if (baseUrl !== undefined) {
     if (baseUrl === '-') delete next.baseUrl
@@ -469,15 +531,55 @@ function setAdminEndpoint(parts: string[], config: LightClawConfig): string | nu
   const proxy = flagValue(rest, '--proxy')
   if (proxy !== undefined) {
     if (proxy === '-') delete next.proxy
-    else next.proxy = proxy
+    else next.proxy = normalizeProxyUrl(proxy)
   }
   const key = flagValue(rest, '--key')
   if (key !== undefined) next.apiKey = key
+
+  const nextProxy = typeof next.proxy === 'string' ? next.proxy : undefined
+  const isCodex = next.auth === 'codex-oauth'
+  let probe: EndpointProbeResult
+  if (isCodex) {
+    probe = await probeEndpointModels({
+      userId: alias,
+      alias,
+      kind: 'codex',
+      codexCredsLoader: adminCodexCredsLoader,
+      proxy: nextProxy,
+      includeNextStep: false,
+    })
+  } else {
+    probe = await probeEndpointModels({
+      userId: alias,
+      alias,
+      kind: 'apiKey',
+      apiType: next.type === 'anthropic' ? 'anthropic' : 'openai',
+      apiKey: typeof next.apiKey === 'string' ? next.apiKey : '',
+      baseUrl: typeof next.baseUrl === 'string' ? next.baseUrl : undefined,
+      proxy: nextProxy,
+      includeNextStep: false,
+    })
+  }
+  if (!probe.ok) {
+    // Re-check failed → update rejected, config untouched. Card shows the
+    // ORIGINAL (unchanged) values.
+    return entryResultCard(
+      ctx,
+      t('config.endpoint.setFailedProbe', { name: alias, detail: probe.detail }),
+      endpointDetails(current),
+      [],
+    )
+  }
   endpoints[alias] = next
   cfg.endpoints = endpoints
   const err = commitAdminConfig(cfg, config)
   if (err) return err
-  return `${t('config.endpoint.updated', { name: alias })}\n`
+  return entryResultCard(
+    ctx,
+    t('config.endpoint.updated', { name: alias }),
+    endpointDetails(next),
+    [probe.summary],
+  )
 }
 
 function removeAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
@@ -530,7 +632,11 @@ async function runAdminBackend(
     const cfg = readJsonObjectOrEmpty(adminConfigPath())
     const rows: BackendShowRow[] = Object.entries(asRecord(cfg.models))
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name]) => ({ name, isDefault: cfg.defaultModel === name }))
+      .map(([name, m]) => ({
+        name,
+        isDefault: cfg.defaultModel === name,
+        details: backendDetails(asRecord(m)),
+      }))
     const spec = adminBackendCardSpec(rows)
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
@@ -541,11 +647,11 @@ async function runAdminBackend(
       case '':
         return usageCard()
       case 'add':
-        return addAdminBackend(rest, config) ?? usageCard()
+        return (await addAdminBackend(rest, config, ctx)) ?? usageCard()
       case 'set':
-        return setAdminBackend(rest, config) ?? usageCard()
+        return (await setAdminBackend(rest, config, ctx)) ?? usageCard()
       case 'check':
-        return `${t('admin.backend.checkHint')}\n`
+        return (await checkAdminBackend(rest)) ?? usageCard()
       case 'rm':
       case 'remove':
         return removeAdminBackend(rest, config) ?? usageCard()
@@ -570,7 +676,24 @@ function schemaForAdminEndpoint(
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'
 }
 
-function addAdminBackend(parts: string[], config: LightClawConfig): string | null {
+/** Connectivity probe for an admin model. Resolves against a FRESH `getConfig()`
+ *  (re-reads the admin config.json from disk, fully normalized) — never the
+ *  in-memory `config` arg — so a just-committed tentative model is visible and
+ *  `getProviderFor` builds the provider from the admin endpoint (raw apiKey /
+ *  global codex store). Mirrors /config's `probeModelConnectivity` gate. */
+async function probeAdminBackend(displayName: string): Promise<{ ok: true } | { ok: false; detail: string }> {
+  return probeModelConnectivity(getConfig(), displayName)
+}
+
+function adminDefaultOf(cfg: Record<string, unknown>): string | undefined {
+  return typeof cfg.defaultModel === 'string' && cfg.defaultModel.length > 0 ? cfg.defaultModel : undefined
+}
+
+async function addAdminBackend(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string | null> {
   const [displayName, ...rest] = parts
   if (!displayName) return null
   assertAlias(displayName)
@@ -592,7 +715,6 @@ function addAdminBackend(parts: string[], config: LightClawConfig): string | nul
   if (reasoning === false) return `${t('config.model.reasoningInvalid')}\n`
   const maxOutput = parsePositiveInt(flagValue(rest, '--max-tokens'))
   if (maxOutput === false) return `${t('config.model.intInvalid')}\n`
-  const setDefault = rest.includes('--default')
 
   const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
   // Only store an explicit reasoning effort; the wire layer (api.ts) applies
@@ -601,13 +723,46 @@ function addAdminBackend(parts: string[], config: LightClawConfig): string | nul
   if (maxOutput !== undefined) model.maxOutputTokens = maxOutput
   models[displayName] = model
   cfg.models = models
-  if (setDefault) cfg.defaultModel = displayName
+  // Auto-promote the first admin model to default (mirror of /config): a pool
+  // with models but no default still hits the "no model configured" gate.
+  const priorDefault = adminDefaultOf(cfg)
+  const becameDefault = rest.includes('--default') || priorDefault === undefined
+  if (becameDefault) cfg.defaultModel = displayName
+  // Persist tentatively so the probe can resolve a provider, then GATE on the
+  // connectivity check; roll the write (and any default we adopted) back on
+  // failure — a model that can't generate is not a successful add.
   const err = commitAdminConfig(cfg, config)
   if (err) return err
-  return `${t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel })}\n`
+  const probe = await probeAdminBackend(displayName)
+  if (!probe.ok) {
+    const back = readJsonObjectOrEmpty(adminConfigPath())
+    const backModels = asRecord(back.models)
+    delete backModels[displayName]
+    back.models = backModels
+    if (back.defaultModel === displayName) {
+      if (priorDefault) back.defaultModel = priorDefault
+      else delete back.defaultModel
+    }
+    const backErr = commitAdminConfig(back, config)
+    if (backErr) return backErr
+    return `${t('config.backend.addFailedProbe', { name: displayName, detail: probe.detail })}\n`
+  }
+  return entryResultCard(
+    ctx,
+    t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel }),
+    backendDetails(model),
+    [
+      t('config.backend.checkOk'),
+      becameDefault ? t('config.backend.nowDefault') : t('config.backend.setHint', { name: displayName }),
+    ],
+  )
 }
 
-function setAdminBackend(parts: string[], config: LightClawConfig): string | null {
+async function setAdminBackend(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string | null> {
   const [displayName, ...rest] = parts
   if (!displayName) return null
   assertAlias(displayName)
@@ -617,7 +772,10 @@ function setAdminBackend(parts: string[], config: LightClawConfig): string | nul
   if (!models[displayName]) {
     return `${t('config.backend.missing', { name: displayName })}\n`
   }
-  const next = asRecord(models[displayName])
+  // Snapshot the prior entry + default so a failed re-check rolls back cleanly.
+  const priorModel = { ...asRecord(models[displayName]) }
+  const priorDefault = adminDefaultOf(cfg)
+  const next = { ...asRecord(models[displayName]) }
   const endpoint = flagValue(rest, '--endpoint')
   if (endpoint) {
     assertAlias(endpoint)
@@ -651,13 +809,53 @@ function setAdminBackend(parts: string[], config: LightClawConfig): string | nul
   models[displayName] = next
   cfg.models = models
   if (rest.includes('--default')) cfg.defaultModel = displayName
+  // Persist tentatively, re-check (set = update), and roll back to the prior
+  // entry + default if the updated model can't generate.
   const err = commitAdminConfig(cfg, config)
   if (err) return err
-  return `${t('config.backend.updated', {
-    name: displayName,
-    endpoint: String(next.endpoint),
-    upstream: String(next.upstreamModel),
-  })}\n`
+  const probe = await probeAdminBackend(displayName)
+  if (!probe.ok) {
+    const back = readJsonObjectOrEmpty(adminConfigPath())
+    const backModels = asRecord(back.models)
+    backModels[displayName] = priorModel
+    back.models = backModels
+    if (priorDefault) back.defaultModel = priorDefault
+    else delete back.defaultModel
+    const backErr = commitAdminConfig(back, config)
+    if (backErr) return backErr
+    return entryResultCard(
+      ctx,
+      t('config.backend.setFailedProbe', { name: displayName, detail: probe.detail }),
+      backendDetails(priorModel),
+      [],
+    )
+  }
+  return entryResultCard(
+    ctx,
+    t('config.backend.updated', {
+      name: displayName,
+      endpoint: String(next.endpoint),
+      upstream: String(next.upstreamModel),
+    }),
+    backendDetails(next),
+    [t('config.backend.checkOk')],
+  )
+}
+
+/** Manual re-probe of an admin model's connectivity (mirror of /config backend
+ *  check). Resolves against a fresh `getConfig()` and runs the same "reply ok"
+ *  generation gate. */
+async function checkAdminBackend(parts: string[]): Promise<string | null> {
+  const [displayName] = parts
+  if (!displayName) return null
+  const resolved = getConfig()
+  if (!resolved.models[displayName]) {
+    return `${t('config.model.checkFail', { detail: `"${displayName}" is not a configured model` })}\n`
+  }
+  const probe = await probeModelConnectivity(resolved, displayName)
+  return probe.ok
+    ? `${t('config.model.checkOk')}\n`
+    : `${t('config.model.checkFail', { detail: probe.detail })}\n`
 }
 
 function removeAdminBackend(parts: string[], config: LightClawConfig): string | null {

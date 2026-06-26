@@ -240,11 +240,11 @@ describe('card-specs batches 4-6: admin nouns', () => {
     assert.ok(allText(spec).includes('/admin endpoint add'))
   })
 
-  it('adminBackendCardSpec has scope note and NO check sub-command', () => {
+  it('adminBackendCardSpec has scope note and a check sub-command (parity with /config)', () => {
     const spec = adminBackendCardSpec([{ name: 'm', isDefault: true }])
     assert.ok(spec.sections.some(s => !s.heading && s.markdown === t('card.admin.scopeNote')))
     const subs = section(spec, t('card.subcommands'))?.rows ?? []
-    assert.ok(!subs.some(([c]) => c.startsWith('check')), 'admin backend has no check')
+    assert.ok(subs.some(([c]) => c.startsWith('check')), 'admin backend now has a real check')
     assert.ok(section(spec, t('card.params'))?.markdown?.includes('/admin endpoint'))
   })
 
