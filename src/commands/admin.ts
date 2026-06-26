@@ -494,6 +494,8 @@ async function addAdminEndpoint(
     proxy: parsed.proxy,
   })
   if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
+  // Persist the base-url the probe actually reached (tolerant `/v1` resolution).
+  if (probe.resolvedBaseUrl !== undefined) endpoint.baseUrl = probe.resolvedBaseUrl
   endpoints[alias] = endpoint
   cfg.endpoints = endpoints
   const err = commitAdminConfig(cfg, config)
@@ -569,6 +571,10 @@ async function setAdminEndpoint(
       endpointDetails(current),
       [],
     )
+  }
+  // Persist the base-url the probe actually reached (tolerant `/v1` resolution).
+  if (!isCodex && probe.resolvedBaseUrl !== undefined && next.baseUrl !== undefined) {
+    next.baseUrl = probe.resolvedBaseUrl
   }
   endpoints[alias] = next
   cfg.endpoints = endpoints

@@ -9,7 +9,10 @@ import {
 } from '../auth/codex/user-store.js'
 import { listCodexSlugs } from '../auth/codex/models.js'
 import type { AuthCredentials } from '../auth/types.js'
-import { listApiKeyModels, type ListModelsResult } from '../provider/list-models.js'
+import {
+  listApiKeyModelsResolvingBaseUrl,
+  type ListModelsResult,
+} from '../provider/list-models.js'
 import { streamChat as defaultStreamChat } from '../api.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
@@ -510,7 +513,10 @@ async function addEndpoint(
   // Probe passed → now persist (this is where the raw key is auto-stored).
   const resolved = resolveKeyToSecretRef(userId, parsed.key)
   const endpoint: Record<string, unknown> = { type: parsed.type, apiKeyRef: resolved.secretName }
-  if (parsed.baseUrl) endpoint.baseUrl = parsed.baseUrl
+  // Persist the base-url the probe actually reached (it tolerantly resolves the
+  // `/v1` convention), falling back to what the user typed.
+  const effectiveBaseUrl = probe.resolvedBaseUrl ?? parsed.baseUrl
+  if (effectiveBaseUrl) endpoint.baseUrl = effectiveBaseUrl
   if (parsed.proxy) endpoint.proxy = parsed.proxy
 
   const obj = readUserConfig(userId)
@@ -531,8 +537,12 @@ async function addEndpoint(
 
 export type EndpointProbeResult =
   // `summary` is the model-list + next-step block (leading newline) appended to
-  // the add confirmation.
-  | { ok: true; summary: string }
+  // the add confirmation. `resolvedBaseUrl` is the base-url that actually
+  // responded — set when the probe normalized the `/v1` convention (apiKey
+  // endpoints only); the caller persists / displays it so the stored endpoint
+  // matches the verified wire path. Undefined when no base-url was probed
+  // (codex / default base) or the as-given value worked unchanged.
+  | { ok: true; summary: string; resolvedBaseUrl?: string }
   // `detail` is the raw failure reason (transport / HTTP status); the caller
   // wraps it in add- vs set-specific rejection wording.
   | { ok: false; detail: string }
@@ -569,6 +579,10 @@ async function probeEndpointModelsImpl(input: {
   // admin-global, so reading getConfig() here matches getProviderFor's source.
   const probeProxy = resolveEffectiveProxy(input.proxy, getConfig().publicProxy)
   let result: ListModelsResult
+  // For apiKey endpoints the probe also resolves the effective base-url (it is
+  // tolerant of the `/v1` convention — see listApiKeyModelsResolvingBaseUrl);
+  // this is threaded back so the caller persists the form that responded.
+  let resolvedBaseUrl: string | undefined
   if (input.kind === 'codex') {
     try {
       const creds = input.codexCredsLoader
@@ -586,13 +600,15 @@ async function probeEndpointModelsImpl(input: {
       return { ok: false, detail: error instanceof Error ? error.message : String(error) }
     }
   } else {
-    result = await listApiKeyModels({
+    const probed = await listApiKeyModelsResolvingBaseUrl({
       type: input.apiType ?? 'openai',
       apiKey: input.apiKey ?? '',
       baseUrl: input.baseUrl,
       proxy: probeProxy,
       limit: MODEL_LIST_FETCH_CAP,
     })
+    result = probed
+    if (probed.ok) resolvedBaseUrl = probed.resolvedBaseUrl
   }
   if (!result.ok) {
     return { ok: false, detail: result.error }
@@ -603,7 +619,7 @@ async function probeEndpointModelsImpl(input: {
     ? ''
     : `\n\n${t('config.endpoint.nextStep', { name: input.alias })}\n${t('config.endpoint.nextStepMore')}`
   if (result.models.length === 0) {
-    return { ok: true, summary: `\n${t('config.endpoint.probeEmpty')}${nextStep}` }
+    return { ok: true, summary: `\n${t('config.endpoint.probeEmpty')}${nextStep}`, resolvedBaseUrl }
   }
   // Show the first MODEL_LIST_SHOWN; if the provider advertises more, say so and
   // point at the provider rather than implying the list is complete.
@@ -612,7 +628,7 @@ async function probeEndpointModelsImpl(input: {
   const okLine = truncated
     ? t('config.endpoint.probeOkMore', { count: String(MODEL_LIST_SHOWN), list })
     : t('config.endpoint.probeOk', { list })
-  return { ok: true, summary: `\n${okLine}${nextStep}` }
+  return { ok: true, summary: `\n${okLine}${nextStep}`, resolvedBaseUrl }
 }
 
 /**
@@ -740,6 +756,10 @@ async function setEndpoint(
   if (key !== undefined) {
     const resolved = resolveKeyToSecretRef(userId, key)
     next.apiKeyRef = resolved.secretName
+  }
+  // Persist the base-url the probe actually reached (tolerant `/v1` resolution).
+  if (!isCodex && probe.resolvedBaseUrl !== undefined && next.baseUrl !== undefined) {
+    next.baseUrl = probe.resolvedBaseUrl
   }
   endpoints[alias] = next
   obj.endpoints = endpoints

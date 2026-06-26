@@ -920,6 +920,22 @@ describe('/config endpoint add — probe gates the import', () => {
     const ep = (readUserConfigJson('epok').endpoints as Record<string, Record<string, unknown>>).ep
     assert.equal(ep.type, 'openai')
   })
+
+  it('persists the probe-resolved base-url (tolerant /v1 normalization)', async () => {
+    const cfg = modelConfig()
+    // The probe reports it actually reached the +/v1 form (user typed it without).
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '', resolvedBaseUrl: 'https://x/v1' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'epresolved',
+    })
+    const ep = (readUserConfigJson('epresolved').endpoints as Record<string, Record<string, unknown>>).ep
+    // Stored base-url is the form the probe verified, NOT the bare value typed.
+    assert.equal(ep.baseUrl, 'https://x/v1')
+  })
 })
 
 describe('/config backend add — connectivity gate + auto-default', () => {
