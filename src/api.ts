@@ -1,4 +1,4 @@
-import { getConfig, type LightClawConfig } from './config.js'
+import { type LightClawConfig } from './config.js'
 import { resolveToolModuleModel } from './model-resolution.js'
 import { getProviderFor } from './provider/index.js'
 import { resetAllFailureCountersFor } from './provider/capability-cache.js'
@@ -16,7 +16,7 @@ import {
   type ApiLogKind,
   type ApiLogTurnRecord,
 } from './api-logs/storage.js'
-import { getCurrentUserId, getRuntimeIfInitialized, getSessionId } from './state.js'
+import { getCurrentUserId, getRuntimeIfInitialized, getSessionConfig, getSessionId } from './state.js'
 
 /**
  * Tag describing which subsystem is making this streamChat call. Plumbed
@@ -64,7 +64,7 @@ export async function* streamChat(
   },
 ): AsyncGenerator<StreamEvent> {
   const { config: paramConfig, apiLogContext, ...rest } = params
-  const config = paramConfig ?? getConfig()
+  const config = paramConfig ?? getSessionConfig()
   // The caller passes a display model name (the key in config.models).
   // Resolve it once here to (a) pick the right provider instance, and
   // (b) substitute the real upstream id for the wire request. Logging
@@ -239,7 +239,7 @@ export async function describeImage(
   },
 ): Promise<DescribeImageResult> {
   const { config: paramConfig, model: requestedModel, ...rest } = params
-  const config = paramConfig ?? getConfig()
+  const config = paramConfig ?? getSessionConfig()
   const model = requestedModel ?? resolveToolModuleModel('imageRead', config)
   const { provider, entry } = getProviderFor(config, model)
   if (!provider.describeImage) {
@@ -353,7 +353,7 @@ export function resolveDescribeRoute(input?: {
   provider: ReturnType<typeof getProviderFor>['provider']
   entry: ReturnType<typeof getProviderFor>['entry']
 } {
-  const config = input?.config ?? getConfig()
+  const config = input?.config ?? getSessionConfig()
   const model = input?.model ?? resolveToolModuleModel('imageRead', config)
   const { provider, entry } = getProviderFor(config, model)
   if (!provider.describeImage) {
@@ -379,7 +379,7 @@ export async function transcribeAudio(
   },
 ): Promise<TranscribeAudioResult> {
   const { config: paramConfig, model: requestedModel, ...rest } = params
-  const config = paramConfig ?? getConfig()
+  const config = paramConfig ?? getSessionConfig()
   const model = requestedModel ?? resolveToolModuleModel('imageRead', config)
   const { provider } = getProviderFor(config, model)
   if (!provider.transcribeAudio) {
@@ -475,7 +475,7 @@ export function resolveWebFetchSummarizeRoute(input?: {
   provider: ReturnType<typeof getProviderFor>['provider']
   entry: ReturnType<typeof getProviderFor>['entry']
 } {
-  const config = input?.config ?? getConfig()
+  const config = input?.config ?? getSessionConfig()
   const displayModel =
     input?.model ?? resolveToolModuleModel('webSearch', config)
   const { provider, entry } = getProviderFor(config, displayModel)

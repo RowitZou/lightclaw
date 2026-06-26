@@ -1,4 +1,5 @@
 import { getConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
@@ -43,7 +44,15 @@ export async function runSubagent(params: {
       detail: 'Pick one of the available subagent types.',
     })
   }
-  const config = getConfig()
+  // Resolve the model registry against the OWNER (canonicalUserOverride for
+  // post-turn internal roles like memoryExtractor / memoryCurator that outlive
+  // the triggering ALS scope, else the current user). In a BYO-only deployment
+  // the global admin base has zero models, so resolving from getConfig() alone
+  // makes resolveRoleModel return '' and getProviderFor throw "No model is
+  // configured" before the dispatch even starts — the exact extraction / dream
+  // failure. resolveUserConfig is a union merge keyed on the owner's BYO.
+  const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
+  const config = resolveUserConfig(cacheUserKey, getConfig())
   const roleModel = resolveRoleModel(agent, config)
   const provider = getProviderFor(config, roleModel).provider
   // Dynamic import: tools.ts → tools/background-task.ts → background-task/
@@ -65,7 +74,6 @@ export async function runSubagent(params: {
   // Dispatch semantics: the worker starts from exactly one caller-authored
   // prompt. The runner does not inherit the parent transcript; callers that
   // want context (extract / autoDream) must include it in params.prompt.
-  const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
 
   // Resolve the subagent turn cap: only an explicit caller override applies
   // (autoDream pulls from config.memory.curator.maxTurns), otherwise no cap

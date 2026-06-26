@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { buildWorkerProgressForwarder } from '../taskrun/worker-progress.js'
 import { createUserMessage } from '../messages.js'
@@ -98,6 +99,19 @@ export async function runDispatchedAgent(
   params: DispatchedAgentParams,
 ): Promise<DispatchedAgentResult> {
   const currentCtx = getCurrentSessionContext()
+  // Resolve the model registry against the OWNER, not whatever config the
+  // caller happened to hold. Background fires, post-turn internal roles
+  // (memoryExtractor / memoryCurator), and worker dispatches all converge here,
+  // and several of them are triggered with only the global admin base — which
+  // in a BYO-only deployment has zero models, so every downstream model
+  // resolution (the agent's own role model, its compaction / session-memory
+  // sub-LLMs, and getSessionConfig()-driven imageRead / webSearch) would fail
+  // with "No model is configured / Registered: (none)". resolveUserConfig is a
+  // union merge and idempotent, so passing an already-resolved config back
+  // through it is a no-op.
+  const effectiveConfig = params.canonicalUser
+    ? resolveUserConfig(params.canonicalUser, params.config)
+    : params.config
   const messages = [...buildDispatchedInitialMessages(params.dispatchPrompt)]
   // Top-level secrets (Phase 18 follow-up, 2026-06-14): a background/scheduled
   // fire dispatched DIRECTLY by main carries the owner's enabled secrets so
@@ -211,7 +225,7 @@ export async function runDispatchedAgent(
     }),
     messages,
     tools: params.tools,
-    config: params.config,
+    config: effectiveConfig,
     maxTurns: params.maxTurns,
   })
   // Dispatches always start fresh. The marker is kept at zero so fork
@@ -233,6 +247,11 @@ export async function runDispatchedAgent(
         sessionId: chainSessionId ?? currentCtx.sessionId,
         chainState: params.chainState,
         currentTaskRunId: params.currentTaskRunId,
+        // Pin the session config to the owner-resolved registry so every
+        // `getSessionConfig()` read inside the dispatched agent (imageRead /
+        // webSearch sub-LLMs, that user's lang / permissionMode) honors the
+        // owner's BYO, not the parent's possibly-empty admin base.
+        config: effectiveConfig,
         discoveredTools: new Map(),
         turnCounter: 0,
         // Per-user runtime secrets (Phase 18). The childCtx is the single

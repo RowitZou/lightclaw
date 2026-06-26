@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -10,6 +10,7 @@ import { createAssistantMessage, createUserMessage } from '../messages.js'
 import type { Runtime } from '../runtime/index.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import { userHome } from '../identity/paths.js'
 import { setEnabled, setUserSecret } from '../secrets/store.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { buildDispatchedInitialMessages, runDispatchedAgent } from './dispatched-agent.js'
@@ -181,6 +182,99 @@ test('worker ALS sessionId aligns with chainState path末端 + chainState rides 
     assert.equal(observedSessionId, 'child') // chainState.path[1].sessionId
     assert.equal(observedChainState?.chainId, 'chain-a')
     assert.equal(observedChainState?.path.at(-1)?.sessionId, 'child')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('BYO-only: a dispatched agent resolves its model against the owner config (empty admin base + user BYO)', async () => {
+  // Regression for the BYO-only deployment gap: when the admin global config
+  // has zero models/endpoints and the owner brings their own, a dispatched
+  // agent (worker / internal / bg fire) must resolve against the owner's
+  // resolved config — not the empty admin base, which would fail with
+  // "No model is configured / Registered: (none)".
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-byo-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    // Admin global config: empty model registry (a real BYO-only deployment).
+    writeFileSync(path.join(tempDir, 'config.json'), JSON.stringify({
+      endpoints: {},
+      models: {},
+      defaultModel: '',
+      autoMemory: false,
+    }))
+    // Owner 'alice' brings her own apiKey-backed endpoint + model.
+    setUserSecret('alice', 'BYO_KEY', 'sk-alice-byo')
+    setEnabled('alice', 'BYO_KEY', true)
+    const aliceConfigPath = path.join(userHome('alice'), 'config.json')
+    mkdirSync(path.dirname(aliceConfigPath), { recursive: true })
+    writeFileSync(aliceConfigPath, JSON.stringify({
+      endpoints: { aliceapi: { apiKeyRef: 'BYO_KEY', baseUrl: 'http://example.test' } },
+      models: { 'alice-byo': { endpoint: 'aliceapi', schema: 'anthropic', upstreamModel: 'm' } },
+      defaultModel: 'alice-byo',
+    }))
+
+    const adminBase = getConfig()
+    // Sanity: the admin base genuinely has no models (otherwise the test is moot).
+    assert.deepEqual(Object.keys(adminBase.models), [])
+
+    // Parent context mirrors a background/internal trigger that holds only the
+    // empty admin base (no per-user resolved config) — the exact gap.
+    const parentCtx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+      config: adminBase,
+    })
+
+    let observedQueryModels: string[] | undefined
+    let observedSessionModels: string[] | undefined
+    await runWithSessionContext(parentCtx, async () => runDispatchedAgent({
+      dispatchPrompt: 'do internal work',
+      role: internalRole(),
+      tools: [],
+      config: adminBase, // caller passes the empty admin base, as the bg/internal paths do
+      canonicalUser: 'alice',
+      label: 'memoryCurator',
+      queryImpl: async params => {
+        observedQueryModels = params.config ? Object.keys(params.config.models) : undefined
+        const inner = await import('../session-context.js').then(m => m.getCurrentSessionContext())
+        observedSessionModels = inner?.config ? Object.keys(inner.config.models) : undefined
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          finalReplyText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // The config handed to query() (and thus to compact / session-memory /
+    // role-model resolution) must carry the owner's BYO model.
+    assert.ok(
+      observedQueryModels?.includes('alice-byo'),
+      `expected owner BYO model in query config, got ${JSON.stringify(observedQueryModels)}`,
+    )
+    // getSessionConfig() inside the dispatched agent (imageRead / webSearch
+    // sub-LLMs read this) must also see the owner BYO model.
+    assert.ok(
+      observedSessionModels?.includes('alice-byo'),
+      `expected owner BYO model in session-context config, got ${JSON.stringify(observedSessionModels)}`,
+    )
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })
