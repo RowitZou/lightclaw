@@ -872,7 +872,12 @@ async function addBackend(
   // connectivity check: a model that can't generate is not a successful add, so
   // roll back the write (and any default we just adopted) on failure.
   writeUserConfig(userId, obj)
-  const resolved = resolveUserConfig(userId, ctx.config)
+  // Resolve against the ADMIN base (getConfig()), NOT ctx.config — ctx.config is
+  // the per-session snapshot (already `resolveUserConfig`d), so passing it
+  // re-merges the user's own endpoints onto themselves; the collision logic then
+  // drops them AND any model referencing them, making the just-added model read
+  // back as "not a configured model".
+  const resolved = resolveUserConfig(userId, getConfig())
   const probe = await probeModelConnectivity(resolved, displayName)
   if (!probe.ok) {
     const back = readUserConfig(userId)
@@ -989,7 +994,9 @@ async function setBackend(
   // Persist tentatively, re-check connectivity (set = update), and roll back to
   // the prior entry + default if the updated model can't generate.
   writeUserConfig(userId, obj)
-  const resolved = resolveUserConfig(userId, ctx.config)
+  // Admin base, not ctx.config (the already-resolved session snapshot) — see
+  // the addBackend probe site for why re-resolving a resolved config drops BYO.
+  const resolved = resolveUserConfig(userId, getConfig())
   const probe = await probeModelConnectivity(resolved, displayName)
   if (!probe.ok) {
     const back = readUserConfig(userId)
@@ -1043,7 +1050,9 @@ async function checkBackend(
 ): Promise<string | null> {
   const [displayName] = parts
   if (!displayName) return null
-  const resolved = resolveUserConfig(userId, ctx.config)
+  // Admin base, not ctx.config (the already-resolved session snapshot) — see
+  // the addBackend probe site for why re-resolving a resolved config drops BYO.
+  const resolved = resolveUserConfig(userId, getConfig())
   const entry = resolved.models[displayName]
   if (!entry || entry.visibility !== 'user') {
     return `${t('config.model.checkFail', { detail: `"${displayName}" is not a configured user model` })}\n`

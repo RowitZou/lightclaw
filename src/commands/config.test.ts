@@ -945,3 +945,33 @@ describe('/config endpoint|backend — show config values (not just names)', () 
     assert.match(list, /m（endpoint=ep, upstream=gpt-5, schema=openai, reasoning=high）/)
   })
 })
+
+describe('/config backend add — probe resolves against admin base, not session snapshot', () => {
+  it('does NOT drop the just-added BYO model when ctx.config already holds the user endpoint', async () => {
+    const cfg = modelConfig()
+    // Fail the connectivity probe iff the just-added model is absent from the
+    // resolved registry — the exact symptom of re-resolving an already-resolved
+    // session config (the user's own endpoint "collides with itself").
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async (resolved, name) =>
+        resolved.models[name] ? { ok: true } : { ok: false, detail: `dropped:${name}` },
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: 'baseuser',
+    })
+    // Simulate the channel passing the SESSION-RESOLVED config (already contains
+    // the user's own `ep`) — the shape that triggered the dogfood failure.
+    const sessionSnapshot = {
+      ...cfg,
+      endpoints: { ...cfg.endpoints, ep: { apiKey: 'sk-X', baseUrl: 'https://x' } },
+    } as unknown as LightClawConfig
+    const out = await runConfigCommand('backend add m --endpoint ep --upstream up-1', {
+      config: sessionSnapshot,
+      userId: 'baseuser',
+    })
+    assert.match(out, /Connectivity check: ok/)
+    assert.ok((readUserConfigJson('baseuser').models as Record<string, unknown>).m)
+  })
+})
