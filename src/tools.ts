@@ -26,6 +26,7 @@ import {
   feishuMoveTool,
 } from './tools/feishu-workspace.js'
 import { globTool } from './tools/glob.js'
+import { lsTool } from './tools/ls.js'
 import { grepTool } from './tools/grep.js'
 import { memoryReadTool } from './tools/memory-read.js'
 import { memoryDeleteTool } from './tools/memory-delete.js'
@@ -72,6 +73,7 @@ export const builtinTools = [
   fileEditTool,
   grepTool,
   globTool,
+  lsTool,
   memoryReadTool,
   memoryWriteAtTool,
   memoryMoveTool,

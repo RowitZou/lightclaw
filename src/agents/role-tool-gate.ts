@@ -139,6 +139,15 @@ function checkRoleToolVisibility(
     return checkRoleToolVisibility(role, 'Dispatch')
   }
 
+  // LS is bound to Glob scope: directory listing is the companion of file
+  // pattern matching, so any role that can Glob can also LS — without a
+  // per-role tool entry. This closes the read-only-manager (main) blind spot
+  // where Read/Glob/Grep can search files but nothing lists a directory's
+  // subdirectories, and main has no Bash to `ls` with.
+  if (toolName === 'LS') {
+    return checkRoleToolVisibility(role, 'Glob')
+  }
+
   const explicitlyReachableDispatch =
     toolName === 'Dispatch' &&
     tools.includes('Dispatch') &&
