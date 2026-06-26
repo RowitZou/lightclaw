@@ -1,7 +1,9 @@
 import { z } from 'zod'
 
 import { getConfig } from '../config.js'
-import { getPermissionApprover, getPermissionMode } from '../state.js'
+import { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
+import { loadUserSecrets } from '../secrets/store.js'
+import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
 import { buildGpfsMountStringFromRules } from '../runtime/gpfs-mount-rules.js'
 import { buildTool, type Tool, type ToolCallContext } from '../tool.js'
 
@@ -9,6 +11,8 @@ const COMMAND_PREFIX = 'source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || tru
 const MAX_TEXT_CHARS = 30_000
 const CAPACITY_RETRIES = 5
 const MIN_QUEUE_JSON_BYTES = 200
+
+export { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
 
 const capacityInput = z.object({
   operation: z.literal('capacity'),
@@ -535,13 +539,76 @@ async function execClusterCommand(
   context: ToolCallContext,
   options: { timeoutMs?: number; maxBufferBytes?: number } = {},
 ) {
+  const env = resolveBrainppCredentialEnv()
   return await context.runtime.exec({
     command: `${COMMAND_PREFIX}${command}`,
     cwd: context.runtime.workspaceRoot,
+    env,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxBufferBytes: options.maxBufferBytes ?? 1024 * 1024,
     abortSignal: context.abortSignal,
   })
+}
+
+/**
+ * Resolve the current LightClaw user's Brain++ credentials and return them as
+ * the env injected into the cluster CLI process. The CLI (`rjob` → RJobClient)
+ * reads BRAINPP_ACCESS_KEY_ID / BRAINPP_SECRET_ACCESS_KEY from its env and only
+ * falls back to the pod-provisioned `/.auth` identity when they are empty — so
+ * passing them here makes every cluster operation run as that user.
+ *
+ * The secret must be ENABLED, not merely stored: an enabled secret is exactly
+ * what surfaces in the manager's `## Available Secrets` prompt section, so
+ * "enabled ⟺ the manager can see it ⟺ this tool will use it" stays a single,
+ * exact contract — the dispatch-time visibility check is then a precise
+ * predictor of whether a cluster job will authenticate.
+ *
+ * Fail-closed by design: with no active identity or missing/disabled
+ * credentials we throw before any CLI runs, rather than silently falling back
+ * to the daemon pod's shared identity. Credentials travel ONLY through
+ * `runtime.exec({ env })` — never the command string, tool output, job env,
+ * memory, or transcripts.
+ */
+export function resolveBrainppCredentialEnv(): Record<string, string> {
+  const userId = safeCurrentUserId()
+  if (!userId) {
+    throw new Error(
+      'Brain++ credentials are not configured for this session: no LightClaw user identity is active. ' +
+      `Pair or bind the sender first, then set and enable ${BRAINPP_ACCESS_KEY_SECRET} and ${BRAINPP_SECRET_KEY_SECRET}.`,
+    )
+  }
+
+  const secrets = loadUserSecrets(userId)
+  const accessEntry = secrets[BRAINPP_ACCESS_KEY_SECRET]
+  const secretEntry = secrets[BRAINPP_SECRET_KEY_SECRET]
+  const accessKey = accessEntry?.enabled ? accessEntry.value : undefined
+  const secretKey = secretEntry?.enabled ? secretEntry.value : undefined
+  if (!accessKey || !secretKey) {
+    const missing = [
+      accessKey ? null : BRAINPP_ACCESS_KEY_SECRET,
+      secretKey ? null : BRAINPP_SECRET_KEY_SECRET,
+    ].filter((name): name is string => Boolean(name))
+    throw new Error(
+      `Brain++ credentials are not configured for user "${userId}"` +
+      (missing.length ? `; missing or not enabled: ${missing.join(', ')}` : '') +
+      `. They live on your machine at /.auth/accesskey_id and /.auth/accesskey_secret — ` +
+      `cat each, then set and enable them with /system key set <NAME> <value> ` +
+      `and /system key enable <NAME>, then retry.`,
+    )
+  }
+
+  return {
+    [BRAINPP_ACCESS_KEY_SECRET]: accessKey,
+    [BRAINPP_SECRET_KEY_SECRET]: secretKey,
+  }
+}
+
+function safeCurrentUserId(): string | undefined {
+  try {
+    return getCurrentUserId()
+  } catch {
+    return undefined
+  }
 }
 
 function buildSubmitCommand(
