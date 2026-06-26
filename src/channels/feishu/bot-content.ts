@@ -106,7 +106,21 @@ function parsePostContent(content: string): { text: string; mediaKeys: ParsedMed
       for (const item of line ?? []) {
         if (!item || typeof item !== 'object') continue
         const tag = typeof item.tag === 'string' ? item.tag : ''
-        if (tag === 'text' || tag === 'a' || tag === 'md') {
+        if (tag === 'a') {
+          // A hyperlink's `href` is the canonical destination; Feishu's display
+          // `text` is often a scheme-stripped / truncated rendering of it (it
+          // shows `host:port` while href keeps `http://host:port`). Both slash-
+          // command parsing (`--base-url <url>`, pasted links) and the agent
+          // need the real target — taking `text` silently dropped the `http://`
+          // scheme and produced `Invalid URL` on `/config endpoint add`. Prefer
+          // href, falling back to the display text only when no href is present.
+          const href = typeof item.href === 'string' ? item.href.trim() : ''
+          const text = typeof item.text === 'string' ? item.text : ''
+          const value = href || text
+          if (value) lineParts.push(value)
+          continue
+        }
+        if (tag === 'text' || tag === 'md') {
           if (typeof item.text === 'string') {
             lineParts.push(item.text)
           }

@@ -149,6 +149,35 @@ describe('parseMessageContent stripMentions', () => {
     assert.equal(parsed.text, '/rules allow Bash(rsync:*)')
   })
 
+  it('takes the href (not display text) from a hyperlink a-tag', () => {
+    // Feishu auto-linkifies a pasted URL into a post `a` tag whose display
+    // `text` drops the scheme (`host:port`) while `href` keeps the full URL.
+    // Taking `text` produced `--base-url 35.220.164.252:3888` → `new URL`
+    // "Invalid URL" on `/config endpoint add`. href is the canonical target.
+    const postContent = JSON.stringify({
+      content: [[
+        { tag: 'text', text: '/config endpoint add boyue --type openai --key sk-x --base-url ' },
+        { tag: 'a', text: '35.220.164.252:3888', href: 'http://35.220.164.252:3888' },
+      ]],
+    })
+    const parsed = parseMessageContent({
+      content: postContent,
+      messageType: 'post',
+    })
+    assert.equal(
+      parsed.text,
+      '/config endpoint add boyue --type openai --key sk-x --base-url http://35.220.164.252:3888',
+    )
+  })
+
+  it('falls back to a-tag display text when href is absent', () => {
+    const postContent = JSON.stringify({
+      content: [[{ tag: 'a', text: 'click here' }]],
+    })
+    const parsed = parseMessageContent({ content: postContent, messageType: 'post' })
+    assert.equal(parsed.text, 'click here')
+  })
+
   it('extracts img tag from post content as image mediaKey', () => {
     // Real Feishu group "@bot + image" payload: post message with an `at`
     // tag for the bot mention and an `img` tag carrying image_key. Pre-fix
