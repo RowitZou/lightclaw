@@ -152,10 +152,20 @@
   //   /admin  endpoint|backend|lane         (deployment-wide defaults)
   // ══════════════════════════════════════════════════════════════════════
 
+  // publicProxy — fallback outbound proxy for every endpoint that has no
+  // "proxy" of its own (empty = direct). An endpoint's own "proxy" always wins.
+  // Set it once here (or at runtime via /admin proxy) instead of repeating the
+  // same proxy on each endpoint / having every user configure their own. Only
+  // covers LLM endpoints — Feishu (channels.feishu.proxy) and the sandbox
+  // (runtime.network.proxy) keep their own proxy fields. Admin-only; never
+  // inherited from ambient http_proxy / HTTPS_PROXY env.
+  "publicProxy": "",                      // empty = no public fallback; e.g. "http://10.0.0.1:1080"
+
   // endpoints — credential pool that models reference. Add entries shaped:
   //   "<name>": { "apiKey": "<key>" }          (API-key endpoint)
   //   "<name>": { "auth": "codex-oauth" }      (Codex / ChatGPT quota)
   //   optional per-endpoint fields: "baseUrl" (no /v1 suffix), "proxy"
+  //   (empty / omitted "proxy" falls back to "publicProxy" above)
   "endpoints": {},
 
   // models — display name -> { endpoint, schema, upstreamModel }. Add entries shaped:
