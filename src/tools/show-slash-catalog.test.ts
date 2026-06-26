@@ -60,6 +60,9 @@ describe('ShowSlashCatalog tool', () => {
     for (const name of ['/admin', '/config', '/feedback', '/system']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
+    // The /admin agentUsage must enumerate the proxy noun so the agent can tell
+    // the admin the exact command (synced with ADMIN_NOUNS + the terminal card).
+    assert.match(output, /\/admin proxy \[show\|set <url>\|clear\]/)
     for (const name of [
       '/auth', '/ceiling', '/cost', '/feishu-workspace',
       '/model', '/mode', '/mount', '/rules', '/sandbox', '/secret', '/user',

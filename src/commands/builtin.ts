@@ -236,7 +236,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       'When the admin wants to manage the deployment: inspect token cost, ' +
       'manage paired users / pairing requests, read user feedback, set ' +
       'permission ceilings, inspect or reset the sandbox, manage Feishu drive ' +
-      'folders, or configure deployment-wide model backends / endpoints / lanes.',
+      'folders, or configure deployment-wide model backends / endpoints / lanes / public proxy.',
     agentUsage: [
       '/admin cost                                   Token usage this month, by model and user',
       '/admin user [list|rm <name> [--purge] --y|unlink <channel:id>]',
@@ -248,6 +248,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/admin endpoint [list|add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path]   Public model services',
       '/admin backend [list|add|set|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Public usable model list',
       '/admin lane [set <worker|system|image> <model>|reset <bucket>]',
+      '/admin proxy [show|set <url>|clear]           Public proxy fallback for model services without their own',
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runAdminCommand(args, {
