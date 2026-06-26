@@ -448,10 +448,22 @@ export function buildDockerRuntimeConfig(
   const env = useHost
     ? { ...buildBridgeEnv('127.0.0.1', network.port, network.noProxy), ...docker.env }
     : docker.env
+  // Same identity invariant as rlaunch: DockerRuntime.start reuses a container
+  // by name, so any mount-affecting change must change the name or the swap
+  // silently reuses a container bound to the old workspace/mounts. Fold the
+  // resolved workspace host path and the bind-mount set into the container hash.
+  const dockerDeploymentHash = createHash('sha256')
+    .update(deploymentHash)
+    .update('\0')
+    .update(path.resolve(workspaceHostPath))
+    .update('\0')
+    .update(JSON.stringify(docker.mounts ?? []))
+    .digest('hex')
+    .slice(0, 8)
   return {
     image: resolveDockerImage(config),
     workspaceHostPath,
-    containerName: `${SANDBOX_PREFIX}${sanitizeDockerName(userId)}-${deploymentHash}`,
+    containerName: `${SANDBOX_PREFIX}${sanitizeDockerName(userId)}-${dockerDeploymentHash}`,
     workspaceContainerPath: '/workspace',
     mounts: docker.mounts,
     tmpfs: docker.tmpfs,
@@ -475,8 +487,18 @@ export function buildRlaunchRuntimeConfig(
   const gpfs = workspaceToGpfsMount(userId, rlaunch)
   const extraMounts = resolveUserRlaunchRuntimeMounts(userId, rlaunch)
   const mountHash = rlaunchMountFingerprint(extraMounts)
+  // The primary workspace mount MUST be part of the worker identity. The gpfs
+  // mount is fixed at pod-creation time, and _startOnce reuses an existing
+  // worker whenever deploymentHash is unchanged. If a workspace switch (e.g.
+  // `/config workspace set`) left the hash untouched, the swap would reuse the
+  // old pod still bound to the old /workspace mount — the agent then sees an
+  // empty /workspace while the slash command reported success. Fold gpfs.mount
+  // in alongside the extra-mount fingerprint so any mount-affecting change
+  // forces a fresh pod.
   const rlaunchDeploymentHash = createHash('sha256')
     .update(deploymentHash)
+    .update('\0')
+    .update(gpfs.mount)
     .update('\0')
     .update(mountHash)
     .digest('hex')
