@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 
 import type { ApiKeyEndpoint } from '../config.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
+import { normalizeToolInputSchemaForAnthropic } from './anthropic-tool-schema.js'
 import { attachProviderRetryAfter } from './retry-after.js'
 import { anthropicEffort, isReasoningUnsupportedError } from './reasoning.js'
 import {
@@ -96,6 +97,24 @@ function cacheSystem(system: string): Array<Record<string, unknown>> {
       cache_control: EPHEMERAL_CACHE,
     },
   ]
+}
+
+// Stamp each tool's `input_schema` into an Anthropic-legal shape (top-level
+// `type: "object"`). A Zod discriminatedUnion serializes to a bare top-level
+// `oneOf` that a Bedrock-fronted endpoint rejects with
+// `input_schema.type: Field required`; native Anthropic tolerates the gentler
+// `type` + `oneOf` shape this produces. See anthropic-tool-schema.ts.
+function normalizeToolSchemas(tools: unknown[]): unknown[] {
+  return tools.map(tool => {
+    if (!isRecord(tool) || !isRecord(tool.input_schema)) {
+      return tool
+    }
+    const normalized = normalizeToolInputSchemaForAnthropic(tool.input_schema)
+    if (normalized === tool.input_schema) {
+      return tool
+    }
+    return { ...tool, input_schema: normalized }
+  })
 }
 
 function cacheTools(tools: unknown[]): unknown[] {
@@ -382,7 +401,7 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
             params.messages,
             params.cacheBreakpointMessageIndex,
           ) as never,
-          tools: cacheTools(params.tools) as never,
+          tools: cacheTools(normalizeToolSchemas(params.tools)) as never,
           stream: true,
           ...(withReasoning ? reasoningFragment : {}),
           // Cast to the streaming params type: it selects the streaming

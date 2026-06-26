@@ -18,10 +18,13 @@
  * the model's returned arguments against the tool's own Zod schema before
  * dispatch. The wire schema is therefore advisory — flattening a top-level
  * union of object branches into a single object with the merged property set
- * loses no server-side guarantee while making the schema API-legal. Anthropic
- * accepts the union shape natively, so this normalization is OpenAI-family
- * only and is applied at the provider tool-conversion boundary, not in
- * `toolToAPISchema`.
+ * loses no server-side guarantee while making the schema API-legal. This is
+ * the OpenAI-family flatten; the Anthropic family needs only the gentler
+ * `type`-stamp (top-level `oneOf` preserved) — see `anthropic-tool-schema.ts`.
+ * Native Anthropic `/v1/messages` tolerates a bare top-level union, but a
+ * Bedrock-fronted endpoint speaking the same `input_schema` dialect rejects it
+ * with `input_schema.type: Field required`, so each provider normalizes at its
+ * own tool-conversion boundary rather than in the shared `toolToAPISchema`.
  */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
