@@ -148,9 +148,11 @@ export function getProviderFor(
   // the deployment-wide `config.publicProxy` (else direct). Applied here — the
   // single chokepoint every wire call flows through — so it covers admin AND
   // per-user BYO endpoints uniformly (`config` is the resolved per-session
-  // snapshot, `endpoints` already merged). The cache key omits proxy, matching
-  // the existing apiKey/baseUrl "rotation requires restart" contract: a built
-  // provider keeps the proxy it was constructed with for the process lifetime.
+  // snapshot, `endpoints` already merged). The cache key omits proxy; a built
+  // provider keeps the proxy it was constructed with, so an admin config write
+  // that changes `publicProxy` (or an endpoint's proxy/key/baseUrl) flushes the
+  // cache via `clearProviderCache()` and the next lookup rebuilds with the new
+  // effective proxy — no daemon restart needed.
   const explicitProxy = 'proxy' in endpoint ? endpoint.proxy : undefined
   const effectiveProxy = resolveEffectiveProxy(explicitProxy, config.publicProxy)
   const effectiveEndpoint: EndpointConfig =
@@ -254,6 +256,30 @@ export function clearPrechargeForModel(input: {
   upstreamModel: string
 }): void {
   prechargdKeys.delete(prechargeMemoKey(input.endpoint, input.baseUrl, input.upstreamModel))
+}
+
+/**
+ * Drop every cached provider so the next `getProviderFor` rebuilds from the
+ * current config. Used when admin config changes mid-process (e.g. `/admin
+ * proxy set|clear`, or an endpoint's key/baseUrl/proxy edit): a built provider
+ * captures its proxy / apiKey / baseUrl at construction time and the cache key
+ * omits them, so without this flush a previously-built provider would keep the
+ * OLD wiring until daemon restart — the exact reason changing the public proxy
+ * did not take effect for already-used endpoints. Each evicted provider's
+ * `recycleConnections()` is called first so its pooled proxy dispatcher / TLS
+ * sockets close instead of leaking. The capability precharge memo is left
+ * intact (it is keyed by endpoint/baseUrl/upstreamModel and is independent of
+ * the proxy/credential wiring). Cheap and rare — an admin-only config write.
+ */
+export function clearProviderCache(): void {
+  for (const provider of cache.values()) {
+    try {
+      provider.recycleConnections?.()
+    } catch {
+      // best-effort socket cleanup; never block a config write on it
+    }
+  }
+  cache.clear()
 }
 
 /** Test-only escape hatch; production code should never need to clear. */

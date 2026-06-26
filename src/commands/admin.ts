@@ -37,6 +37,7 @@ import {
 } from './card-specs.js'
 import { parseEndpointType } from './config.js'
 import { requireConfirm } from './confirm.js'
+import { clearProviderCache } from '../provider/index.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import type { CommandListCardSpec } from './registry.js'
@@ -331,6 +332,13 @@ function commitAdminConfig(
   }
   atomicWriteJson(adminConfigPath(), next)
   refreshLiveConfig(liveConfig)
+  // Drop cached providers so the change takes effect WITHOUT a daemon restart.
+  // A provider captures its proxy / apiKey / baseUrl at construction and the
+  // cache key omits them — so a publicProxy set/clear (or an endpoint proxy /
+  // key / baseUrl edit) would otherwise only apply to never-yet-used endpoints.
+  // Flushing here makes every endpoint without its own proxy pick up the new
+  // public proxy on its next call. Global cache → applies across all users.
+  clearProviderCache()
   return null
 }
 

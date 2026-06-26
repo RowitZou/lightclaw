@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import {
   _resetProviderCacheForTests,
+  clearProviderCache,
   getProvider,
   getProviderFor,
 } from './index.js'
@@ -90,6 +91,21 @@ describe('provider registry', () => {
     const a = getProviderFor(cfg, 'opus').provider
     const b = getProviderFor(cfg, 'opus').provider
     assert.strictEqual(a, b)
+  })
+
+  it('clearProviderCache forces a rebuild so a changed publicProxy takes effect', () => {
+    // First build with no public proxy: endpoint has no own proxy → direct.
+    const cfg = buildConfig()
+    const before = getProviderFor(cfg, 'opus').provider
+    assert.strictEqual(getProviderFor(cfg, 'opus').provider, before, 'cached between calls')
+
+    // Admin sets a public proxy. Without the flush the old (direct) provider
+    // would linger; clearProviderCache drops it so the next lookup rebuilds
+    // with the new effective proxy (endpoint has no own proxy → publicProxy).
+    cfg.publicProxy = 'http://127.0.0.1:1080'
+    clearProviderCache()
+    const after = getProviderFor(cfg, 'opus').provider
+    assert.notStrictEqual(after, before, 'rebuilt after clearProviderCache')
   })
 
   it('shares one provider across two display names that point to the same endpoint + schema', () => {

@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
-import type { LightClawConfig } from '../config.js'
+import { getConfig, type LightClawConfig } from '../config.js'
 import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import {
+  _resetProviderCacheForTests,
+  getProviderFor,
+} from '../provider/index.js'
 import { createBuiltinReplRegistry } from './builtin.js'
 import { runAdminCommand } from './admin.js'
 
@@ -22,6 +26,7 @@ afterEach(() => {
   setLang('cn')
   setLightclawHomeOverride(undefined)
   rmSync(tmpHome, { recursive: true, force: true })
+  _resetProviderCacheForTests()
 })
 
 function configPath(): string {
@@ -175,6 +180,30 @@ describe('/admin proxy (deployment public proxy)', () => {
     const out = await runAdminCommand('proxy', { config: liveConfig(), userId: 'admin' })
     assert.doesNotMatch(out, /^Usage:/m)
     assert.match(out, /127\.0\.0\.1:1080/)
+  })
+
+  it('set/clear flushes the provider cache so already-built endpoints rebuild (hot-apply)', async () => {
+    // A real endpoint+model registry so getProviderFor builds a live provider.
+    writeFileSync(configPath(), JSON.stringify({
+      endpoints: { ep: { apiKey: 'K' } },
+      models: { m: { endpoint: 'ep', schema: 'anthropic', upstreamModel: 'claude-x' } },
+      defaultModel: 'm',
+    }), 'utf8')
+    _resetProviderCacheForTests()
+
+    // Build + cache a provider (endpoint has no own proxy → currently direct).
+    const before = getProviderFor(getConfig(), 'm').provider
+    assert.strictEqual(getProviderFor(getConfig(), 'm').provider, before, 'cached before the change')
+
+    // Admin sets a public proxy → commitAdminConfig must flush the cache.
+    await runAdminCommand('proxy set http://127.0.0.1:1080', { config: liveConfig(), userId: 'admin' })
+    const afterSet = getProviderFor(getConfig(), 'm').provider
+    assert.notStrictEqual(afterSet, before, 'provider rebuilt after /admin proxy set')
+
+    // Clearing it must flush again so the endpoint goes back to direct.
+    await runAdminCommand('proxy clear', { config: liveConfig(), userId: 'admin' })
+    const afterClear = getProviderFor(getConfig(), 'm').provider
+    assert.notStrictEqual(afterClear, afterSet, 'provider rebuilt after /admin proxy clear')
   })
 })
 
