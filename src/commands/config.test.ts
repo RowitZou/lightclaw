@@ -520,6 +520,39 @@ describe('/config backend (BYO model registry, ←model BYO)', () => {
     const out = await runConfigCommand('backend check m', { config: cfg, userId: 'b3chk' })
     assert.match(out, /Model check/)
   })
+
+  it('rejects a backend name colliding with an admin model — admin wins, nothing written', async () => {
+    const cfg = modelConfig()
+    // Drive getConfig()'s on-disk admin base (NOT the passed cfg) to carry a
+    // model named "opus"; adminModelNames() reads from here.
+    writeFileSync(
+      path.join(tmpHome, 'config.json'),
+      JSON.stringify({
+        defaultModel: 'opus',
+        endpoints: { anthropic: { baseUrl: 'https://example', apiKey: 'sk-admin' } },
+        models: { opus: { schema: 'anthropic', endpoint: 'anthropic', upstreamModel: 'claude-opus' } },
+      }),
+    )
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b3conf' })
+    const out = await runConfigCommand('backend add opus --endpoint ep', { config: cfg, userId: 'b3conf' })
+    assert.match(out, /conflicts with an existing system model/)
+    // Pre-write rejection: the user's config.json never gains a ghost "opus"
+    // entry (which the old, guard-less path left behind before the resolve-time
+    // collision logic silently dropped it).
+    const persisted = readUserConfigJson('b3conf')
+    assert.equal((persisted.models as Record<string, unknown> | undefined)?.opus, undefined)
+  })
+
+  it('allows a backend name that collides only with ANOTHER USER (cross-user isolation)', async () => {
+    const cfg = modelConfig()
+    // No admin "shared" model on disk → only a peer user owns the name.
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b3iso1' })
+    await runConfigCommand('backend add shared --endpoint ep', { config: cfg, userId: 'b3iso1' })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b3iso2' })
+    const out = await runConfigCommand('backend add shared --endpoint ep', { config: cfg, userId: 'b3iso2' })
+    assert.match(out, /Added model "shared"/)
+    assert.ok((readUserConfigJson('b3iso2').models as Record<string, unknown>).shared)
+  })
 })
 
 describe('/config model BYO verbs now hint to /config backend', () => {

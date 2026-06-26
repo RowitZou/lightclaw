@@ -877,6 +877,9 @@ async function addBackend(
   if (override.models?.[displayName]) {
     return `${t('config.backend.exists', { name: displayName })}\n`
   }
+  if (adminModelNames().has(displayName)) {
+    return `${t('config.backend.conflict', { name: displayName })}\n`
+  }
   const schema = schemaForEndpoint(override, endpoint)
   if (!schema) {
     return `${t('config.backend.endpointMissing', { name: endpoint })}\n`
@@ -1126,6 +1129,21 @@ async function checkBackend(
 function adminEndpointAliases(): Set<string> {
   try {
     return new Set(Object.keys(getConfig().endpoints))
+  } catch {
+    return new Set()
+  }
+}
+
+/** Admin model display-names the user's BYO model names must not shadow. Same
+ *  best-effort posture as `adminEndpointAliases()`: admin always wins a name,
+ *  and `resolveUserConfig` still drops a collision gracefully at resolve time as
+ *  the real safety net. Reads the on-disk admin base (`getConfig()`), NOT
+ *  `ctx.config` — the latter already unions the user's own BYO, which would make
+ *  a user's just-added model read as colliding with itself. It is also never
+ *  another user's registry, so user↔user same-name backends stay allowed. */
+function adminModelNames(): Set<string> {
+  try {
+    return new Set(Object.keys(getConfig().models))
   } catch {
     return new Set()
   }
