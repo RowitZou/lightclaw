@@ -67,6 +67,11 @@ const UserEndpointSchema = z
     // the user's own codex store) — exactly one, never both.
     apiKeyRef: z.string().trim().min(1).optional(),
     authRef: z.string().trim().min(1).optional(),
+    // Display-only provenance for codex endpoints: the `--auth-path` the user
+    // imported from. NOT a secret (the tokens live in the per-user codex store,
+    // not at this path) — surfaced in the config card so the user can see which
+    // auth file backs the endpoint. Ignored by buildUserRegistry.
+    authPath: z.string().trim().min(1).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

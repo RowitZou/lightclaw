@@ -436,7 +436,7 @@ async function addEndpoint(
       proxy: parsed.proxy,
     })
     if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
-    const endpoint: Record<string, unknown> = { authRef: `codex:${summary.name}` }
+    const endpoint: Record<string, unknown> = { authRef: `codex:${summary.name}`, authPath: parsed.authPath }
     if (parsed.proxy) endpoint.proxy = parsed.proxy
     const obj = readUserConfig(userId)
     const endpoints = asRecord(obj.endpoints)
@@ -548,9 +548,11 @@ async function probeEndpointModelsImpl(input: {
   if (!result.ok) {
     return { ok: false, detail: result.error }
   }
+  // Blank line before the next step so it stands apart from the model list,
+  // plus a hint to view the full backend params.
   const nextStep = input.includeNextStep === false
     ? ''
-    : `\n${t('config.endpoint.nextStep', { name: input.alias })}`
+    : `\n\n${t('config.endpoint.nextStep', { name: input.alias })}\n${t('config.endpoint.nextStepMore')}`
   if (result.models.length === 0) {
     return { ok: true, summary: `\n${t('config.endpoint.probeEmpty')}${nextStep}` }
   }
@@ -1121,6 +1123,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 function endpointDetails(ep: Record<string, unknown>): string {
   const isCodex = typeof ep.authRef === 'string' && (ep.authRef as string).length > 0
   const parts = [`type=${isCodex ? 'codex' : ep.type === 'anthropic' ? 'anthropic' : 'openai'}`]
+  // codex: the imported auth-file path (provenance, not a secret).
+  if (isCodex && typeof ep.authPath === 'string' && ep.authPath) parts.push(`authPath=${ep.authPath}`)
   if (typeof ep.baseUrl === 'string' && ep.baseUrl) parts.push(`baseUrl=${ep.baseUrl}`)
   if (typeof ep.proxy === 'string' && ep.proxy) parts.push(`proxy=${ep.proxy}`)
   return parts.join(', ')

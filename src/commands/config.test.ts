@@ -411,6 +411,9 @@ describe('/config endpoint add --type', () => {
     assert.ok(typeof ep.authRef === 'string' && (ep.authRef as string).startsWith('codex:'))
     assert.equal(ep.baseUrl, undefined)
     assert.equal(ep.apiKeyRef, undefined)
+    // The auth-path is persisted (provenance, not a secret) and shown in the card.
+    assert.equal(ep.authPath, authFile)
+    assert.match(out, new RegExp(`authPath=${authFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   })
 
   it('--type codex rejects a non-absolute --auth-path (no tilde/relative; credential-leak guard)', async () => {
