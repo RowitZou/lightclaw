@@ -89,7 +89,7 @@ export const LOCALES = {
     'admin.usage':
       '用法：/admin <名词> [动词]\n' +
       '  运维：cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
-      '  公共模型配置：backend · endpoint · lane',
+      '  公共模型配置：backend · endpoint · lane · proxy',
     'admin.list.footer': '输入某个类别即可查看它的详细用法，例如 `/admin cost`；也可以直接问 LightClaw。',
     'admin.list.cost': '统计 token 用量（按模型 / 用户）',
     'admin.list.user': '管理已配对用户（罗列 / 删除 / 解绑）',
@@ -101,6 +101,7 @@ export const LOCALES = {
     'admin.list.backend': '把模型接入公共可用列表',
     'admin.list.endpoint': '配置公共模型服务的地址与密钥',
     'admin.list.lane': '为不同用途分别指定公共模型',
+    'admin.list.proxy': '设置公共代理（模型服务没单独配代理时统一走它）',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': '公共配置：对所有用户生效（与你自己的 /config 同名命令相互独立）。',
     'card.admin.user.sub.rm.cmd': 'rm <用户名> [--purge] --y',
@@ -141,6 +142,15 @@ export const LOCALES = {
     'card.admin.backend.sub.rm.desc': '从公共可用列表删除模型',
     'card.admin.backend.param.endpoint':
       '`--endpoint <模型服务>` — 这个模型用哪个公共模型服务；add 命令必填（先用 /admin endpoint 配好）',
+    'card.admin.proxy.showHeading': '当前公共代理',
+    'card.admin.proxy.current': '`{proxy}`',
+    'card.admin.proxy.none': '未设置（默认直连）',
+    'card.admin.proxy.sub.set.cmd': 'set <代理地址>',
+    'card.admin.proxy.sub.set.desc': '设置公共代理（如 http://127.0.0.1:1080）',
+    'card.admin.proxy.sub.clear.cmd': 'clear',
+    'card.admin.proxy.sub.clear.desc': '清除公共代理，恢复直连',
+    'card.admin.proxy.note':
+      '模型服务若自己配了代理，以它自己的为准；没配的才走这个公共代理；公共代理也没设就直连。对所有用户的模型服务都生效。',
     'admin.user.usage': '用法：/admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': '用法：/admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': '用法：/admin feishu-drive [status | rm <canonical> --y]',
@@ -161,6 +171,9 @@ export const LOCALES = {
       '  /admin backend rm <name>',
     'admin.backend.checkHint': '提示：连通性检查请在你自己的 /config backend check <名称> 上运行；公共模型用 list 查看。',
     'admin.lane.usage': '用法：/admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
+    'admin.proxy.set': '已设置公共代理：{proxy}（模型服务没单独配代理的，现在统一走它）。',
+    'admin.proxy.cleared': '已清除公共代理（模型服务没单独配代理的恢复直连）。',
+    'admin.proxy.invalid': '错误：代理地址无效（{detail}）；未写入。',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
     // ---- identity marker + dispatch chain errors ----
@@ -1037,7 +1050,7 @@ export const LOCALES = {
     'admin.usage':
       'Usage: /admin <noun> [verb]\n' +
       '  ops: cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
-      '  public model config: backend · endpoint · lane',
+      '  public model config: backend · endpoint · lane · proxy',
     'admin.list.footer': 'Type a category to see its detailed usage, e.g. `/admin cost`; or just ask LightClaw.',
     'admin.list.cost': 'Tally token usage (by model / user)',
     'admin.list.user': 'Manage paired users (list / remove / unlink)',
@@ -1049,6 +1062,7 @@ export const LOCALES = {
     'admin.list.backend': 'Add a model to the public usable list',
     'admin.list.endpoint': 'Configure a public model service (URL + key)',
     'admin.list.lane': 'Assign public models for different uses',
+    'admin.list.proxy': 'Set a public proxy (used when a model service has none of its own)',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': 'Public config: applies to all users (independent of your own /config commands of the same name).',
     'card.admin.user.sub.rm.cmd': 'rm <user> [--purge] --y',
@@ -1089,6 +1103,15 @@ export const LOCALES = {
     'card.admin.backend.sub.rm.desc': 'remove a model from the public usable list',
     'card.admin.backend.param.endpoint':
       '`--endpoint <model-service>` — which public model service this model uses; required for add (configure it via /admin endpoint first)',
+    'card.admin.proxy.showHeading': 'Current public proxy',
+    'card.admin.proxy.current': '`{proxy}`',
+    'card.admin.proxy.none': 'Not set (direct connection)',
+    'card.admin.proxy.sub.set.cmd': 'set <proxy-url>',
+    'card.admin.proxy.sub.set.desc': 'set the public proxy (e.g. http://127.0.0.1:1080)',
+    'card.admin.proxy.sub.clear.cmd': 'clear',
+    'card.admin.proxy.sub.clear.desc': 'clear the public proxy, back to direct',
+    'card.admin.proxy.note':
+      'A model service with its own proxy keeps it; one without falls back to this public proxy; if that is unset too, direct. Applies to every user\'s model services.',
     'admin.user.usage': 'Usage: /admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': 'Usage: /admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': 'Usage: /admin feishu-drive [status | rm <canonical> --y]',
@@ -1109,6 +1132,9 @@ export const LOCALES = {
       '  /admin backend rm <name>',
     'admin.backend.checkHint': 'Hint: run a connectivity check on your own /config backend check <name>; use list to view public models.',
     'admin.lane.usage': 'Usage: /admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
+    'admin.proxy.set': 'Public proxy set: {proxy} (model services without their own proxy now route through it).',
+    'admin.proxy.cleared': 'Public proxy cleared (model services without their own proxy go direct again).',
+    'admin.proxy.invalid': 'Error: invalid proxy URL ({detail}); not written.',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
     // ---- identity marker + dispatch chain errors ----

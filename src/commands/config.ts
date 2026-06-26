@@ -41,6 +41,7 @@ import {
 import type { CommandListCardSpec } from './registry.js'
 import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
+import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
@@ -521,15 +522,21 @@ async function probeEndpointModelsImpl(input: {
   // already exists and likely has backends referencing it.
   includeNextStep?: boolean
 }): Promise<EndpointProbeResult> {
+  // The probe must route exactly like a real wire call will: an endpoint added
+  // without `--proxy` falls back to the deployment public proxy, so the probe
+  // uses the same effective value (else a direct-connect probe could pass/fail
+  // out of step with how the endpoint will actually be used). publicProxy is
+  // admin-global, so reading getConfig() here matches getProviderFor's source.
+  const probeProxy = resolveEffectiveProxy(input.proxy, getConfig().publicProxy)
   let result: ListModelsResult
   if (input.kind === 'codex') {
     try {
       const creds = await getUserCodexCredentials({
         canonicalUser: input.userId,
         name: input.codexAuthName ?? 'default',
-        proxy: input.proxy,
+        proxy: probeProxy,
       })
-      const slugs = await listCodexSlugs(creds, { proxy: input.proxy, limit: MODEL_LIST_FETCH_CAP })
+      const slugs = await listCodexSlugs(creds, { proxy: probeProxy, limit: MODEL_LIST_FETCH_CAP })
       result = slugs === null
         ? { ok: false, error: t('config.endpoint.probeUnreachable') }
         : { ok: true, models: slugs }
@@ -541,7 +548,7 @@ async function probeEndpointModelsImpl(input: {
       type: input.apiType ?? 'openai',
       apiKey: input.apiKey ?? '',
       baseUrl: input.baseUrl,
-      proxy: input.proxy,
+      proxy: probeProxy,
       limit: MODEL_LIST_FETCH_CAP,
     })
   }

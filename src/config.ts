@@ -372,6 +372,12 @@ export type LightClawConfig = {
   /** Named endpoint pool (apiKey + baseUrl). Models reference these by
    *  alias. */
   endpoints: Record<string, EndpointConfig>
+  /** Deployment-wide public proxy used as the fallback for any endpoint that
+   *  has no explicit `proxy` (empty / absent = direct). An endpoint's own
+   *  `proxy` always wins. Admin-only, set via `/admin proxy`. Applied at the
+   *  provider chokepoint (`getProviderFor`), so it covers admin and per-user
+   *  BYO endpoints alike. LightClaw never inherits ambient proxy env. */
+  publicProxy?: string
   /** Three-bucket model lane config (worker / system / image). */
   lane: LaneConfig
   contextWindow: number
@@ -1236,6 +1242,14 @@ export function getConfig(): LightClawConfig {
   warnDeadRoutingConfig(fileConfig)
 
   const endpoints = resolveEndpoints(fileConfig.endpoints)
+  // Public-proxy fallback (admin-global). Trim only on read — the `/admin proxy`
+  // writer is what validates the URL via `normalizeProxyUrl`; a hand-edited bad
+  // value degrades gracefully (buildProxyDispatcher returns undefined → direct)
+  // rather than breaking boot.
+  const publicProxy =
+    typeof fileConfig.publicProxy === 'string' && fileConfig.publicProxy.trim()
+      ? fileConfig.publicProxy.trim()
+      : undefined
   const models = resolveModels(fileConfig.models, endpoints)
   const modelNames = Object.keys(models)
   // BOOT RELAX: an empty model registry is allowed. The daemon boots; model
@@ -1666,6 +1680,7 @@ export function getConfig(): LightClawConfig {
     defaultModel,
     models,
     endpoints,
+    ...(publicProxy ? { publicProxy } : {}),
     lane,
     contextWindow,
     maxOutputTokens,

@@ -141,6 +141,43 @@ describe('/admin lane (system-scope write-back)', () => {
   })
 })
 
+describe('/admin proxy (deployment public proxy)', () => {
+  it('set writes a normalized publicProxy to config.json and reflects in live config', async () => {
+    const cfg = liveConfig()
+    const out = await runAdminCommand('proxy set http://127.0.0.1:1080', {
+      config: cfg,
+      userId: 'admin',
+    })
+    assert.match(out, /Public proxy set/)
+    assert.equal(readConfig().publicProxy, 'http://127.0.0.1:1080')
+    assert.equal(cfg.publicProxy, 'http://127.0.0.1:1080', 'live config should reflect the write')
+  })
+
+  it('clear removes publicProxy from config.json and live config', async () => {
+    writeFileSync(configPath(), JSON.stringify({ publicProxy: 'http://127.0.0.1:1080' }), 'utf8')
+    const cfg = liveConfig()
+    cfg.publicProxy = 'http://127.0.0.1:1080'
+    const out = await runAdminCommand('proxy clear', { config: cfg, userId: 'admin' })
+    assert.match(out, /Public proxy cleared/)
+    assert.equal('publicProxy' in readConfig(), false)
+    assert.equal(cfg.publicProxy, undefined, 'live config should be cleared')
+  })
+
+  it('rejects an invalid proxy URL and writes nothing', async () => {
+    const out = await runAdminCommand('proxy set not-a-url', { config: liveConfig(), userId: 'admin' })
+    assert.match(out, /invalid proxy URL/)
+    // No config.json written at all (the only op was the rejected set).
+    assert.throws(() => readConfig())
+  })
+
+  it('bare /admin proxy renders the structured card (show), not Usage text', async () => {
+    writeFileSync(configPath(), JSON.stringify({ publicProxy: 'http://127.0.0.1:1080' }), 'utf8')
+    const out = await runAdminCommand('proxy', { config: liveConfig(), userId: 'admin' })
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /127\.0\.0\.1:1080/)
+  })
+})
+
 describe('/admin backend add (system-scope write-back)', () => {
   it('writes the model + deployment defaultModel with --default', async () => {
     writeFileSync(configPath(), JSON.stringify({

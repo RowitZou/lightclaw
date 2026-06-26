@@ -15,6 +15,7 @@ import {
 } from '../auth/codex/user-store.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
+import { resolveEffectiveProxy } from './proxy.js'
 import type { AttachmentKind, Provider, Schema } from './types.js'
 
 const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
@@ -143,10 +144,22 @@ export function getProviderFor(
     )
   }
 
+  // Public-proxy fallback: an endpoint with no explicit `proxy` routes through
+  // the deployment-wide `config.publicProxy` (else direct). Applied here — the
+  // single chokepoint every wire call flows through — so it covers admin AND
+  // per-user BYO endpoints uniformly (`config` is the resolved per-session
+  // snapshot, `endpoints` already merged). The cache key omits proxy, matching
+  // the existing apiKey/baseUrl "rotation requires restart" contract: a built
+  // provider keeps the proxy it was constructed with for the process lifetime.
+  const explicitProxy = 'proxy' in endpoint ? endpoint.proxy : undefined
+  const effectiveProxy = resolveEffectiveProxy(explicitProxy, config.publicProxy)
+  const effectiveEndpoint: EndpointConfig =
+    effectiveProxy === explicitProxy ? endpoint : { ...endpoint, proxy: effectiveProxy }
+
   const key = cacheKey(entry.schema, entry.endpoint, endpoint)
   let provider = cache.get(key)
   if (!provider) {
-    provider = buildProvider(entry.schema, endpoint)
+    provider = buildProvider(entry.schema, effectiveEndpoint)
     cache.set(key, provider)
   }
   precharge(provider, entry, endpoint.baseUrl)

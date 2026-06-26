@@ -616,6 +616,32 @@ export function adminLaneCardSpec(rows: readonly LaneShowRow[]): CommandListCard
   }
 }
 
+// ── /admin proxy (deployment public proxy fallback) ──────────────────────────
+
+export function adminProxyCardSpec(current: string | undefined): CommandListCardSpec {
+  const showLine = current
+    ? t('card.admin.proxy.current', { proxy: current })
+    : t('card.admin.proxy.none')
+  return {
+    title: t('card.cmdHelp.title', { cmd: '/admin proxy' }),
+    sections: [
+      { heading: t('card.admin.proxy.showHeading'), markdown: showLine },
+      {
+        heading: t('card.subcommands'),
+        rows: [
+          [t('card.admin.proxy.sub.set.cmd'), t('card.admin.proxy.sub.set.desc')],
+          [t('card.admin.proxy.sub.clear.cmd'), t('card.admin.proxy.sub.clear.desc')],
+        ],
+      },
+      { markdown: t('card.admin.proxy.note') },
+      {
+        heading: t('card.examples'),
+        codeExamples: ['/admin proxy set http://127.0.0.1:1080', '/admin proxy clear'],
+      },
+    ],
+  }
+}
+
 // ── /system key (collection + note) ──────────────────────────────────────────
 
 export interface KeyShowRow {

@@ -8,6 +8,25 @@ import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici'
 // single endpoint can route through one upstream while another goes
 // direct.
 
+/** Resolve the effective outbound proxy for an endpoint, applying the
+ *  deployment-wide public-proxy fallback. Precedence:
+ *    explicit per-endpoint proxy  ->  public (deployment) proxy  ->  direct.
+ *  Empty / whitespace strings count as unset at each tier. This is the single
+ *  precedence rule shared by the provider wire path (`getProviderFor`) and the
+ *  endpoint-add connectivity probe, so a user who configures an endpoint
+ *  without `--proxy` transparently routes through the admin's public proxy
+ *  (and falls back to direct when no public proxy is set). */
+export function resolveEffectiveProxy(
+  explicit: string | undefined | null,
+  publicProxy: string | undefined | null,
+): string | undefined {
+  const e = explicit?.trim()
+  if (e) return e
+  const p = publicProxy?.trim()
+  if (p) return p
+  return undefined
+}
+
 /** Build an undici dispatcher for the given proxy URL. Returns
  *  `undefined` when proxy is unset / invalid, signaling "direct
  *  connection". Callers should pass the dispatcher through to

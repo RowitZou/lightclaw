@@ -100,6 +100,31 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models.opus.schema, 'anthropic')
   })
 
+  it('surfaces a top-level publicProxy (trimmed); empty / absent → undefined', () => {
+    writeConfig({
+      publicProxy: '  http://127.0.0.1:1080  ',
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-opus-4-7' } },
+      defaultModel: 'opus',
+    })
+    assert.equal(getConfig().publicProxy, 'http://127.0.0.1:1080')
+
+    writeConfig({
+      publicProxy: '   ',
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-opus-4-7' } },
+      defaultModel: 'opus',
+    })
+    assert.equal(getConfig().publicProxy, undefined)
+
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-opus-4-7' } },
+      defaultModel: 'opus',
+    })
+    assert.equal(getConfig().publicProxy, undefined)
+  })
+
   it('parses model-level reasoningEffort', () => {
     writeConfig({
       endpoints: {

@@ -27,6 +27,7 @@ import {
   adminFeishuDriveCardSpec,
   adminLaneCardSpec,
   adminPairingCardSpec,
+  adminProxyCardSpec,
   adminSandboxCardSpec,
   adminUserCardSpec,
   formatCommandListSpecAsText,
@@ -36,6 +37,7 @@ import {
 } from './card-specs.js'
 import { parseEndpointType } from './config.js'
 import { requireConfirm } from './confirm.js'
+import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import type { CommandListCardSpec } from './registry.js'
 
@@ -79,6 +81,7 @@ const ADMIN_NOUNS: ReadonlyArray<readonly [string, string]> = [
   ['/admin backend', 'admin.list.backend'],
   ['/admin endpoint', 'admin.list.endpoint'],
   ['/admin lane', 'admin.list.lane'],
+  ['/admin proxy', 'admin.list.proxy'],
 ]
 
 function adminNounRows(): Array<readonly [string, string]> {
@@ -154,6 +157,8 @@ export async function runAdminCommand(
       return runAdminEndpoint(restParts, ctx.config, ctx)
     case 'lane':
       return runAdminLane(restParts, ctx.config, ctx)
+    case 'proxy':
+      return runAdminProxy(restParts, ctx.config, ctx)
 
     default:
       ctx.setCommandListCard?.(adminListSpec())
@@ -295,6 +300,7 @@ function refreshLiveConfig(liveConfig: LightClawConfig): void {
     for (const k of Object.keys(liveConfig.models)) delete liveConfig.models[k]
     Object.assign(liveConfig.models, fresh.models)
     liveConfig.defaultModel = fresh.defaultModel
+    liveConfig.publicProxy = fresh.publicProxy
     for (const k of Object.keys(liveConfig.lane)) {
       delete liveConfig.lane[k as keyof typeof liveConfig.lane]
     }
@@ -726,6 +732,64 @@ async function runAdminLane(
   const err = commitAdminConfig(cfg, config)
   if (err) return err
   return `${t('config.lane.set', { bucket, model })}\n`
+}
+
+// ── /admin proxy ─────────────────────────────────────────────────────────────
+//
+// Writes the admin-global top-level `config.publicProxy`: the fallback proxy
+// every endpoint without its own `proxy` routes through (empty = direct). One
+// shared value instead of repeating `--proxy` on each endpoint / having each
+// user configure their own. A per-endpoint `proxy` always wins — this only
+// fills the gap. `set <url>` writes (URL validated via normalizeProxyUrl),
+// `clear` removes it; bare = show. Applied at the provider chokepoint, so it
+// covers admin and per-user BYO endpoints alike.
+
+async function runAdminProxy(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string> {
+  const verb = (parts[0] ?? '').toLowerCase()
+  const showCard = (): string => {
+    const cfg = readJsonObjectOrEmpty(adminConfigPath())
+    const current =
+      typeof cfg.publicProxy === 'string' && cfg.publicProxy.trim()
+        ? cfg.publicProxy.trim()
+        : undefined
+    const spec = adminProxyCardSpec(current)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
+  if (verb === '' || verb === 'show' || verb === 'list') {
+    return showCard()
+  }
+  if (verb === 'set') {
+    const raw = parts[1]
+    if (!raw) return showCard()
+    let normalized: string
+    try {
+      normalized = normalizeProxyUrl(raw)
+    } catch (error) {
+      return `${t('admin.proxy.invalid', {
+        detail: error instanceof Error ? error.message : String(error),
+      })}\n`
+    }
+    const cfg = readJsonObjectOrEmpty(adminConfigPath())
+    cfg.publicProxy = normalized
+    const err = commitAdminConfig(cfg, config)
+    if (err) return err
+    return `${t('admin.proxy.set', { proxy: normalized })}\n`
+  }
+  if (verb === 'clear' || verb === 'reset' || verb === '-') {
+    const cfg = readJsonObjectOrEmpty(adminConfigPath())
+    if ('publicProxy' in cfg) {
+      delete cfg.publicProxy
+      const err = commitAdminConfig(cfg, config)
+      if (err) return err
+    }
+    return `${t('admin.proxy.cleared')}\n`
+  }
+  return showCard()
 }
 
 // ── shared parse helpers (mirror config.ts) ──────────────────────────────────

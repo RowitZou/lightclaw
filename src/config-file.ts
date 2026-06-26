@@ -157,6 +157,13 @@ export type ConfigFileShape = {
    *  Same physical gateway can host both anthropic and openai protocols —
    *  schema lives on each model entry, not here. */
   endpoints?: Record<string, ConfigFileEndpoint>
+  /** Deployment-wide public proxy. When an endpoint omits its own `proxy`,
+   *  outbound calls to it fall back to this value (empty / absent = direct).
+   *  An endpoint's explicit `proxy` always wins. Admin-only — set via
+   *  `/admin proxy`; never read from ambient `http_proxy` / `HTTPS_PROXY` env.
+   *  Lets the admin configure one shared proxy once instead of every user (or
+   *  the admin per endpoint) repeating it. */
+  publicProxy?: string
   /** Display-name -> { endpoint alias, schema, upstreamModel }. The keys
    *  are what users see in `/config model`. */
   models?: Record<string, ConfigFileModel>
