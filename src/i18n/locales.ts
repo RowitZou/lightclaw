@@ -14,6 +14,7 @@ export const LOCALES = {
     'common.error.adminOnly': '{name} 仅 admin 可用。',
     'common.error.userOnly': '{name} 仅普通用户可用（admin 是收件人，不是发送方）。',
     'common.error.noActiveIdentity': '当前没有可用的 LightClaw 身份。',
+    'common.ok': '完成',
     'common.usage': '用法：{usage}',
 
     // ---- --y two-step confirmation (design F.3b) ----
@@ -715,6 +716,7 @@ export const LOCALES = {
     'mount.requiresRlaunchRuntime': '/system mount 需要集群运行环境。',
     'mount.onlyRlaunch': '/system mount 仅在集群部署下可用。',
     'mount.noIdentity': 'LightClaw 当前没有可用身份；/system mount 需要已配对的渠道用户。',
+    'mount.overlap': '挂载条目重叠，不允许：{a} <-> {b}',
     'mount.list.empty': '你还没有挂载任何路径。',
     'mount.list.header': '已挂载的路径：',
     'mount.list.row': '- {path}（{perm}）',
@@ -995,6 +997,7 @@ export const LOCALES = {
     'common.error.adminOnly': '{name} is admin-only.',
     'common.error.userOnly': '{name} is user-only (admins are recipients, not senders).',
     'common.error.noActiveIdentity': 'No active LightClaw identity.',
+    'common.ok': 'ok',
     'common.usage': 'Usage: {usage}',
 
     // ---- --y two-step confirmation (design F.3b) ----
@@ -1687,6 +1690,7 @@ export const LOCALES = {
     'mount.requiresRlaunchRuntime': '/system mount requires a cluster runtime.',
     'mount.onlyRlaunch': '/system mount is only available on a cluster deployment.',
     'mount.noIdentity': 'No active LightClaw identity; /system mount requires a paired channel user.',
+    'mount.overlap': 'Overlapping runtime mount entries are not allowed: {a} <-> {b}',
     'mount.list.empty': 'You have no mounted paths yet.',
     'mount.list.header': 'Mounted paths:',
     'mount.list.row': '- {path} ({perm})',

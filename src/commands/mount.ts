@@ -12,7 +12,7 @@ import {
   type RlaunchMountMode,
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
-import { MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
+import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
 
 type MountCommandContext = {
   config: LightClawConfig
@@ -270,6 +270,9 @@ function validateMountTable(
     ])
     return null
   } catch (error) {
+    if (error instanceof MountOverlapError) {
+      return t('mount.overlap', { a: error.workerA, b: error.workerB })
+    }
     return error instanceof Error ? error.message : String(error)
   }
 }

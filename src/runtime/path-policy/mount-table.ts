@@ -4,6 +4,22 @@ import path from 'node:path'
 
 import type { MountEntry, PathPolicy } from '../types.js'
 
+/**
+ * Thrown by {@link validateMountTable} when two mount entries overlap. The
+ * `.message` stays English so runtime backends that build a PathPolicy can log
+ * it to stderr unchanged; the user-facing `/system mount` command boundary
+ * catches this and renders the i18n `mount.overlap` string instead.
+ */
+export class MountOverlapError extends Error {
+  constructor(
+    readonly workerA: string,
+    readonly workerB: string,
+  ) {
+    super(`Overlapping runtime mount entries are not allowed: ${workerA} <-> ${workerB}`)
+    this.name = 'MountOverlapError'
+  }
+}
+
 export class MountTablePathPolicy implements PathPolicy {
   readonly mountTable: ReadonlyArray<MountEntry>
 
@@ -96,7 +112,7 @@ function validateMountTable(entries: ReadonlyArray<MountEntry>): void {
         isSameOrChildPosix(a.worker, b.worker) ||
         isSameOrChildPosix(b.worker, a.worker)
       ) {
-        throw new Error(`Overlapping runtime mount entries are not allowed: ${a.worker} <-> ${b.worker}`)
+        throw new MountOverlapError(a.worker, b.worker)
       }
     }
   }

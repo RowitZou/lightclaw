@@ -2152,7 +2152,7 @@ export class ChannelRunner {
       await this.strategy.sendCommandListNotice(message, 'info', res.commandListCard)
       return
     }
-    await this.sendNotice(message, 'info', res.output.trim() || 'ok', res.bodyFormat)
+    await this.sendNotice(message, 'info', res.output.trim() || t('common.ok'), res.bodyFormat)
   }
 
   private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {
