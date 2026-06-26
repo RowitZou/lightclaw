@@ -205,7 +205,7 @@ export const LOCALES = {
     'model.clearCache.noEntry': '（无现有条目）',
     'model.clearCache.alsoCleared': ' 能力缓存已清除。',
     'model.none.noticeBody':
-      '暂无可用模型，先完成两步配置：\n/config endpoint — 配置模型服务的地址与密钥\n/config backend — 把模型接入可用列表',
+      '暂无可用模型，先完成两步配置：\n`/config endpoint` — 配置模型服务的地址与密钥\n`/config backend` — 把模型接入可用列表',
 
     // ---- /config rule ----
     'rules.empty': '当前用户没有持久化的权限规则。',
@@ -1152,7 +1152,7 @@ export const LOCALES = {
     'model.clearCache.noEntry': ' (no existing entry)',
     'model.clearCache.alsoCleared': ' Capability cache cleared.',
     'model.none.noticeBody':
-      'No model available yet. Complete two steps:\n/config endpoint — configure a model service (URL + key)\n/config backend — add a model to the usable list',
+      'No model available yet. Complete two steps:\n`/config endpoint` — configure a model service (URL + key)\n`/config backend` — add a model to the usable list',
 
     // ---- /config rule ----
     'rules.empty': 'No persisted permission rules for this user.',

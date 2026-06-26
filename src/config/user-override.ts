@@ -325,21 +325,31 @@ export function resolveUserConfig(
   let userEndpoints: Record<string, EndpointConfig> = {}
   let userModels: Record<string, ModelEntry> = {}
   if (built.ok) {
-    // Reject on ANY name collision with the admin registry — a user must not
-    // shadow an admin endpoint / model. Fall back to admin-only on collision.
-    const endpointCollision = Object.keys(built.endpoints).find(alias => base.endpoints[alias])
-    const modelCollision = Object.keys(built.models).find(name => base.models[name])
-    if (endpointCollision) {
+    // A user must not SHADOW an admin endpoint / model — admin always wins a
+    // name. But a single collision must NOT nuke the user's whole BYO registry
+    // (dogfood trap: the user named one endpoint the same as an admin one and
+    // silently lost everything). Drop ONLY the colliding entries — plus any
+    // user model whose endpoint collided (it would otherwise dangle onto the
+    // admin endpoint of that name, a credential surprise) — and keep the rest.
+    const collidingEndpoints = new Set(
+      Object.keys(built.endpoints).filter(alias => base.endpoints[alias]),
+    )
+    const collidingModels = new Set(Object.keys(built.models).filter(name => base.models[name]))
+    userEndpoints = Object.fromEntries(
+      Object.entries(built.endpoints).filter(([alias]) => !collidingEndpoints.has(alias)),
+    )
+    userModels = Object.fromEntries(
+      Object.entries(built.models).filter(
+        ([name, model]) => !collidingModels.has(name) && !collidingEndpoints.has(model.endpoint),
+      ),
+    )
+    if (collidingEndpoints.size > 0 || collidingModels.size > 0) {
+      const dropped = [...collidingEndpoints, ...collidingModels].join(', ')
       process.stderr.write(
-        `[user-config] ${canonical}: user endpoint "${endpointCollision}" collides with an admin endpoint; ignoring user BYO registry\n`,
+        `[user-config] ${canonical}: user BYO name(s) collide with admin (${dropped}); admin wins, dropped the colliding entr${
+          collidingEndpoints.size + collidingModels.size === 1 ? 'y' : 'ies'
+        }, kept the rest\n`,
       )
-    } else if (modelCollision) {
-      process.stderr.write(
-        `[user-config] ${canonical}: user model "${modelCollision}" collides with an admin model; ignoring user BYO registry\n`,
-      )
-    } else {
-      userEndpoints = built.endpoints
-      userModels = built.models
     }
   } else {
     process.stderr.write(`[user-config] ${canonical}: ${built.error}; ignoring user BYO registry\n`)

@@ -269,6 +269,29 @@ describe('resolveUserConfig BYO registry union (PR5 checkpoint 1)', () => {
     assert.deepEqual(resolved!.endpoints, base.endpoints)
   })
 
+  it('(c2) partial collision: drop ONLY the colliding endpoint + its model, keep the rest', () => {
+    // admin base has endpoint alias "a". User defines "a" (collides) AND "myep"
+    // (clean), each with a model. Only the colliding pair is dropped.
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    // writeSecret overwrites the whole file, so both endpoints share one secret.
+    writeSecret('alice', 'K1', 'sk-1')
+    writeUserConfigJson('alice', {
+      endpoints: { a: { apiKeyRef: 'K1' }, myep: { apiKeyRef: 'K1' } },
+      models: {
+        'shadow-gpt': { endpoint: 'a', schema: 'openai', upstreamModel: 'gpt-4.1' },
+        'my-gpt': { endpoint: 'myep', schema: 'openai', upstreamModel: 'gpt-4.1' },
+      },
+    })
+    const resolved = resolveUserConfig('alice', base)
+    // Colliding endpoint "a" + its model "shadow-gpt" dropped; admin "a" intact.
+    assert.deepEqual(resolved.endpoints.a, base.endpoints.a)
+    assert.equal(resolved.models['shadow-gpt'], undefined)
+    // Clean user endpoint + model survive (the whole registry was NOT nuked).
+    assert.ok(resolved.endpoints.myep)
+    assert.ok(resolved.models['my-gpt'])
+    assert.equal(resolved.models['my-gpt'].endpoint, 'myep')
+  })
+
   it('(d) byo defaultModel unknown: falls back to admin default; with no admin default → empty string', () => {
     // With an admin default.
     const baseWithDefault = makeBase({ defaultModel: 'm', models: MODELS })
