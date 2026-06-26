@@ -14,7 +14,12 @@ import { loadIdentityRules } from '../permission/storage.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { getModel, getPermissionMode } from '../state.js'
-import { __setModelProbeHooksForTests, runConfigCommand, validateWorkspacePath } from './config.js'
+import {
+  __setModelProbeHooksForTests,
+  __setProbeStreamChatForTests,
+  runConfigCommand,
+  validateWorkspacePath,
+} from './config.js'
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -37,6 +42,7 @@ afterEach(() => {
   setLang('cn')
   setLightclawHomeOverride(undefined)
   __setModelProbeHooksForTests(null)
+  __setProbeStreamChatForTests(null)
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
@@ -973,5 +979,36 @@ describe('/config backend add — probe resolves against admin base, not session
     })
     assert.match(out, /Connectivity check: ok/)
     assert.ok((readUserConfigJson('baseuser').models as Record<string, unknown>).m)
+  })
+})
+
+describe('/config backend add — probe defers reasoning effort to the model config', () => {
+  it('does NOT force a reasoning effort the upstream may reject (gpt-5.5 minimal 400)', async () => {
+    const cfg = modelConfig()
+    // Run the REAL connectivity probe (only stub the endpoint-model listing) and
+    // capture the streamChat params it sends. The bug: the probe hard-set
+    // reasoningEffort:'minimal', which gpt-5.5 rejects with a 400 — false-rejecting
+    // a working model on a parameter unrelated to connectivity.
+    let seenReasoning: unknown = 'UNSET'
+    __setModelProbeHooksForTests({ endpointModels: async () => ({ ok: true, summary: '' }) })
+    __setProbeStreamChatForTests(async function* (params) {
+      seenReasoning = (params as { reasoningEffort?: unknown }).reasoningEffort
+      yield { type: 'stop' } as never
+    })
+    await runConfigCommand('endpoint add codex-ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: 'gptuser',
+    })
+    const out = await runConfigCommand('backend add gpt-5.5 --endpoint codex-ep --upstream gpt-5.5', {
+      config: cfg,
+      userId: 'gptuser',
+    })
+    assert.match(out, /Connectivity check: ok/)
+    // The probe must pass NO reasoning effort of its own — it defers to the model's
+    // config / api.ts's medium default. Anything it forces here (notably 'minimal')
+    // is the regression.
+    assert.equal(seenReasoning, undefined)
+    assert.notEqual(seenReasoning, 'minimal')
+    assert.ok((readUserConfigJson('gptuser').models as Record<string, unknown>)['gpt-5.5'])
   })
 })

@@ -9,6 +9,7 @@ import {
 } from '../auth/codex/user-store.js'
 import { listCodexSlugs } from '../auth/codex/models.js'
 import { listApiKeyModels, type ListModelsResult } from '../provider/list-models.js'
+import { streamChat as defaultStreamChat } from '../api.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
   buildUserRegistry,
@@ -40,7 +41,7 @@ import {
 } from './card-specs.js'
 import type { CommandListCardSpec } from './registry.js'
 import { expandHomePath } from '../paths.js'
-import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
+import { clearPrechargeForModel } from '../provider/index.js'
 import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
 import { formatRule, parseRule } from '../permission/rules.js'
@@ -85,8 +86,9 @@ type ConfigCommandContext = {
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
 // Connectivity probe budget. A reasoning model's TTFB through a proxy easily
 // exceeds 8s even for a one-token "ok" — too tight a timeout false-rejects a
-// perfectly good model and (as a hard gate) rolls the add back. The probe
-// forces minimal reasoning (below) so this only needs to cover connect + TTFB.
+// perfectly good model and (as a hard gate) rolls the add back. The probe runs
+// the model at its configured / default reasoning effort (see below), so this
+// covers connect + TTFB + a small bounded reasoning window.
 const MODEL_CHECK_TIMEOUT_MS = 30_000
 /** How many model ids to SHOW after `endpoint add`; a provider that advertises
  *  more (typical of openai) gets the "showing first N, see the provider for the
@@ -106,6 +108,16 @@ type ModelProbeHooks = {
 let testProbeHooks: ModelProbeHooks | null = null
 export function __setModelProbeHooksForTests(hooks: ModelProbeHooks | null): void {
   testProbeHooks = hooks
+}
+// Test seam for the connectivity probe's underlying streamChat. Tests inject a
+// fake to assert the probe does NOT force a reasoning effort (it defers to the
+// model's config / the api.ts medium default) — the gpt-5.5 `'minimal'` 400
+// regression. Production leaves this as the real api.ts streamChat.
+let probeStreamChatImpl: typeof defaultStreamChat = defaultStreamChat
+export function __setProbeStreamChatForTests(
+  impl: typeof defaultStreamChat | null,
+): void {
+  probeStreamChatImpl = impl ?? defaultStreamChat
 }
 function probeEndpointModels(
   input: Parameters<typeof probeEndpointModelsImpl>[0],
@@ -907,27 +919,33 @@ async function addBackend(
  * Shared by `backend add` (auto-check) and `backend check` (manual re-probe).
  * Never throws — returns a structured ok/detail result.
  *
- * The probe forces `minimal` reasoning regardless of the model's configured
- * effort: a connectivity / auth / valid-model-id check does not need deep
- * reasoning, and a high-effort "reply ok" can take tens of seconds (then time
- * out and, as a gate, false-reject a working model).
+ * Routes through the real api.ts `streamChat` (NOT `provider.streamChat`
+ * directly) so the probe exercises the exact wire shape a real turn would:
+ * reasoning effort resolves to `entry.reasoningEffort ?? 'medium'`, max_tokens
+ * resolves per model, and a genuinely non-reasoning model gets the one-shot
+ * reasoning-strip retry. The probe deliberately sets NO `reasoningEffort` of its
+ * own — forcing a fixed value (the old `'minimal'`) 400s any model that does not
+ * accept it (gpt-5.5 rejects `'minimal'`), false-rejecting a working model on a
+ * parameter unrelated to connectivity. The model's own config is the faithful
+ * thing to test; a low max_tokens caps cost (a truncated `response.incomplete`
+ * is still a successful round-trip = connectivity confirmed).
  */
 async function probeModelConnectivityImpl(
   resolved: ReturnType<typeof resolveUserConfig>,
   displayName: string,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
   try {
-    const entry = resolved.models[displayName]
-    if (!entry) return { ok: false, detail: `"${displayName}" is not a configured model` }
-    const { provider } = getProviderFor(resolved, displayName)
+    if (!resolved.models[displayName]) {
+      return { ok: false, detail: `"${displayName}" is not a configured model` }
+    }
     const signal = AbortSignal.timeout(MODEL_CHECK_TIMEOUT_MS)
-    for await (const event of provider.streamChat({
-      model: entry.upstreamModel,
+    for await (const event of probeStreamChatImpl({
+      config: resolved,
+      model: displayName,
       system: 'You are a connectivity checker. Reply with ok.',
       messages: [{ role: 'user', content: 'Reply with ok.' }],
       tools: [],
-      maxTokens: 16,
-      reasoningEffort: 'minimal',
+      maxTokens: 512,
       signal,
     })) {
       if (event.type === 'stop') break
