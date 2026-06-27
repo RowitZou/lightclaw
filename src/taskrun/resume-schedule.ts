@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { applyCredentialDegrade } from '../model-resolution.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
@@ -121,7 +122,13 @@ async function buildOwnerResumeContext(
   ownerCanonicalUser: string,
   runId: string,
 ): Promise<SessionContext> {
-  const config = getConfig()
+  // Fold the owner's per-user BYO registry onto the admin base — same as
+  // runBackgroundTaskFire. Without it a BYO-only deployment resolves an empty
+  // model here AND seeds the driver context with a config snapshot that has no
+  // models, so every getSessionConfig()-driven sub-LLM (compaction /
+  // session-memory / imageRead) in the resumed turn would fail to resolve a
+  // model. resolveUserConfig is an idempotent union merge.
+  const config = resolveUserConfig(ownerCanonicalUser, getConfig())
   const prefs = loadIdentityPreferences(ownerCanonicalUser)
   const model = applyCredentialDegrade(
     prefs.model ?? config.defaultModel,
@@ -138,6 +145,7 @@ async function buildOwnerResumeContext(
   return createSessionContext({
     cwd,
     model,
+    config,
     sessionsDir: userSessionsRoot(ownerCanonicalUser),
     memoryDir: getMemoryDir(ownerCanonicalUser),
     currentUserId: ownerCanonicalUser,

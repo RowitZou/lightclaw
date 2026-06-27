@@ -10,6 +10,7 @@ import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
 import { buildPromptForRole } from '../prompt.js'
 import { getConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
@@ -103,7 +104,14 @@ export async function resumeRunWithBlock(
 
   let config: ReturnType<typeof getConfig>
   try {
-    config = getConfig()
+    // BYO-only deployments keep every model/endpoint/defaultModel in the owner's
+    // per-user config.json; the global admin base has none. The timer / watchdog /
+    // post-restart resume path runs outside the inbound session that normally
+    // resolves this, so without resolveUserConfig the registry is empty and the
+    // role-model lookup below throws "No model is configured. Registered: (none)",
+    // silently cancelling the run. Mirrors background-task/runner.ts and
+    // run-subagent.ts; resolveUserConfig is an idempotent union merge.
+    config = resolveUserConfig(run.ownerCanonicalUser, getConfig())
   } catch (error) {
     return {
       ok: false,

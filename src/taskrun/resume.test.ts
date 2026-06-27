@@ -12,6 +12,7 @@ import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { rewriteTranscript } from '../session/storage.js'
 import { saveBackgroundTasks } from '../background-task/store.js'
+import { writeUserConfig } from '../config/user-override.js'
 import { setEnabled, setUserSecret } from '../secrets/store.js'
 import { resumeRunWithBlock } from './resume.js'
 import { resetWorkerProgressForTest } from './worker-progress.js'
@@ -550,6 +551,76 @@ test('a resumed sub-worker fire stays stripped (gate reloads the fire chainState
   } finally {
     channelInterjectionQueue.unmarkInFlight('taskrun-resume-secret-sub')
     channelInterjectionQueue.drain('taskrun-resume-secret-sub')
+  }
+})
+
+test('resume resolves the owner BYO model (per-user config), not the empty global base', async () => {
+  // BYO-only deployment: every model/endpoint/defaultModel lives in the owner's
+  // per-user config.json; the global admin base has none. The timer / watchdog /
+  // post-restart resume path re-reads getConfig() directly, so without
+  // resolveUserConfig(owner, ...) it sees zero models, resolveRoleModel returns
+  // '' and getProviderFor throws "No model is configured. Registered: (none)" —
+  // silently cancelling the task (the hermes-agent dogfood failure, 2026-06-27).
+  writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+    autoMemory: false,
+    autoDream: { enabled: false },
+  }))
+  // Per-user BYO registry: endpoints name a secret via apiKeyRef (the on-disk
+  // config never stores a raw key); resolveUserConfig folds the resolved key in.
+  setUserSecret('alice', 'BYO_KEY', 'sk-byo')
+  writeUserConfig('alice', {
+    endpoints: { byo: { type: 'anthropic', apiKeyRef: 'BYO_KEY' } },
+    models: {
+      'byo-model': { endpoint: 'byo', schema: 'anthropic', upstreamModel: 'byo-model' },
+    },
+    defaultModel: 'byo-model',
+  })
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-byo',
+    chainId: 'chain-resume-byo',
+    dispatcherRole: 'generalist',
+  })
+  const ctx = createSessionContext({
+    cwd: tmpHome,
+    model: 'byo-model',
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+    runtime: fakeRuntime(tmpHome),
+  })
+  let observedDefaultModel: string | undefined
+  try {
+    const result = await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(runId, {
+        via: 'child-join',
+        reason: 'continue',
+        body: '<taskrun-child-result>done</taskrun-child-result>',
+      }, 'alice', async params => {
+        observedDefaultModel = params.config?.defaultModel
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'continuing' }],
+              stopReason: 'end_turn',
+              usage: { input_tokens: 0, output_tokens: 0 },
+            }),
+          ],
+          assistantText: 'continuing',
+          finalReplyText: 'continuing',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }
+      }),
+    )
+    assert.equal(result.ok, true)
+    assert.equal(observedDefaultModel, 'byo-model')
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-byo')
+    channelInterjectionQueue.drain('taskrun-resume-byo')
   }
 })
 
