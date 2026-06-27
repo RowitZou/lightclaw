@@ -423,12 +423,12 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     )
   }
 
-  it('(a) byo codex endpoint+model unions in with schema openai-auth, visibility user, credentialOwner/authRef/credentialIdentity', () => {
+  it('(a) byo codex endpoint+model unions in with schema codex, visibility user, credentialOwner/authRef/credentialIdentity', () => {
     const base = makeBase({ defaultModel: 'm', models: MODELS })
     writeFakeUserCodex('alice', 'personal')
     writeUserConfigJson('alice', {
       endpoints: { 'my-codex': { authRef: 'codex:personal' } },
-      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
       defaultModel: 'gpt-codex',
     })
     const resolved = resolveUserConfig('alice', base)
@@ -436,7 +436,7 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     assert.ok(resolved.models.m && resolved.models.mine)
     const model = resolved.models['gpt-codex']
     assert.ok(model, 'byo codex model must be unioned in')
-    assert.equal(model.schema, 'openai-auth')
+    assert.equal(model.schema, 'codex')
     assert.equal(model.upstreamModel, 'gpt-5.5')
     assert.equal(model.visibility, 'user')
     const ep = resolved.endpoints['my-codex'] as {
@@ -457,7 +457,7 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     writeSecret('alice', 'MY_KEY', 'sk-alice-secret')
     writeUserConfigJson('alice', {
       endpoints: { myep: { apiKeyRef: 'MY_KEY' } },
-      models: { 'bad-codex': { endpoint: 'myep', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+      models: { 'bad-codex': { endpoint: 'myep', schema: 'codex', upstreamModel: 'gpt-5.5' } },
     })
     let resolved: LightClawConfig | undefined
     assert.doesNotThrow(() => {
@@ -472,7 +472,7 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     // No fake codex auth written for "missing".
     writeUserConfigJson('alice', {
       endpoints: { 'my-codex': { authRef: 'codex:missing' } },
-      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
     })
     let resolved: LightClawConfig | undefined
     assert.doesNotThrow(() => {
@@ -490,7 +490,7 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     writeFakeUserCodex('alice', 'personal')
     writeUserConfigJson('alice', {
       endpoints: { 'my-codex': { authRef: 'codex:personal' } },
-      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
     })
     const onDisk = readFileSync(userConfigPath('alice'), 'utf8')
     assert.ok(onDisk.includes('codex:personal'), 'authRef must be present in config.json')
@@ -509,19 +509,19 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
         defaultModel: 'm',
         models: {
           ...MODELS,
-          'admin-codex': { endpoint: 'a', schema: 'openai-auth', upstreamModel: 'gpt-admin' },
+          'admin-codex': { endpoint: 'a', schema: 'codex', upstreamModel: 'gpt-admin' },
         },
       })
       writeFakeUserCodex('alice', 'personal')
       writeUserConfigJson('alice', {
         endpoints: { 'my-codex': { authRef: 'codex:personal' } },
-        models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+        models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
         defaultModel: 'gpt-codex',
       })
       const resolved = resolveUserConfig('alice', base)
       // The user's BYO codex model is present and selectable.
       assert.ok(resolved.models['gpt-codex'], 'user BYO codex model must survive admin codex degrade')
-      assert.equal(resolved.models['gpt-codex'].schema, 'openai-auth')
+      assert.equal(resolved.models['gpt-codex'].schema, 'codex')
       // The user's BYO codex model is NOT in the degrade-disabled set.
       assert.equal(isModelCredentialDisabled('gpt-codex'), false)
       // Selecting it does not get swapped away by applyCredentialDegrade.

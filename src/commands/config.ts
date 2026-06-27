@@ -996,10 +996,10 @@ async function runBackendSubcommand(
 function schemaForEndpoint(
   override: ReturnType<typeof loadUserConfigOverride>,
   endpointAlias: string,
-): 'anthropic' | 'openai' | 'openai-auth' | null {
+): 'anthropic' | 'openai' | 'codex' | null {
   const ep = override.endpoints?.[endpointAlias]
   if (!ep) return null
-  if (ep.authRef) return 'openai-auth'
+  if (ep.authRef) return 'codex'
   // apiKey endpoint: `type` records the wire family; default to openai for
   // pre-B3 apiKey endpoints that predate the `type` field.
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'

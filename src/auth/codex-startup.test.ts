@@ -21,7 +21,7 @@ function makeConfig(over: Partial<LightClawConfig> = {}): LightClawConfig {
     models: {
       sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' },
       'gpt-5-mini': { endpoint: 'gw', schema: 'openai', upstreamModel: 'gpt-5-mini' },
-      'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
+      'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
     },
     endpoints: {
       gw: { apiKey: 'sk-x' },
@@ -193,8 +193,8 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
     }))
     const config = makeConfig({
       models: {
-        'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
-        'gpt-5.4': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.4' },
+        'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
+        'gpt-5.4': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.4' },
       },
       defaultModel: 'gpt-5-codex',
     })
@@ -228,7 +228,7 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
         // intentionally NOT alphabetical — first key wins
         'gpt-5-mini': { endpoint: 'gw', schema: 'openai', upstreamModel: 'gpt-5-mini' },
         sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude' },
-        'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
+        'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
       },
       defaultModel: 'gpt-5-codex',
     })
@@ -253,7 +253,7 @@ describe('codex/startup: degradeOAuthModels (pure)', () => {
     const config = makeConfig({
       models: {
         sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude' },
-        'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
+        'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
       },
       defaultModel: 'gpt-5-codex',
     })

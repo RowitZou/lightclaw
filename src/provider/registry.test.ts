@@ -189,17 +189,21 @@ describe('provider.detectStaticDropKinds', () => {
     assert.deepEqual((provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(), ['audio', 'video'])
   })
 
-  it('openai reports pdf + audio + video as schema-unsupported', () => {
+  it('openai (Responses, apiKey) reports only audio + video — image + pdf supported in both positions', () => {
     const cfg = buildConfig()
     const { provider } = getProviderFor(cfg, 'gpt-mini')
     const dropped = (provider.detectStaticDropKinds?.() ?? []).slice().sort()
-    assert.deepEqual(dropped, ['audio', 'pdf', 'video'])
-    // Image is NOT in the dropped list — OpenAI image_url parts are how
-    // user-role images flow through. Regression guard.
+    // Chat Completions was retired (2026-06-27): the `openai` schema now speaks
+    // the Responses API, which carries image (input_image) AND pdf (input_file)
+    // in user messages AND tool_results. Only audio/video have no slot. This is
+    // the capability win that motivated the switch — tool_result images used to
+    // be undeliverable on Chat Completions' string-only `role:"tool"` message.
+    assert.deepEqual(dropped, ['audio', 'video'])
     assert.equal(dropped.includes('image'), false)
+    assert.equal(dropped.includes('pdf'), false)
     assert.deepEqual(
       (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
-      ['audio', 'image', 'pdf', 'video'],
+      ['audio', 'video'],
     )
   })
 
@@ -209,7 +213,7 @@ describe('provider.detectStaticDropKinds', () => {
       models: {
         codex: {
           endpoint: 'codex',
-          schema: 'openai-auth',
+          schema: 'codex',
           upstreamModel: 'gpt-5.5',
         },
       },
@@ -240,43 +244,35 @@ describe('provider precharge writes capability cache', () => {
     // First lookup primes the cache.
     getProviderFor(cfg, 'gpt-mini')
 
-    // User-message probe drops pdf / audio / video.
-    for (const kind of ['pdf', 'audio', 'video'] as const) {
-      assert.deepEqual(
-        readCacheEntry({
-          endpoint: 'gateway',
-          baseUrl: 'http://gw.example/',
-          upstreamModel: 'gpt-5.4-mini',
-          kind,
-          position: 'inUserMessage',
-        }),
-        { enabled: false, failures: 0 },
-        `expected ${kind} cache=false after precharge`,
-      )
-    }
-    assert.deepEqual(
+    const read = (kind: 'image' | 'pdf' | 'audio' | 'video', position: 'inUserMessage' | 'inToolResult') =>
       readCacheEntry({
         endpoint: 'gateway',
         baseUrl: 'http://gw.example/',
         upstreamModel: 'gpt-5.4-mini',
-        kind: 'image',
-        position: 'inUserMessage',
-      }),
-      { enabled: true, failures: 0 },
-      'image user-message path is enabled because the converter emits image_url parts',
-    )
-    // Tool-result probe drops every kind for Chat Completions.
-    for (const kind of ['image', 'pdf', 'audio', 'video'] as const) {
-      assert.deepEqual(
-        readCacheEntry({
-          endpoint: 'gateway',
-          baseUrl: 'http://gw.example/',
-          upstreamModel: 'gpt-5.4-mini',
-          kind,
-          position: 'inToolResult',
-        }),
-        { enabled: false, failures: 0 },
-      )
+        kind,
+        position,
+      })
+
+    // openai now speaks the Responses API: audio / video have no wire slot in
+    // either position, so they precharge disabled.
+    for (const position of ['inUserMessage', 'inToolResult'] as const) {
+      for (const kind of ['audio', 'video'] as const) {
+        assert.deepEqual(
+          read(kind, position),
+          { enabled: false, failures: 0 },
+          `expected ${kind}/${position} cache=false after precharge`,
+        )
+      }
+      // image (input_image) and pdf (input_file) ARE carried in BOTH positions
+      // — precharge writes enabled:true. The tool_result image case is the
+      // capability that Chat Completions could not represent.
+      for (const kind of ['image', 'pdf'] as const) {
+        assert.deepEqual(
+          read(kind, position),
+          { enabled: true, failures: 0 },
+          `expected ${kind}/${position} cache=true after precharge`,
+        )
+      }
     }
   })
 
@@ -294,7 +290,7 @@ describe('provider precharge writes capability cache', () => {
       models: {
         codex: {
           endpoint: 'codex',
-          schema: 'openai-auth',
+          schema: 'codex',
           upstreamModel: 'gpt-5.5',
         },
       },
@@ -329,7 +325,7 @@ describe('provider precharge writes capability cache', () => {
       models: {
         codex: {
           endpoint: 'codex',
-          schema: 'openai-auth',
+          schema: 'codex',
           upstreamModel: 'gpt-5.5',
         },
       },

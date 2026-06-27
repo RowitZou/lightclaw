@@ -48,19 +48,19 @@ describe('auth/codex/auto-register', () => {
     assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
     assert.deepEqual(cfg.models['gpt-codex-deep'], {
       endpoint: 'codex',
-      schema: 'openai-auth',
+      schema: 'codex',
       upstreamModel: 'gpt-5.5',
       reasoningEffort: 'high',
     })
     assert.deepEqual(cfg.models['gpt-codex-mid'], {
       endpoint: 'codex',
-      schema: 'openai-auth',
+      schema: 'codex',
       upstreamModel: 'gpt-5.5',
       reasoningEffort: 'medium',
     })
     assert.deepEqual(cfg.models['gpt-codex-fast'], {
       endpoint: 'codex',
-      schema: 'openai-auth',
+      schema: 'codex',
       upstreamModel: 'gpt-5.5',
       reasoningEffort: 'low',
     })
@@ -111,7 +111,7 @@ describe('auth/codex/auto-register', () => {
       models: {
         'gpt-5-codex': {
           endpoint: 'codex',
-          schema: 'openai-auth',
+          schema: 'codex',
           upstreamModel: 'gpt-5.4-codex',
         },
       },
@@ -136,7 +136,7 @@ describe('auth/codex/auto-register', () => {
       models: {
         'gpt-codex-mid': {
           endpoint: 'codex',
-          schema: 'openai-auth',
+          schema: 'codex',
           upstreamModel: 'gpt-5.5',
           reasoningEffort: 'medium',
         },
@@ -180,8 +180,8 @@ describe('auth/codex/auto-register', () => {
         keep: { apiKey: 'sk-keep' },
       },
       models: {
-        'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5' },
-        'gpt-5.4-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.4' },
+        'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5' },
+        'gpt-5.4-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.4' },
         keep: { endpoint: 'keep', schema: 'anthropic', upstreamModel: 'claude' },
       },
     })

@@ -1,6 +1,7 @@
 /**
- * OpenAI tool-parameter schema normalization (shared by the `openai` Chat
- * Completions provider and the `openai-auth` Responses provider).
+ * OpenAI tool-parameter schema normalization (used by the Responses provider
+ * in `openai-auth.ts`, which serves both the `openai` apiKey and `codex` OAuth
+ * schemas; the legacy Chat Completions provider was retired 2026-06-27).
  *
  * The OpenAI function-calling APIs require a function tool's top-level
  * `parameters` to be a JSON Schema of `type: "object"`. Zod

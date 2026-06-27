@@ -703,8 +703,14 @@ function clampNumber(value: number, min: number, max: number): number {
 }
 
 function parseSchema(value: string | undefined): Schema | undefined {
-  if (value === 'anthropic' || value === 'openai' || value === 'openai-auth') {
+  if (value === 'anthropic' || value === 'openai' || value === 'codex') {
     return value
+  }
+  // Legacy alias: `openai-auth` was the pre-2026-06-27 name for the
+  // OAuth/Codex Responses schema. Accept it on read and normalize to
+  // `codex` so existing on-disk configs keep loading without migration.
+  if (value === 'openai-auth') {
+    return 'codex'
   }
 
   return undefined
@@ -825,7 +831,7 @@ function resolveModels(
     const schema = parseSchema(raw.schema)
     if (!schema) {
       throw new Error(
-        `models["${displayName}"].schema must be one of: "anthropic", "openai", "openai-auth".`,
+        `models["${displayName}"].schema must be one of: "anthropic", "openai", "codex" (legacy "openai-auth" is accepted as an alias for "codex").`,
       )
     }
     const upstreamModel = raw.upstreamModel?.trim()
@@ -836,14 +842,14 @@ function resolveModels(
     }
     const endpointConfig = endpoints[endpoint]
     const isOAuthEndpoint = 'auth' in endpointConfig
-    if (schema === 'openai-auth' && !isOAuthEndpoint) {
+    if (schema === 'codex' && !isOAuthEndpoint) {
       throw new Error(
-        `models["${displayName}"].schema = "openai-auth" requires endpoint "${endpoint}" to have an auth field; got an apiKey endpoint.`,
+        `models["${displayName}"].schema = "codex" requires endpoint "${endpoint}" to have an auth field; got an apiKey endpoint.`,
       )
     }
-    if (schema !== 'openai-auth' && isOAuthEndpoint) {
+    if (schema !== 'codex' && isOAuthEndpoint) {
       throw new Error(
-        `models["${displayName}"].schema = "${schema}" cannot use endpoint "${endpoint}" (auth=${endpointConfig.auth}); use schema "openai-auth" or pick an apiKey endpoint.`,
+        `models["${displayName}"].schema = "${schema}" cannot use endpoint "${endpoint}" (auth=${endpointConfig.auth}); use schema "codex" or pick an apiKey endpoint.`,
       )
     }
     const reasoningEffort = parseReasoningEffort(raw.reasoningEffort)

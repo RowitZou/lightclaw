@@ -1,11 +1,16 @@
 import type { StreamEvent } from '../types.js'
 
 /** Wire protocol the provider speaks. The same physical endpoint may host
- *  both, distinguished per-model in `LightClawConfig.models`. `openai-auth`
- *  uses the OpenAI Responses API on the Codex backend
- *  (chatgpt.com/backend-api/codex) with OAuth credentials sourced from the
- *  endpoint's auth provider. */
-export type Schema = 'anthropic' | 'openai' | 'openai-auth'
+ *  more than one, distinguished per-model in `LightClawConfig.models`.
+ *  `openai` and `codex` BOTH use the OpenAI Responses API (`/v1/responses`)
+ *  — the Chat Completions wire was retired (2026-06-27); they differ only
+ *  in auth: `openai` sends a Bearer apiKey to any OpenAI-compatible gateway,
+ *  while `codex` sources OAuth credentials from the endpoint's auth provider
+ *  (chatgpt.com/backend-api/codex) and adds the `chatgpt-account-id` header.
+ *  Both build the same Responses provider in `openai-auth.ts`. The legacy
+ *  schema name `openai-auth` is still accepted in config and normalized to
+ *  `codex` (see `parseSchema`). */
+export type Schema = 'anthropic' | 'openai' | 'codex'
 
 /** Unified reasoning-strength knob exposed to users as `/config model
  *  --reasoning`. Superset across providers: OpenAI Chat Completions

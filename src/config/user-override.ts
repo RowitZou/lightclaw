@@ -89,7 +89,10 @@ const UserEndpointSchema = z
 const UserModelSchema = z
   .object({
     endpoint: z.string().trim().min(1),
-    schema: z.enum(['anthropic', 'openai', 'openai-auth']),
+    // `openai-auth` is the legacy alias for `codex` — accepted on read and
+    // normalized to `codex` in buildUserRegistry so old BYO config.json keeps
+    // parsing without migration.
+    schema: z.enum(['anthropic', 'openai', 'codex', 'openai-auth']),
     upstreamModel: z.string().trim().min(1),
     reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
     maxOutputTokens: z.number().int().positive().optional(),
@@ -267,21 +270,23 @@ export function buildUserRegistry(
     // apiKey endpoint. A mismatch is rejected gracefully (caller falls back to
     // the admin-only registry), never thrown.
     const isOAuthEndpoint = 'auth' in endpoint
-    if (m.schema === 'openai-auth' && !isOAuthEndpoint) {
+    // Normalize the legacy `openai-auth` alias to canonical `codex`.
+    const canonicalSchema: Schema = m.schema === 'openai-auth' ? 'codex' : m.schema
+    if (canonicalSchema === 'codex' && !isOAuthEndpoint) {
       return {
         ok: false,
-        error: `user model "${displayName}" uses openai-auth but endpoint "${m.endpoint}" is an apiKey endpoint`,
+        error: `user model "${displayName}" uses codex but endpoint "${m.endpoint}" is an apiKey endpoint`,
       }
     }
-    if (m.schema !== 'openai-auth' && isOAuthEndpoint) {
+    if (canonicalSchema !== 'codex' && isOAuthEndpoint) {
       return {
         ok: false,
-        error: `user model "${displayName}" uses ${m.schema} but endpoint "${m.endpoint}" is a codex (authRef) endpoint`,
+        error: `user model "${displayName}" uses ${canonicalSchema} but endpoint "${m.endpoint}" is a codex (authRef) endpoint`,
       }
     }
     models[displayName] = {
       endpoint: m.endpoint,
-      schema: m.schema as Schema,
+      schema: canonicalSchema,
       upstreamModel: m.upstreamModel,
       visibility: 'user',
       ...(m.reasoningEffort ? { reasoningEffort: m.reasoningEffort as ReasoningEffort } : {}),

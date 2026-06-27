@@ -14,7 +14,6 @@ import {
   parseCodexAuthRef,
 } from '../auth/codex/user-store.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
-import { createOpenAIProvider } from './openai.js'
 import { resolveEffectiveProxy } from './proxy.js'
 import type { AttachmentKind, Provider, Schema } from './types.js'
 
@@ -61,23 +60,33 @@ function buildProvider(
   endpoint: EndpointConfig,
 ): Provider {
   switch (schema) {
-    case 'anthropic':
-    case 'openai': {
+    case 'anthropic': {
       // resolveModels enforces apiKey shape for these schemas; this branch
       // is defensive against misuse from non-config callers.
       if ('auth' in endpoint) {
         throw new Error(
-          `Schema "${schema}" requires an apiKey endpoint, got auth=${endpoint.auth}.`,
+          `Schema "anthropic" requires an apiKey endpoint, got auth=${endpoint.auth}.`,
         )
       }
-      return schema === 'openai'
-        ? createOpenAIProvider(endpoint)
-        : createAnthropicProvider(endpoint)
+      return createAnthropicProvider(endpoint)
     }
-    case 'openai-auth': {
+    case 'openai': {
+      // Chat Completions retired (2026-06-27): the `openai` schema now speaks
+      // the OpenAI Responses API with a static Bearer apiKey against any
+      // OpenAI-compatible gateway, reusing the Responses provider in apiKey
+      // mode. This is what gives generic gateways tool_result image / PDF
+      // support (Chat Completions' `role:"tool"` could not carry them).
+      if ('auth' in endpoint) {
+        throw new Error(
+          `Schema "openai" requires an apiKey endpoint, got auth=${endpoint.auth}.`,
+        )
+      }
+      return createOpenAIAuthProvider(endpoint, { apiKeyMode: true })
+    }
+    case 'codex': {
       if (!('auth' in endpoint)) {
         throw new Error(
-          `Schema "openai-auth" requires an OAuth endpoint, got apiKey endpoint.`,
+          `Schema "codex" requires an OAuth endpoint, got apiKey endpoint.`,
         )
       }
       // BYO codex (PR5 checkpoint 2): an endpoint owned by a user resolves its

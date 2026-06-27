@@ -9,7 +9,7 @@ import type { FunctionTool } from 'openai/resources/responses/responses'
 
 import { getCredentials, type AuthCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
-import type { OAuthEndpoint } from '../config.js'
+import type { ApiKeyEndpoint, OAuthEndpoint } from '../config.js'
 import { getSessionId } from '../state.js'
 import {
   toolResultContentToText,
@@ -25,7 +25,7 @@ import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { extractProviderRetryAfterMs } from './retry-after.js'
-import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
+import type { ApiMessage, AttachmentKind, Provider, Schema, StreamChatParams } from './types.js'
 
 /** OpenAI Responses API rejects audio/video on the function_call_output /
  *  message paths we use — the schema's accepted content types are
@@ -429,6 +429,18 @@ export type OpenAIAuthProviderOptions = {
    *  global auth-provider registry, so a BYO codex endpoint refreshes from its
    *  owner's per-user store rather than the admin global `<home>/auth/codex.json`. */
   credentialsProvider?: () => Promise<AuthCredentials>
+  /** apiKey mode (schema `openai`, 2026-06-27): this Responses provider is
+   *  driven by a static Bearer apiKey against an arbitrary OpenAI-compatible
+   *  gateway, NOT the Codex OAuth backend. When set:
+   *   - credentials = `{ accessToken: endpoint.apiKey }` (no codex store);
+   *   - the `chatgpt-account-id` header is NOT sent (codex-only);
+   *   - `max_output_tokens` IS sent (codex 400s on it; generic gateways accept it);
+   *   - `baseURL` falls back to the OpenAI SDK default (api.openai.com) instead
+   *     of the Codex backend;
+   *   - `Provider.name` reports `'openai'` and the codex-tuned idle timeouts are
+   *     not applied (the global stream-idle defaults are used).
+   *  Left unset → legacy Codex (schema `codex`) behavior, byte-for-byte. */
+  apiKeyMode?: boolean
 }
 
 /**
@@ -451,6 +463,9 @@ export function buildResponsesRequestBody(args: {
   reasoningEffort?: StreamChatParams['reasoningEffort']
   maxTokens?: number
   promptCacheKey: string
+  /** apiKey mode (schema `openai`) sends `max_output_tokens`; the Codex
+   *  backend (schema `codex`) 400s on it, so codex leaves it omitted. */
+  includeMaxOutputTokens?: boolean
 }): ResponseCreateParamsStreaming {
   const hasTools = Array.isArray(args.tools) && args.tools.length > 0
   return {
@@ -466,9 +481,14 @@ export function buildResponsesRequestBody(args: {
     ...(args.reasoningEffort && args.reasoningEffort !== 'none'
       ? { reasoning: { effort: args.reasoningEffort as never, summary: 'auto' } }
       : {}),
-    // NB: max_output_tokens is deliberately NOT set here — see the function
-    // doc comment. The Codex Responses backend 400s on it; `args.maxTokens`
-    // is accepted only to keep the signature uniform with the other providers.
+    // Codex (schema `codex`): max_output_tokens is deliberately NOT set — the
+    // ChatGPT-backend Responses endpoint 400s on it (2026-06-08 incident) and
+    // enforces its own ceiling. apiKey mode (schema `openai`) DOES send it when
+    // the caller supplied one — generic OpenAI-compatible gateways accept the
+    // field and it is the only truncation guard there.
+    ...(args.includeMaxOutputTokens && typeof args.maxTokens === 'number'
+      ? { max_output_tokens: args.maxTokens }
+      : {}),
     stream: true,
     store: false,
     prompt_cache_key: args.promptCacheKey,
@@ -476,12 +496,28 @@ export function buildResponsesRequestBody(args: {
 }
 
 export function createOpenAIAuthProvider(
-  endpoint: OAuthEndpoint,
+  endpoint: OAuthEndpoint | ApiKeyEndpoint,
   opts: OpenAIAuthProviderOptions = {},
 ): Provider {
+  const apiKeyMode = opts.apiKeyMode === true
+  const providerName: Schema = apiKeyMode ? 'openai' : 'codex'
   const authName = opts.authProviderName ?? 'codex'
-  const resolveCredentials = opts.credentialsProvider ?? (() => getCredentials(authName))
-  const baseURL = endpoint.baseUrl ?? CODEX_BACKEND_BASE_URL
+  // apiKey mode resolves a static Bearer key off the endpoint (no codex store,
+  // no token refresh); codex mode resolves OAuth credentials from the per-user
+  // override or the global auth provider.
+  const resolveCredentials: () => Promise<AuthCredentials> = apiKeyMode
+    ? async () => ({
+        accessToken: (endpoint as ApiKeyEndpoint).apiKey,
+        // Static apiKey never expires / refreshes; the refresh path is
+        // codex-only and is never reached in apiKey mode.
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        accountId: '',
+      })
+    : (opts.credentialsProvider ?? (() => getCredentials(authName)))
+  // apiKey mode: respect the endpoint's baseUrl (the OpenAI SDK appends
+  // `/responses`); if absent, fall through to the SDK's api.openai.com default.
+  // codex mode: default to the ChatGPT backend.
+  const baseURL = endpoint.baseUrl ?? (apiKeyMode ? undefined : CODEX_BACKEND_BASE_URL)
   // Dispatcher / fetch are mutable bindings, NOT const: `recycleConnections`
   // tears them down and rebuilds them so the next streamChat lands on a
   // fresh TCP / TLS handshake (1091 偶发 hang: keep-alive socket can stall
@@ -490,9 +526,23 @@ export function createOpenAIAuthProvider(
   // automatically picks up whatever the most recent recycle produced.
   let proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
   let proxiedFetch = buildProxyAwareFetch(proxyDispatcher)
+  /** Build a Responses client for the resolved credentials. The
+   *  `chatgpt-account-id` header is codex-only — omitted in apiKey mode so a
+   *  generic gateway is not handed a meaningless (empty) account id. Reads
+   *  `proxiedFetch` at call time so a `recycleConnections()` rebuild is
+   *  picked up by the next streamChat / describeImage. */
+  const makeClient = (credentials: AuthCredentials) =>
+    new OpenAI({
+      apiKey: credentials.accessToken,
+      ...(baseURL ? { baseURL } : {}),
+      ...(credentials.accountId
+        ? { defaultHeaders: { 'chatgpt-account-id': credentials.accountId } }
+        : {}),
+      ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
+    })
 
   return {
-    name: 'openai-auth',
+    name: providerName,
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
@@ -523,17 +573,17 @@ export function createOpenAIAuthProvider(
     // healthy conditions, and a pre-first-event proxy stall (rare but
     // observed at ~3% rate against 1091) restarts the request fast
     // enough at 35s vs the previous 90s of pure waste.
-    idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 },
+    //
+    // apiKey mode (schema `openai`) is an arbitrary gateway whose keepalive
+    // cadence and first-token latency are unknown (boyue dogfood showed TTFB up
+    // to ~25s — too close to a 35s budget), so it falls through to the global
+    // `config.streamIdle` defaults (90s TTFB / 30s inter-event) instead.
+    ...(apiKeyMode
+      ? {}
+      : { idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 } as const }),
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await resolveCredentials()
-      const client = new OpenAI({
-        apiKey: credentials.accessToken,
-        baseURL,
-        defaultHeaders: {
-          'chatgpt-account-id': credentials.accountId,
-        },
-        ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
-      })
+      const client = makeClient(credentials)
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`
@@ -565,6 +615,7 @@ export function createOpenAIAuthProvider(
         tools,
         reasoningEffort: params.reasoningEffort,
         maxTokens: params.maxTokens,
+        includeMaxOutputTokens: apiKeyMode,
         promptCacheKey: getSessionId(),
       })
 
@@ -633,15 +684,8 @@ export function createOpenAIAuthProvider(
       if (images.length === 0) {
         throw new Error('describeImage requires at least one image.')
       }
-      const credentials = await getCredentials(authName)
-      const client = new OpenAI({
-        apiKey: credentials.accessToken,
-        baseURL,
-        defaultHeaders: {
-          'chatgpt-account-id': credentials.accountId,
-        },
-        ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
-      })
+      const credentials = await resolveCredentials()
+      const client = makeClient(credentials)
 
       let stream: AsyncIterable<ResponseStreamEvent>
       try {

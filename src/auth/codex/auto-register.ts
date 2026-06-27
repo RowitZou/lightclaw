@@ -102,7 +102,7 @@ export function autoRegisterCodex(
     }
     models[tier.display] = {
       endpoint: DEFAULT_CODEX_ENDPOINT_ALIAS,
-      schema: 'openai-auth',
+      schema: 'codex',
       upstreamModel: upstream,
       reasoningEffort: tier.reasoningEffort,
     }

@@ -952,4 +952,66 @@ describe('openai-auth: buildResponsesRequestBody', () => {
     })
     assert.deepEqual(xhigh.reasoning, { effort: 'xhigh', summary: 'auto' })
   })
+
+  it('apiKey mode (schema openai) DOES forward max_output_tokens when a cap is given', () => {
+    // The generic OpenAI-compatible gateway (boyue dogfood, 2026-06-27) accepts
+    // `max_output_tokens` on the Responses wire — it is the only truncation
+    // guard there, unlike the Codex backend which 400s on it. Mirror image of
+    // the codex test above.
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      reasoningEffort: 'high',
+      maxTokens: 64000,
+      includeMaxOutputTokens: true,
+      promptCacheKey: 'k',
+    })
+    assert.equal(body.max_output_tokens, 64000)
+  })
+
+  it('apiKey mode without a cap omits max_output_tokens', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      includeMaxOutputTokens: true,
+      promptCacheKey: 'k',
+    })
+    assert.ok(!('max_output_tokens' in body))
+  })
+})
+
+describe('openai-auth: provider mode (apiKey vs codex)', () => {
+  it('codex mode (default) reports name "codex" and supports image + pdf in both positions', () => {
+    const provider = createOpenAIAuthProvider({ auth: 'codex-oauth' })
+    assert.equal(provider.name, 'codex')
+    // Responses carries image (input_image) + pdf (input_file) everywhere.
+    assert.deepEqual((provider.detectStaticDropKinds?.() ?? []).slice().sort(), ['audio', 'video'])
+    assert.deepEqual(
+      (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
+      ['audio', 'video'],
+    )
+  })
+
+  it('apiKey mode (schema openai) reports name "openai" and the SAME Responses drop set', () => {
+    // The whole point of retiring Chat Completions: schema `openai` now speaks
+    // Responses, so tool_result image / pdf are carried (Chat Completions could
+    // not). Drop set is identical to codex — only the auth/name differ.
+    const provider = createOpenAIAuthProvider(
+      { apiKey: 'sk-test', baseUrl: 'http://gw.example/v1' },
+      { apiKeyMode: true },
+    )
+    assert.equal(provider.name, 'openai')
+    assert.deepEqual((provider.detectStaticDropKinds?.() ?? []).slice().sort(), ['audio', 'video'])
+    assert.deepEqual(
+      (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
+      ['audio', 'video'],
+    )
+    // apiKey mode falls through to global stream-idle defaults (no codex-tuned
+    // 35s override), since a generic gateway's keepalive cadence is unknown.
+    assert.equal(provider.idleTimeouts, undefined)
+  })
 })

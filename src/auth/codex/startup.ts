@@ -33,11 +33,11 @@ import type { LightClawConfig, ModelEntry } from '../../config.js'
 const NO_MODELS_HINT = 'Define endpoints + models in <lightclawHome>/config.json.'
 
 /**
- * Find every display name whose schema is `openai-auth`.
+ * Find every display name whose schema is `codex` (OAuth Responses).
  */
 function listOAuthModels(config: LightClawConfig): string[] {
   return Object.entries(config.models)
-    .filter(([, entry]) => entry.schema === 'openai-auth')
+    .filter(([, entry]) => entry.schema === 'codex')
     .map(([name]) => name)
 }
 

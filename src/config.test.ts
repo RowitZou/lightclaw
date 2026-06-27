@@ -386,7 +386,7 @@ describe('config: endpoints + models registry', () => {
     })
     assert.throws(
       () => getConfig(),
-      /schema must be one of: "anthropic", "openai", "openai-auth"/,
+      /schema must be one of: "anthropic", "openai", "codex"/,
     )
   })
 
@@ -488,7 +488,8 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
-    assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
+    // `openai-auth` input is normalized to the canonical `codex` schema.
+    assert.equal(cfg.models['gpt-5-codex'].schema, 'codex')
   })
 
   it('rejects endpoints with both apiKey and auth', () => {
@@ -534,7 +535,7 @@ describe('config: endpoints + models registry', () => {
     })
     assert.throws(
       () => getConfig(),
-      /schema = "openai-auth" requires endpoint "keyed" to have an auth field/,
+      /schema = "codex" requires endpoint "keyed" to have an auth field/,
     )
   })
 
@@ -583,7 +584,7 @@ describe('config: endpoints + models registry', () => {
       baseUrl: 'http://gw/',
     })
     assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
-    assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
+    assert.equal(cfg.models['gpt-5-codex'].schema, 'codex')
   })
 
   it('supports heterogeneous lane models across schemas', () => {

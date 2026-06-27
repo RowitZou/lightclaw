@@ -670,15 +670,15 @@ async function runAdminBackend(
 }
 
 /** Derive the model schema from a referenced ADMIN endpoint. auth endpoint →
- *  openai-auth; apiKey endpoint with a recorded `type:'anthropic'` → anthropic;
+ *  codex; apiKey endpoint with a recorded `type:'anthropic'` → anthropic;
  *  otherwise openai. Returns null when the endpoint is missing. */
 function schemaForAdminEndpoint(
   endpoints: Record<string, unknown>,
   alias: string,
-): 'anthropic' | 'openai' | 'openai-auth' | null {
+): 'anthropic' | 'openai' | 'codex' | null {
   const ep = endpoints[alias]
   if (!ep || !isPlainObject(ep)) return null
-  if (ep.auth) return 'openai-auth'
+  if (ep.auth) return 'codex'
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'
 }
 

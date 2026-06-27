@@ -97,7 +97,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   // usability check may degrade `config.models` / `defaultModel`
   // before createResolvedSessionContext reads them into the session meta.
   registerCodexAuthProvider(resolvedConfig)
-  // If any registered model uses schema = 'openai-auth', ensure Codex
+  // If any registered model uses schema = 'codex', ensure Codex
   // credentials work (read stored token + auto-refresh; fall back to
   // import from ~/.codex/auth.json only when the LightClaw store is
   // empty). On failure, disable the OAuth models in-memory and rewrite
