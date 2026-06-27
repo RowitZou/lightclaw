@@ -554,6 +554,84 @@ test('a resumed sub-worker fire stays stripped (gate reloads the fire chainState
   }
 })
 
+test('a resumed shift carries the fire chainState on BOTH the invocation and the context, plus the bg subagent label', async () => {
+  // Regression: the initial dispatched fire sets chainState on its forked
+  // invocation AND its childCtx (dispatched-agent). The resume path set NEITHER,
+  // so a resumed dispatcher worker ran with no chain snapshot:
+  //  - invocation.chainState absent → a Dispatch issued from the resumed shift
+  //    hits executeDispatch's `context.chainState ?? createRootChainState(...)`
+  //    fallback, resetting the depth / cycle / privilege-monotonic guards and
+  //    detaching the audit lineage to a brand-new root.
+  //  - childCtx.chainState absent → getCurrentChainState() reads undefined, so a
+  //    TodoWrite progress signal loses its [main → role] breadcrumb / chain-root
+  //    routing.
+  // Both must mirror the initial fire, sourced from the backing bg entry's
+  // chainState (the same reload the secrets gate uses). The api-log lane is also
+  // grouped with the initial fire via subagentLabel:'background_task'.
+  writeMinimalConfig(tmpHome)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-chainstate',
+    chainId: 'chain-resume-chainstate',
+    dispatcherRole: 'main',
+  })
+  let invocationChainId: string | undefined
+  let invocationDepth: number | undefined
+  let invocationPathLen: number | undefined
+  let invocationLabel: string | undefined
+  let contextChainId: string | undefined
+  try {
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'fake-model',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 's-main',
+      currentUserId: 'alice',
+      runtime: fakeRuntime(tmpHome),
+    })
+    await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(runId, {
+        via: 'child-join',
+        reason: 'continue',
+        body: '<taskrun-child-result>done</taskrun-child-result>',
+      }, 'alice', async params => {
+        const m = await import('../session-context.js')
+        invocationChainId = params.invocation.chainState?.chainId
+        invocationDepth = params.invocation.chainState?.depth
+        invocationPathLen = params.invocation.chainState?.path.length
+        invocationLabel = params.invocation.subagentLabel
+        contextChainId = m.getCurrentSessionContext()?.chainState?.chainId
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'continuing' }],
+              stopReason: 'end_turn',
+              usage: { input_tokens: 0, output_tokens: 0 },
+            }),
+          ],
+          assistantText: 'continuing',
+          finalReplyText: 'continuing',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }
+      }),
+    )
+    // The fire chain is [main, generalist] at depth 1 (seedWaitingRun, main
+    // dispatcher). Pre-fix all four reads were undefined.
+    assert.equal(invocationChainId, 'chain-resume-chainstate', 'invocation must carry the fire chainState (drives Dispatch chain guards)')
+    assert.equal(invocationDepth, 1)
+    assert.equal(invocationPathLen, 2)
+    assert.equal(contextChainId, 'chain-resume-chainstate', 'context must carry the fire chainState (drives TodoWrite progress attribution)')
+    assert.equal(invocationLabel, 'background_task', 'resumed shift api-log lane groups with the initial fire')
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-chainstate')
+    channelInterjectionQueue.drain('taskrun-resume-chainstate')
+  }
+})
+
 test('resume resolves the owner BYO model (per-user config), not the empty global base', async () => {
   // BYO-only deployment: every model/endpoint/defaultModel lives in the owner's
   // per-user config.json; the global admin base has none. The timer / watchdog /

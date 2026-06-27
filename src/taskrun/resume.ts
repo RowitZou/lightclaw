@@ -209,8 +209,23 @@ export async function resumeRunWithBlock(
     sessionId,
     currentRole: role,
     currentTaskRunId: run.id,
+    // Pin the chain snapshot the fire was dispatched with (reloaded from the
+    // backing bg entry above — the same source resolveDispatchedFireSecrets
+    // uses), exactly as dispatched-agent sets it on its childCtx. Without it a
+    // resumed dispatcher's getCurrentChainState() reads undefined, so its
+    // TodoWrite progress loses the [main → role] breadcrumb + chain-root
+    // routing. Undefined when the backing entry is gone (swept oneshot) — an
+    // honest "no chain to assert", matching dispatched-agent's semantics.
+    chainState: fireChainState,
     discoveredTools: new Map(),
     turnCounter: 0,
+    // Pin the owner-resolved config (resolveUserConfig above) the way
+    // dispatched-agent pins effectiveConfig, so every getSessionConfig() read
+    // inside the resumed turn (imageRead / webSearch / compact sub-LLMs, that
+    // user's lang / permissionMode) honors the owner's BYO registry — not
+    // whatever config the ambient currentCtx carried when resume ran inline off
+    // a live caller whose owner may differ from this run's owner.
+    config,
     enabledSecrets: resumedSecrets,
     abortController,
   }
@@ -245,6 +260,18 @@ export async function resumeRunWithBlock(
           canUseTool: deriveCanUseTool(role),
           cacheBreakpointMessageIndex: 0,
           currentRoleOverride: role,
+          // Carry the fire's chain snapshot so a Dispatch issued from this
+          // resumed shift derives its child chain from the real depth / path,
+          // not the fresh-root fallback executeDispatch uses when
+          // context.chainState is absent (which would reset the depth / cycle /
+          // privilege-monotonic guards and detach the audit lineage). The
+          // initial fire sets this via dispatched-agent; the resumed shift must
+          // match or the same worker dispatches under different guard state.
+          chainState: fireChainState,
+          // Group the resumed shift's api-log lane with the initial fire's —
+          // resume.ts only ever resumes background fires, which run as
+          // apiLogKind:'subagent' and were first labeled 'background_task'.
+          subagentLabel: 'background_task',
           onAssistantTurn: activityForwarder,
           // Drain interjections that arrived for this run's inbox at every tool
           // boundary while the resumed turn runs — a user interjecting a
