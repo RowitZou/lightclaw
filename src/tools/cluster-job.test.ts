@@ -13,6 +13,7 @@ import { matchToolContent } from '../permission/matchers.js'
 import {
   brainppClusterTool,
   BRAINPP_ACCESS_KEY_SECRET,
+  BRAINPP_CHARGED_GROUP_SETTING,
   BRAINPP_SECRET_KEY_SECRET,
   type CapacityOutput,
   type ClusterJobOutput,
@@ -21,6 +22,7 @@ import {
   formatClusterJobOutput,
   inputSchema,
   parseCapacity,
+  parseChargedGroupPairs,
   redactCli,
 } from './cluster-job.js'
 
@@ -260,13 +262,34 @@ describe('BrainppCluster capacity group resolution', () => {
       abortSignal: new AbortController().signal,
       config: { runtime: { clusterSettings: { namespace: 'ailab-test' } } } as unknown as LightClawConfig,
       runtime: fakeRuntime(async () => ({ stdout: payload, stderr: '', exitCode: 0 })),
-    })
+    }, { chargedGroup: null })
     const out = result.output as CapacityOutput
-    // Pre-fix this read process.env.KUBEBRAIN_NAMESPACE / 'current', ignoring config.
+    // No user pair configured here, so it falls to config namespace. Pre-fix this
+    // read process.env.KUBEBRAIN_NAMESPACE / 'current', ignoring config.
     assert.equal(out.group, 'ailab-test')
     assert.equal(out.queues.length, 1)
     assert.ok(out.queues.every(q => q.name.startsWith('ailab-test')))
     assert.equal(out.lane?.name, 'ailab-test-test-gpu')
+  })
+
+  it('prefers the user configured namespace over the config default', async () => {
+    const payload = JSON.stringify({
+      items: [
+        queue('ailab-bar-bar-gpu', { 'nvidia.com/gpu': '8', cpu: '64', memory: '100Gi' }, { 'nvidia.com/gpu': '3', cpu: '8', memory: '20Gi' }),
+        queue('ailab-test-test-gpu', { 'nvidia.com/gpu': '8', cpu: '64', memory: '100Gi' }, { 'nvidia.com/gpu': '1', cpu: '4', memory: '10Gi' }),
+      ],
+    })
+    const result = await callCluster({ operation: 'capacity' }, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      config: { runtime: { clusterSettings: { namespace: 'ailab-test' } } } as unknown as LightClawConfig,
+      runtime: fakeRuntime(async () => ({ stdout: payload, stderr: '', exitCode: 0 })),
+    }, { chargedGroup: 'ailab-bar:bar-gpu' })
+    const out = result.output as CapacityOutput
+    // A BYO user sees their own namespace's queues, not the operator's config default.
+    assert.equal(out.group, 'ailab-bar')
+    assert.equal(out.queues.length, 1)
+    assert.equal(out.lane?.name, 'ailab-bar-bar-gpu')
   })
 })
 
@@ -333,8 +356,8 @@ describe('BrainppCluster submit', () => {
       name: 'demo-train',
       image: 'registry.example.com/demo:latest',
       command: 'echo hi && python train.py',
-      namespace: 'ailab-exp',
-      chargedGroup: 'hs_gpu',
+      namespace: 'ailab-foo',
+      chargedGroup: 'foo-gpu',
       mounts: ['/mnt/shared-storage-user/ailab-hs/user/datasets'],
       gpu: 1,
       cpu: 8,
@@ -360,8 +383,8 @@ describe('BrainppCluster submit', () => {
     assert.match(command, /rjob submit/)
     assert.match(command, /--name 'demo-train'/)
     assert.match(command, /--image 'registry\.example\.com\/demo:latest'/)
-    assert.match(command, /--namespace 'ailab-exp'/)
-    assert.match(command, /--charged-group 'hs_gpu'/)
+    assert.match(command, /--namespace 'ailab-foo'/)
+    assert.match(command, /--charged-group 'foo-gpu'/)
     assert.match(command, /--gpu 1/)
     assert.match(command, /--cpu 8/)
     assert.match(command, /--memory 32768/)
@@ -386,8 +409,8 @@ describe('BrainppCluster submit', () => {
     assert.equal(output.operation, 'submit')
     assert.equal(output.name, 'demo-train')
     assert.equal(output.image, 'registry.example.com/demo:latest')
-    assert.equal(output.namespace, 'ailab-exp')
-    assert.equal(output.group, 'hs_gpu')
+    assert.equal(output.namespace, 'ailab-foo')
+    assert.equal(output.group, 'foo-gpu')
     assert.equal(output.mounts.autoWorkspace, true)
     assert.deepEqual(output.mounts.extra, ['/mnt/shared-storage-user/ailab-hs/user/datasets'])
     assert.equal(output.resources.gpu, 1)
@@ -452,7 +475,7 @@ describe('BrainppCluster submit', () => {
     assert.doesNotMatch(commands[0], /--private-machine=group/)
   })
 
-  it('does not emit namespace or charged group unless explicitly provided', async () => {
+  it('always pins both namespace and charged group from the user default pair', async () => {
     const commands: string[] = []
     await callCluster({
       operation: 'submit',
@@ -470,8 +493,11 @@ describe('BrainppCluster submit', () => {
     })
 
     assert.equal(commands.length, 1)
-    assert.doesNotMatch(commands[0], /--namespace/)
-    assert.doesNotMatch(commands[0], /--charged-group/)
+    // Neither namespace nor charged group is ever left to rjob's deployment
+    // default (the operator's) — both are pinned together from the user's
+    // configured pair (the callCluster default seed 'ailab-foo:foo-gpu').
+    assert.match(commands[0], /--namespace 'ailab-foo'/)
+    assert.match(commands[0], /--charged-group 'foo-gpu'/)
   })
 
   it('fails fast when /workspace cannot be translated to a configured GPFS mount', async () => {
@@ -496,6 +522,181 @@ describe('BrainppCluster submit', () => {
         return true
       },
     )
+  })
+})
+
+describe('BrainppCluster submit charged group', () => {
+  it('parseChargedGroupPairs splits namespace:group, trims, de-dupes, drops malformed, preserves order', () => {
+    assert.deepEqual(
+      parseChargedGroupPairs(' ailab-foo:foo-gpu , ailab-bar:bar-gpu ,ailab-foo:foo-gpu, ,nocolon, :nogroup, ns: '),
+      [{ namespace: 'ailab-foo', group: 'foo-gpu' }, { namespace: 'ailab-bar', group: 'bar-gpu' }],
+    )
+    assert.deepEqual(parseChargedGroupPairs(''), [])
+    assert.deepEqual(parseChargedGroupPairs(undefined), [])
+  })
+
+  it('fails closed before the CLI runs when no charged group is configured', async () => {
+    let execCalled = false
+    await assert.rejects(
+      () => callCluster({
+        operation: 'submit',
+        name: 'demo',
+        image: 'image:tag',
+        command: 'echo hi',
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => {
+          execCalled = true
+          return { stdout: '', stderr: '', exitCode: 0 }
+        }),
+        config: fakeConfig(),
+      }, { chargedGroup: null }),
+      /No cluster charged group .* is configured/,
+    )
+    // Never silently falls back to rjob's namespace default (the operator's group).
+    assert.equal(execCalled, false)
+  })
+
+  it('defaults to the first configured pair when several are available', async () => {
+    const commands: string[] = []
+    const result = await callCluster({
+      operation: 'submit',
+      name: 'demo',
+      image: 'image:tag',
+      command: 'echo hi',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    }, { chargedGroup: 'ailab-bar:bar-cpu,ailab-foo:foo-gpu' })
+
+    assert.equal(commands.length, 1)
+    assert.match(commands[0], /--namespace 'ailab-bar'/)
+    assert.match(commands[0], /--charged-group 'bar-cpu'/)
+    assert.equal((result.output as any).namespace, 'ailab-bar')
+    assert.equal((result.output as any).group, 'bar-cpu')
+  })
+
+  it('honors an explicit group only when it is one the user configured, pinning its namespace', async () => {
+    const commands: string[] = []
+    const result = await callCluster({
+      operation: 'submit',
+      name: 'demo',
+      image: 'image:tag',
+      command: 'echo hi',
+      chargedGroup: 'foo-gpu',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    }, { chargedGroup: 'ailab-bar:bar-cpu,ailab-foo:foo-gpu' })
+
+    assert.equal(commands.length, 1)
+    assert.match(commands[0], /--namespace 'ailab-foo'/)
+    assert.match(commands[0], /--charged-group 'foo-gpu'/)
+    assert.equal((result.output as any).namespace, 'ailab-foo')
+    assert.equal((result.output as any).group, 'foo-gpu')
+  })
+
+  it('rejects an explicit group outside the user configured set, before the CLI runs', async () => {
+    let execCalled = false
+    await assert.rejects(
+      () => callCluster({
+        operation: 'submit',
+        name: 'demo',
+        image: 'image:tag',
+        command: 'echo hi',
+        chargedGroup: 'foo-gpu',
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => {
+          execCalled = true
+          return { stdout: '', stderr: '', exitCode: 0 }
+        }),
+        config: fakeConfig(),
+      }, { chargedGroup: 'ailab-bar:bar-cpu' }),
+      /is not one of your configured namespace\/group pairs/,
+    )
+    assert.equal(execCalled, false)
+  })
+
+  it('does not leak the user configured pairs into the rejection (model cannot see secret values)', async () => {
+    await assert.rejects(
+      () => callCluster({
+        operation: 'submit',
+        name: 'demo',
+        image: 'image:tag',
+        command: 'echo hi',
+        chargedGroup: 'foo-gpu',
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+        config: fakeConfig(),
+      }, { chargedGroup: 'ailab-bar:bar-cpu,ailab-baz:baz-gpu' }),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        // The configured pairs are secret-store values — never surface them to the model.
+        assert.doesNotMatch(message, /ailab-bar|bar-cpu|ailab-baz|baz-gpu/)
+        return true
+      },
+    )
+  })
+
+  it('rejects an ambiguous group shared across namespaces until a namespace is given', async () => {
+    let execCalled = false
+    const exec = fakeRuntime(async () => {
+      execCalled = true
+      return { stdout: '', stderr: '', exitCode: 0 }
+    })
+    // Same group name in two namespaces; passing only the group cannot pick one.
+    await assert.rejects(
+      () => callCluster({
+        operation: 'submit',
+        name: 'demo',
+        image: 'image:tag',
+        command: 'echo hi',
+        chargedGroup: 'gpu',
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: exec,
+        config: fakeConfig(),
+      }, { chargedGroup: 'ailab-foo:gpu,ailab-bar:gpu' }),
+      /matches more than one of your configured/,
+    )
+    assert.equal(execCalled, false)
+
+    // Naming both namespace and group disambiguates.
+    const commands: string[] = []
+    await callCluster({
+      operation: 'submit',
+      name: 'demo',
+      image: 'image:tag',
+      command: 'echo hi',
+      namespace: 'ailab-bar',
+      chargedGroup: 'gpu',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    }, { chargedGroup: 'ailab-foo:gpu,ailab-bar:gpu' })
+    assert.match(commands[0], /--namespace 'ailab-bar'/)
+    assert.match(commands[0], /--charged-group 'gpu'/)
   })
 })
 
@@ -681,13 +882,19 @@ const TEST_SK = 'sk-test-secret'
  * credentials are set AND enabled (the tool requires enabled). Pass
  * `{ credentials: 'none' }` for the missing path, or `{ credentials: 'stored' }`
  * to stage them without enabling (set-but-not-enabled fail-closed path).
+ *
+ * The charged-group setting (`BRAINPP_CHARGED_GROUP`) is set AND enabled to
+ * `'ailab-foo:foo-gpu'` by default — submit requires it. Pass `{ chargedGroup: null }`
+ * for the unset fail-closed path, or a comma-separated `namespace:group` string to
+ * configure the user's allowed pairs.
  */
 async function callCluster(
   input: Parameters<typeof brainppClusterTool.call>[0],
   context: Parameters<typeof brainppClusterTool.call>[1],
-  opts: { credentials?: 'enabled' | 'stored' | 'none' } = {},
+  opts: { credentials?: 'enabled' | 'stored' | 'none'; chargedGroup?: string | null } = {},
 ): ReturnType<typeof brainppClusterTool.call> {
   const credentials = opts.credentials ?? 'enabled'
+  const chargedGroup = opts.chargedGroup === undefined ? 'ailab-foo:foo-gpu' : opts.chargedGroup
   const home = mkdtempSync(path.join(tmpdir(), 'lc-cluster-'))
   setLightclawHomeOverride(home)
   try {
@@ -698,6 +905,10 @@ async function callCluster(
     if (credentials === 'enabled') {
       setEnabled('tester', BRAINPP_ACCESS_KEY_SECRET, true)
       setEnabled('tester', BRAINPP_SECRET_KEY_SECRET, true)
+    }
+    if (chargedGroup !== null) {
+      setUserSecret('tester', BRAINPP_CHARGED_GROUP_SETTING, chargedGroup)
+      setEnabled('tester', BRAINPP_CHARGED_GROUP_SETTING, true)
     }
     const sessionContext = createSessionContext({
       cwd: '/workspace',

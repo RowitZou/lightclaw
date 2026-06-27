@@ -15,6 +15,24 @@
 export const BRAINPP_ACCESS_KEY_SECRET = 'BRAINPP_ACCESS_KEY_ID'
 export const BRAINPP_SECRET_KEY_SECRET = 'BRAINPP_SECRET_ACCESS_KEY'
 
+// Well-known per-user SETTING (not a credential): the Brain++ namespace/charged-
+// group pair(s) the user is allowed to submit cluster jobs under, written as
+// `<namespace>:<group>` tokens, comma-separated when the user has access to more
+// than one (e.g. "ailab-foo:foo-gpu,ailab-bar:bar-gpu"). A charged group is scoped
+// to a namespace (the cluster queue is `<namespace>-<group>`), so the two always
+// travel as one token — there is no separate-list ordering to get wrong. The first
+// pair is the default a submit uses when none is named explicitly.
+//
+// Unlike the AK/SK names above, this is NOT read by rjob from the environment —
+// the cluster-job tool reads it from the secret store and turns it into the
+// `--namespace` + `--charged-group` submit flags. It exists so a BYO user's jobs
+// bill against a namespace/group they actually have quota in: an AK/SK only carries
+// quota in its own namespace/group(s), so without an explicit pair rjob falls back
+// to the deployment namespace's default group (the operator's), which a different
+// user's credentials have no access to. Submit therefore fails closed when this is
+// unset rather than silently using that default.
+export const BRAINPP_CHARGED_GROUP_SETTING = 'BRAINPP_CHARGED_GROUP'
+
 export function isBrainppCredentialSecret(name: string): boolean {
   return name === BRAINPP_ACCESS_KEY_SECRET || name === BRAINPP_SECRET_KEY_SECRET
 }

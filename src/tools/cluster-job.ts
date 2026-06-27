@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { getConfig } from '../config.js'
-import { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
+import { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_CHARGED_GROUP_SETTING, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
 import { loadUserSecrets } from '../secrets/store.js'
 import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
 import { buildGpfsMountStringFromRules } from '../runtime/gpfs-mount-rules.js'
@@ -12,7 +12,7 @@ const MAX_TEXT_CHARS = 30_000
 const CAPACITY_RETRIES = 5
 const MIN_QUEUE_JSON_BYTES = 200
 
-export { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
+export { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_CHARGED_GROUP_SETTING, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
 
 const capacityInput = z.object({
   operation: z.literal('capacity'),
@@ -300,12 +300,18 @@ async function getCapacity(
  * daemon's ambient `process.env` — the daemon and the worker that runs the
  * query can have different environments, and a silent fallback that matches no
  * queue would return an empty (wrong) capacity. Resolution order: explicit
- * argument → config namespace → ambient env (valid only for the local backend,
- * where the daemon shell is the same shell the command runs in) → fail loud.
+ * argument → the user's own configured namespace (first `BRAINPP_CHARGED_GROUP`
+ * pair, so a BYO user sees their own quota by default rather than the operator's)
+ * → config namespace → ambient env (valid only for the local backend, where the
+ * daemon shell is the same shell the command runs in) → fail loud.
  */
 function resolveCapacityGroup(explicit: string | undefined, context: ToolCallContext): string {
   if (explicit) {
     return explicit
+  }
+  const userPairs = resolveUserChargedGroupPairs()
+  if (userPairs.length > 0) {
+    return userPairs[0].namespace
   }
   const config = context.config ?? getConfig()
   const fromConfig = config.runtime.clusterSettings?.namespace?.trim()
@@ -331,8 +337,9 @@ async function runSubmit(
   if (!clusterSettings) {
     throw new Error('runtime.clusterSettings is required for BrainppCluster submit.')
   }
+  const quota = resolveSubmitChargedGroup(input.namespace, input.chargedGroup)
   const extraMounts = buildExtraMounts(input.mounts ?? [], clusterSettings)
-  const command = buildSubmitCommand(input, autoWorkspaceMount, extraMounts, clusterSettings)
+  const command = buildSubmitCommand(input, quota, autoWorkspaceMount, extraMounts, clusterSettings)
   const result = await execClusterCommand(command, context, {
     timeoutMs: 60_000,
     maxBufferBytes: 2 * 1024 * 1024,
@@ -351,8 +358,8 @@ async function runSubmit(
     truncated: text.truncated,
     name: input.name,
     image: input.image,
-    namespace: input.namespace ?? clusterSettings.namespace,
-    group: input.chargedGroup ?? clusterSettings.chargedGroup,
+    namespace: quota.namespace,
+    group: quota.group,
     taskLane: input.taskType ?? 'normal',
     mounts: { autoWorkspace: true, extra: input.mounts ?? [] },
     resources: {
@@ -611,8 +618,113 @@ function safeCurrentUserId(): string | undefined {
   }
 }
 
+export type ChargedGroupPair = { namespace: string; group: string }
+
+/**
+ * Parse the `BRAINPP_CHARGED_GROUP` setting into the ordered, de-duplicated list
+ * of `<namespace>:<group>` pairs the user may submit under. A charged group is
+ * scoped to a namespace (the cluster queue is `<namespace>-<group>`), so the two
+ * travel as one token and there is no separate-list ordering to get wrong. The
+ * first pair is the default a submit uses when none is named explicitly. Tokens
+ * without a non-empty `<namespace>:<group>` shape are skipped.
+ */
+export function parseChargedGroupPairs(raw: string | undefined): ChargedGroupPair[] {
+  if (!raw) {
+    return []
+  }
+  const pairs: ChargedGroupPair[] = []
+  const seen = new Set<string>()
+  for (const token of raw.split(',')) {
+    const trimmed = token.trim()
+    const colon = trimmed.indexOf(':')
+    if (colon <= 0) {
+      continue
+    }
+    const namespace = trimmed.slice(0, colon).trim()
+    const group = trimmed.slice(colon + 1).trim()
+    if (!namespace || !group) {
+      continue
+    }
+    const key = `${namespace}:${group}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      pairs.push({ namespace, group })
+    }
+  }
+  return pairs
+}
+
+/** The current user's allowed namespace/group pairs, or [] when none are
+ *  configured / the setting is disabled (parallel to the AK/SK
+ *  enabled-is-the-contract rule). */
+function resolveUserChargedGroupPairs(): ChargedGroupPair[] {
+  const userId = safeCurrentUserId()
+  if (!userId) {
+    return []
+  }
+  const entry = loadUserSecrets(userId)[BRAINPP_CHARGED_GROUP_SETTING]
+  if (!entry?.enabled) {
+    return []
+  }
+  return parseChargedGroupPairs(entry.value)
+}
+
+/**
+ * Resolve the (namespace, charged group) a submit runs under, from the user's own
+ * configured allow-list — never the admin `clusterSettings` default. A BYO user's
+ * AK/SK only carries quota in their own namespace/group(s), and a charged group is
+ * scoped to a namespace, so both are pinned together. Submit fails closed when
+ * nothing is configured:
+ *  - nothing configured → fail closed with the set/enable instructions;
+ *  - an explicit namespace and/or group is honored only if it identifies exactly
+ *    one configured pair (ambiguous → ask for the other half);
+ *  - otherwise the first configured pair is the default.
+ */
+function resolveSubmitChargedGroup(
+  explicitNamespace: string | undefined,
+  explicitGroup: string | undefined,
+): ChargedGroupPair {
+  const allowed = resolveUserChargedGroupPairs()
+  if (allowed.length === 0) {
+    throw new Error(
+      'No cluster charged group (分区) is configured for this user. Your jobs must run under a ' +
+      'namespace and quota group your credentials have access to — set them as <namespace>:<group> ' +
+      `pairs (comma-separated if you have several) with /system key set ${BRAINPP_CHARGED_GROUP_SETTING} ` +
+      `<namespace>:<group>[,<namespace2>:<group2>...] and /system key enable ${BRAINPP_CHARGED_GROUP_SETTING}, then retry.`,
+    )
+  }
+  const wantNamespace = explicitNamespace?.trim() || undefined
+  const wantGroup = explicitGroup?.trim() || undefined
+  if (!wantNamespace && !wantGroup) {
+    return allowed[0]
+  }
+  const candidates = allowed.filter(
+    pair => (!wantGroup || pair.group === wantGroup) && (!wantNamespace || pair.namespace === wantNamespace),
+  )
+  if (candidates.length === 0) {
+    const want = wantNamespace && wantGroup
+      ? `${wantNamespace}:${wantGroup}`
+      : (wantGroup ? `group "${wantGroup}"` : `namespace "${wantNamespace}"`)
+    // Never echo the user's configured pairs — they live in the secret store and
+    // are not visible to the model. Tell it to ask the user instead.
+    throw new Error(
+      `${want} is not one of your configured namespace/group pairs. Ask the user which of their ` +
+      `configured groups to use, or have them add it via /system key set ${BRAINPP_CHARGED_GROUP_SETTING} ` +
+      `<namespace>:<group>,... (then /system key enable ${BRAINPP_CHARGED_GROUP_SETTING}).`,
+    )
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      'What you named matches more than one of your configured namespace/group pairs; ' +
+      'pass both namespace and chargedGroup so exactly one is picked.',
+    )
+  }
+  return candidates[0]
+}
+
 function buildSubmitCommand(
   input: Extract<ClusterJobInput, { operation: 'submit' }>,
+  quota: ChargedGroupPair,
   autoWorkspaceMount: string,
   extraMounts: readonly string[],
   clusterSettings: NonNullable<ReturnType<typeof getConfig>['runtime']['clusterSettings']>,
@@ -623,8 +735,8 @@ function buildSubmitCommand(
   const parts = ['rjob submit']
   pushFlagValue(parts, '--name', input.name)
   pushFlagValue(parts, '--image', input.image)
-  pushFlagValue(parts, '--namespace', input.namespace)
-  pushFlagValue(parts, '--charged-group', input.chargedGroup)
+  pushFlagValue(parts, '--namespace', quota.namespace)
+  pushFlagValue(parts, '--charged-group', quota.group)
   if (lane === 'idle') {
     pushFlagValue(parts, '--task-type', 'idle')
   }
