@@ -982,6 +982,49 @@ describe('openai-auth: buildResponsesRequestBody', () => {
     })
     assert.ok(!('max_output_tokens' in body))
   })
+
+  it('clamps an over-length prompt_cache_key to a deterministic 64-hex digest', () => {
+    // Regression: the Responses API caps prompt_cache_key at 64 chars and 400s
+    // (`string_above_max_length`) on a longer one. A group sessionId
+    // `feishu:group:<chatId>:<senderOpenId>` is ~84 chars. Pre-fix the raw
+    // sessionId went straight onto the wire and every group turn 400'd.
+    const groupSessionId =
+      'feishu:group:oc_4e925d7b47b93eaddc1baac7e864ddab:ou_7f0fb43fdbab7f6e5cde93c053183ae0'
+    assert.ok(groupSessionId.length > 64, 'fixture must exceed the 64-char cap')
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      promptCacheKey: groupSessionId,
+    })
+    assert.equal(typeof body.prompt_cache_key, 'string')
+    assert.equal((body.prompt_cache_key as string).length, 64)
+    assert.match(body.prompt_cache_key as string, /^[0-9a-f]{64}$/)
+    // Deterministic per session — same sessionId hashes to the same key, so
+    // prefix-cache stickiness across turns is preserved.
+    const again = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      promptCacheKey: groupSessionId,
+    })
+    assert.equal(body.prompt_cache_key, again.prompt_cache_key)
+  })
+
+  it('passes a within-limit prompt_cache_key through unchanged', () => {
+    const dmSessionId = 'feishu:dm:oc_b16eb987a021d327be3058c8ac096157'
+    assert.ok(dmSessionId.length <= 64)
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      promptCacheKey: dmSessionId,
+    })
+    assert.equal(body.prompt_cache_key, dmSessionId)
+  })
 })
 
 describe('openai-auth: provider mode (apiKey vs codex)', () => {

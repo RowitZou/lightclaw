@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import OpenAI from 'openai'
 import type {
   ResponseCreateParamsStreaming,
@@ -468,6 +470,16 @@ export function buildResponsesRequestBody(args: {
   includeMaxOutputTokens?: boolean
 }): ResponseCreateParamsStreaming {
   const hasTools = Array.isArray(args.tools) && args.tools.length > 0
+  // The OpenAI Responses API caps `prompt_cache_key` at 64 chars (the Codex
+  // ChatGPT backend was lax, but the public/gateway Responses endpoint 400s:
+  // `string_above_max_length`). A group sessionId
+  // (`feishu:group:<chatId>:<senderOpenId>`) is ~84 chars. Hash any over-length
+  // key to a deterministic 64-hex digest so prefix-cache stickiness per session
+  // is preserved (same session → same key) while staying within the limit.
+  // Short keys (DM sessions) pass through unchanged.
+  const promptCacheKey = args.promptCacheKey.length <= 64
+    ? args.promptCacheKey
+    : createHash('sha256').update(args.promptCacheKey).digest('hex')
   return {
     model: args.model,
     instructions: args.instructions,
@@ -491,7 +503,7 @@ export function buildResponsesRequestBody(args: {
       : {}),
     stream: true,
     store: false,
-    prompt_cache_key: args.promptCacheKey,
+    prompt_cache_key: promptCacheKey,
   }
 }
 
