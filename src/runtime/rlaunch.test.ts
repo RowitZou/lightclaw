@@ -284,6 +284,47 @@ describe('buildLaunchArgs', () => {
       ],
     )
   })
+
+  it('provisions a requested ro mount with a privileged bind remount when puyuclaw has rw', async () => {
+    const runtime = new RlaunchRuntime({
+      ...baseCfg,
+      extraMounts: [{
+        hostPath: '/host/dataset',
+        workerPath: '/datasets/team',
+        gpfsMount: 'gpfs://gpfs1/team:/datasets/team',
+        mode: 'ro',
+        requestedMode: 'ro',
+        fileset: 'gpfs://gpfs1/team',
+        adminApproved: false,
+      }],
+    }, new WorkerReadinessTracker('alice'))
+    const calls: ExecInput[] = []
+    let remounted = false
+    const internals = runtime as unknown as {
+      workerName: string
+      runBrainctlExec(input: ExecInput): Promise<ExecResult>
+      applyMountAuthorizations(): Promise<void>
+    }
+    internals.workerName = 'ws-test-ro'
+    internals.runBrainctlExec = async input => {
+      calls.push(input)
+      if (input.command === 'cat /proc/mounts') {
+        return {
+          stdout: `kataShared /datasets/team virtiofs ${remounted ? 'ro' : 'rw'},relatime 0 0\n`,
+          stderr: '',
+          exitCode: 0,
+        }
+      }
+      remounted = true
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+
+    await internals.applyMountAuthorizations()
+    const remount = calls.find(input => input.command.includes('mount --bind'))
+    assert.equal(remount?.privileged, true)
+    assert.match(remount?.command ?? '', /mount -o remount,ro,bind/)
+    assert.equal(remounted, true)
+  })
 })
 
 /** Decode the inner `bash -c '<body>'` body from a setpriv-wrapped script. */

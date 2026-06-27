@@ -8,6 +8,7 @@ import type { LightClawConfig } from '../config.js'
 import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
+import { approveMountRw, loadMountRwApprovals } from '../runtime/mount-authz.js'
 import { runMountCommand } from './mount.js'
 
 // Usage fallbacks now return null (the /system mount card renders them); these
@@ -72,6 +73,7 @@ describe('/mount command', () => {
     assert.match(unchanged, /already exists/)
     assert.equal(restartCount, 1)
 
+    approveMountRw('alice', 'gpfs://gpfs1/datasets')
     const updated = await runMount(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Updated mount:/)
     assert.match(updated, /Sandbox restarted/)
@@ -103,6 +105,9 @@ describe('/mount command', () => {
         return `worker-${restartCount}`
       },
     }
+
+    approveMountRw('alice', 'gpfs://gpfs1/datasets-a')
+    approveMountRw('alice', 'gpfs://gpfs1/datasets-b')
 
     const added = await runMount(`add ${dataA} ${dataB} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
@@ -161,6 +166,30 @@ describe('/mount command', () => {
     assert.match(added, /Mounted:/)
     assert.match(added, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
+  })
+
+  it('queues unapproved rw requests and mounts them read-only until approval', async () => {
+    const dataPath = path.join(gpfsRoot, 'approval-data')
+    mkdirSync(dataPath, { recursive: true })
+    const deps = { restartRlaunch: async () => 'worker-1' }
+
+    const pending = await runMount(
+      `add ${dataPath} --rw`,
+      { config: makeConfig(), userId: 'alice' },
+      deps,
+    )
+    assert.match(pending, /pending admin approval/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
+    assert.equal(loadMountRwApprovals('alice').pending[0]?.fileset, 'gpfs://gpfs1/approval-data')
+
+    approveMountRw('alice', 'gpfs://gpfs1/approval-data')
+    const approved = await runMount(
+      `add ${dataPath} --rw`,
+      { config: makeConfig(), userId: 'alice' },
+      deps,
+    )
+    assert.match(approved, /Updated mount/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
   })
 
   it('rejects non-rlaunch backends, outside-prefix paths, and workspace-overlapping mounts', async () => {

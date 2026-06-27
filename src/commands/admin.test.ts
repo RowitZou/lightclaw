@@ -14,6 +14,11 @@ import {
 import { createBuiltinReplRegistry } from './builtin.js'
 import { __setModelProbeHooksForTests } from './config.js'
 import { runAdminCommand } from './admin.js'
+import { loadUserRlaunchMounts, saveUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
+import {
+  loadMountRwApprovals,
+  requestMountRwApproval,
+} from '../runtime/mount-authz.js'
 
 let tmpHome = ''
 
@@ -61,6 +66,38 @@ function liveConfig(): LightClawConfig {
     models: {},
   } as unknown as LightClawConfig
 }
+
+describe('/admin mount rw approvals', () => {
+  it('approves a pending fileset and revokes it back to read-only', async () => {
+    const gpfsRoot = path.join(tmpHome, 'gpfs')
+    const mountPath = path.join(gpfsRoot, 'team', 'data')
+    mkdirSync(mountPath, { recursive: true })
+    saveUserRlaunchMounts('alice', [{ path: mountPath, mode: 'ro' }])
+    requestMountRwApproval('alice', 'gpfs://gpfs1/team', mountPath)
+    const cfg = liveConfig()
+    cfg.runtime.clusterSettings = {
+      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
+    } as LightClawConfig['runtime']['clusterSettings']
+
+    const approved = await runAdminCommand(`mount approve alice ${mountPath}`, {
+      config: cfg,
+      userId: 'admin',
+    })
+    assert.match(approved, /Approved read-write mount/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: mountPath, mode: 'rw' }])
+    assert.deepEqual(loadMountRwApprovals('alice').approved, [
+      { fileset: 'gpfs://gpfs1/team', mode: 'rw' },
+    ])
+
+    const revoked = await runAdminCommand(`mount revoke alice ${mountPath}`, {
+      config: cfg,
+      userId: 'admin',
+    })
+    assert.match(revoked, /Revoked read-write mount/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: mountPath, mode: 'ro' }])
+    assert.deepEqual(loadMountRwApprovals('alice').approved, [])
+  })
+})
 
 describe('/admin endpoint add (system-scope write-back)', () => {
   it('writes endpoints[ep] to <home>/config.json with the raw apiKey', async () => {

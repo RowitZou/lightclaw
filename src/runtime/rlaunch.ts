@@ -21,6 +21,11 @@ import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/moun
 import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
+  buildReadOnlyRemountCommand,
+  observePuyuclawMode,
+  resolveGrantedMode,
+} from './mount-authz.js'
+import {
   deleteWorkerRecord,
   lookupWorkerRecord,
   writeWorkerRecord,
@@ -50,6 +55,9 @@ export type RlaunchRuntimeConfig = {
     workerPath: string
     gpfsMount: string
     mode: 'rw' | 'ro'
+    requestedMode?: 'rw' | 'ro'
+    fileset?: string
+    adminApproved?: boolean
   }[]
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
   env: Readonly<Record<string, string>>
@@ -162,6 +170,8 @@ export class RlaunchRuntime implements Runtime {
    *  `start()`'s fast-return contract. Re-armed when the workerName changes
    *  (respawn); un-armed if the drive errors so a later `start()` can retry. */
   private provisionDriveFor: string | null = null
+  private mountAuthReadyFor: string | null = null
+  private inflightMountAuth: Promise<void> | null = null
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -840,8 +850,63 @@ export class RlaunchRuntime implements Runtime {
    * workspace its full-tree walk only timed out — see 2026-06-26).
    */
   private async ensureProvisioned(): Promise<void> {
+    await this.ensureMountAuthorizations()
     await this.ensureScratchDir()
     await this.ensureHelpersStaged()
+  }
+
+  private async ensureMountAuthorizations(): Promise<void> {
+    if (this.mountAuthReadyFor === this.workerName) return
+    if (this.inflightMountAuth) return this.inflightMountAuth
+    this.inflightMountAuth = this.applyMountAuthorizations().finally(() => {
+      this.inflightMountAuth = null
+    })
+    return this.inflightMountAuth
+  }
+
+  private async applyMountAuthorizations(): Promise<void> {
+    const mounts = this.cfg.extraMounts ?? []
+    if (mounts.length === 0) {
+      this.mountAuthReadyFor = this.workerName
+      return
+    }
+    for (const mount of mounts) {
+      const before = await this.readProcMounts()
+      const observed = observePuyuclawMode(before, mount.workerPath)
+      const requested = mount.requestedMode ?? mount.mode
+      const granted = resolveGrantedMode(requested, observed, mount.adminApproved === true)
+      if (granted === 'ro' && observed === 'rw') {
+        const result = await this.runBrainctlExec({
+          command: buildReadOnlyRemountCommand(mount.workerPath),
+          timeoutMs: 30_000,
+          privileged: true,
+        })
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `failed to enforce read-only runtime mount ${mount.workerPath}: ` +
+            `${result.stderr.trim() || result.stdout.trim()}`,
+          )
+        }
+        const after = observePuyuclawMode(await this.readProcMounts(), mount.workerPath)
+        if (after !== 'ro') {
+          throw new Error(`read-only remount did not take effect for ${mount.workerPath}`)
+        }
+      }
+    }
+    this.mountAuthReadyFor = this.workerName
+  }
+
+  private async readProcMounts(): Promise<string> {
+    const result = await this.runBrainctlExec({
+      command: 'cat /proc/mounts',
+      timeoutMs: 30_000,
+      maxBufferBytes: 2 * 1024 * 1024,
+      privileged: true,
+    })
+    if (result.exitCode !== 0) {
+      throw new Error(`failed to inspect worker mounts: ${result.stderr.trim() || result.stdout.trim()}`)
+    }
+    return result.stdout
   }
 
   /**

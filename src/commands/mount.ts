@@ -13,6 +13,11 @@ import {
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
+import {
+  filesetKeyFromGpfsMount,
+  isMountRwApproved,
+  requestMountRwApproval,
+} from '../runtime/mount-authz.js'
 
 type MountCommandContext = {
   config: LightClawConfig
@@ -56,17 +61,37 @@ export async function runMountCommand(
       return `${parsed}\n`
     }
     const { mountPaths, mode } = parsed
+    const effectiveModeByPath = new Map<string, RlaunchMountMode>()
+    const pendingFilesetByPath = new Map<string, string>()
+    const pendingPaths: string[] = []
     for (const mountPath of mountPaths) {
-      const validation = await validateMountPath(ctxWithUser, mountPath, mode)
+      let effectiveMode = mode
+      if (mode === 'rw') {
+        const runtimeMount = userMountToRuntimeMount(
+          { path: mountPath, mode: 'rw' },
+          ctx.config.runtime.clusterSettings,
+        )
+        const fileset = filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
+        if (!isMountRwApproved(userId, fileset)) {
+          effectiveMode = 'ro'
+          pendingPaths.push(mountPath)
+          pendingFilesetByPath.set(mountPath, fileset)
+        }
+      }
+      effectiveModeByPath.set(mountPath, effectiveMode)
+      const validation = await validateMountPath(ctxWithUser, mountPath, effectiveMode)
       if (validation) {
         return validation
       }
+    }
+    for (const [mountPath, fileset] of pendingFilesetByPath) {
+      requestMountRwApproval(userId, fileset, mountPath)
     }
     const current = loadUserRlaunchMounts(userId)
     const currentByPath = new Map(current.map(mount => [mount.path, mount.mode] as const))
     const nextByPath = new Map(currentByPath)
     for (const mountPath of mountPaths) {
-      nextByPath.set(mountPath, mode)
+      nextByPath.set(mountPath, effectiveModeByPath.get(mountPath) ?? mode)
     }
     const next = mountsFromMap(nextByPath)
     const overlapError = validateMountTable(ctxWithUser, next)
@@ -76,12 +101,17 @@ export async function runMountCommand(
     const added = mountPaths.filter(mountPath => !currentByPath.has(mountPath))
     const updated = mountPaths.filter(mountPath => {
       const previousMode = currentByPath.get(mountPath)
-      return previousMode !== undefined && previousMode !== mode
+      return previousMode !== undefined && previousMode !== effectiveModeByPath.get(mountPath)
     })
-    const unchanged = mountPaths.filter(mountPath => currentByPath.get(mountPath) === mode)
+    const unchanged = mountPaths.filter(
+      mountPath => currentByPath.get(mountPath) === effectiveModeByPath.get(mountPath),
+    )
     if (added.length === 0 && updated.length === 0) {
+      if (pendingPaths.length > 0) {
+        return `${t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })}\n`
+      }
       return mountPaths.length === 1
-        ? `${t('mount.alreadyExistsSingle', { path: mountPaths[0], mode })}\n`
+        ? `${t('mount.alreadyExistsSingle', { path: mountPaths[0], mode: effectiveModeByPath.get(mountPaths[0]) ?? mode })}\n`
         : [
             t('mount.alreadyExistsMultiHeader', { mode }),
             ...formatPathList(unchanged),
@@ -96,8 +126,10 @@ export async function runMountCommand(
         updated.length > 0
           ? t('mount.updatedSingle', { path: mountPaths[0] })
           : t('mount.addedSingle', { path: mountPaths[0] }),
-        t('mount.modeLine', { mode }),
+        t('mount.modeLine', { mode: effectiveModeByPath.get(mountPaths[0]) ?? mode }),
         t('mount.workerPathLine', { path: mountPaths[0] }),
+        ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
+        ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
         restart,
         '',
       ].join('\n')
@@ -106,8 +138,14 @@ export async function runMountCommand(
       ...(added.length > 0 ? [t('mount.addedMultiHeader'), ...formatPathList(added)] : []),
       ...(updated.length > 0 ? [t('mount.updatedMultiHeader'), ...formatPathList(updated)] : []),
       ...(unchanged.length > 0 ? [t('mount.alreadyPresentHeader'), ...formatPathList(unchanged)] : []),
-      t('mount.modeLine', { mode }),
+      t('mount.modeLine', {
+        mode: new Set(effectiveModeByPath.values()).size === 1
+          ? [...effectiveModeByPath.values()][0]
+          : t('mount.mode.mixed'),
+      }),
       t('mount.workerPathsSame'),
+      ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
+      ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
       restart,
       '',
     ].join('\n')

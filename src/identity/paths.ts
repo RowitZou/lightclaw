@@ -75,6 +75,10 @@ export function rlaunchMountsPath(canonicalUser: string): string {
   return path.join(userStateRoot(canonicalUser), 'rlaunch-mounts.json')
 }
 
+export function rlaunchMountApprovalsPath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'rlaunch-mount-approvals.json')
+}
+
 export function userSecretsPath(canonicalUser: string): string {
   return path.join(userStateRoot(canonicalUser), 'secrets.json')
 }

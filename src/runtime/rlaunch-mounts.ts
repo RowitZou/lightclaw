@@ -8,6 +8,7 @@ import {
   buildGpfsMountStringFromRules,
   type RlaunchGpfsMountConfig,
 } from './gpfs-mount-rules.js'
+import { filesetKeyFromGpfsMount, isMountRwApproved } from './mount-authz.js'
 
 export type RlaunchMountMode = 'ro' | 'rw'
 
@@ -26,6 +27,9 @@ export type RlaunchRuntimeMount = {
   workerPath: string
   gpfsMount: string
   mode: RlaunchMountMode
+  requestedMode?: RlaunchMountMode
+  fileset?: string
+  adminApproved?: boolean
 }
 
 export function normalizeRlaunchMountPath(input: string): string {
@@ -111,9 +115,19 @@ export function resolveUserRlaunchRuntimeMounts(
   canonicalUser: string,
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchRuntimeMount[] {
-  return loadUserRlaunchMounts(canonicalUser).map(mount =>
-    userMountToRuntimeMount(mount, rlaunchConfig),
-  )
+  return loadUserRlaunchMounts(canonicalUser).map(mount => {
+    const runtimeMount = userMountToRuntimeMount(mount, rlaunchConfig)
+    const fileset = filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
+    const adminApproved = mount.mode === 'rw' && isMountRwApproved(canonicalUser, fileset)
+    const effectiveMode: RlaunchMountMode = adminApproved ? 'rw' : 'ro'
+    return {
+      ...runtimeMount,
+      requestedMode: effectiveMode,
+      mode: effectiveMode,
+      fileset,
+      adminApproved,
+    }
+  })
 }
 
 export function userMountToRuntimeMount(
@@ -148,6 +162,9 @@ export function rlaunchMountFingerprint(mounts: readonly RlaunchRuntimeMount[]):
       workerPath: mount.workerPath,
       gpfsMount: mount.gpfsMount,
       mode: mount.mode,
+      requestedMode: mount.requestedMode,
+      fileset: mount.fileset,
+      adminApproved: mount.adminApproved,
     }))
     .sort((a, b) => a.hostPath.localeCompare(b.hostPath))
   return createHash('sha256')
