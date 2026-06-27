@@ -28,6 +28,7 @@ export class MountTablePathPolicy implements PathPolicy {
       host: path.resolve(entry.host),
       worker: path.posix.normalize(entry.worker),
       mode: entry.mode,
+      ...(entry.daemonVisible === false ? { daemonVisible: false } : {}),
     }))
     validateMountTable(this.mountTable)
   }
@@ -35,6 +36,7 @@ export class MountTablePathPolicy implements PathPolicy {
   toHostPath(workerPath: string): string | null {
     const normalizedWorker = path.posix.normalize(workerPath)
     for (const mount of this.mountTable) {
+      if (mount.daemonVisible === false) continue
       if (isSameOrChildPosix(normalizedWorker, mount.worker)) {
         return path.join(mount.host, normalizedWorker.slice(mount.worker.length))
       }
@@ -42,6 +44,7 @@ export class MountTablePathPolicy implements PathPolicy {
 
     const resolvedHost = path.resolve(workerPath)
     for (const mount of this.mountTable) {
+      if (mount.daemonVisible === false) continue
       if (isSameOrChildHost(resolvedHost, mount.host)) {
         return resolvedHost
       }
@@ -156,6 +159,7 @@ export async function assertMountsAccessible(
   runtimeKind: string,
 ): Promise<void> {
   for (const mount of policy.mountTable) {
+    if (mount.daemonVisible === false) continue
     const required = fsConstants.R_OK | (mount.mode === 'rw' ? fsConstants.W_OK : 0)
     try {
       await fsp.access(mount.host, required)

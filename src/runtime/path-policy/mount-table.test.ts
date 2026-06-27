@@ -141,3 +141,16 @@ test('assertMountsAccessible is a no-op for empty mount table (LocalRuntime case
   const policy = new MountTablePathPolicy([])
   await assertMountsAccessible(policy, 'local')
 })
+
+test('daemon-invisible mounts do not resolve to host paths and skip startup probes', async () => {
+  const policy = new MountTablePathPolicy([{
+    host: '/definitely/not/mounted/on/daemon',
+    worker: '/datasets/private',
+    mode: 'ro',
+    daemonVisible: false,
+  } as import('../types.js').MountEntry])
+
+  assert.equal(policy.toHostPath('/datasets/private/file.txt'), null)
+  assert.equal(policy.isShared('/datasets/private/file.txt'), false)
+  await assertMountsAccessible(policy, 'rlaunch')
+})

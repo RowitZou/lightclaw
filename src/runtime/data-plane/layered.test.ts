@@ -41,6 +41,35 @@ test('LayeredDataPlane returns the first applicable successful layer', async () 
   assert.equal((await data.readFile('/workspace/a.txt')).toString(), 'fast')
 })
 
+test('LayeredDataPlane routes daemon-invisible mounts through exec-relay', async () => {
+  const workerOnlyPolicy = new MountTablePathPolicy([{
+    host: '/host-not-mounted',
+    worker: '/datasets/private',
+    mode: 'rw',
+    daemonVisible: false,
+  } as import('../types.js').MountEntry])
+  const calls: string[] = []
+  const data = new LayeredDataPlane([
+    fakePlane({
+      kind: 'shared-cluster-fs',
+      readFile: async () => {
+        calls.push('shared')
+        return Buffer.from('wrong')
+      },
+    }),
+    fakePlane({
+      kind: 'exec-relay',
+      readFile: async () => {
+        calls.push('relay')
+        return Buffer.from('worker')
+      },
+    }),
+  ], workerOnlyPolicy)
+
+  assert.equal((await data.readFile('/datasets/private/file.txt')).toString(), 'worker')
+  assert.deepEqual(calls, ['relay'])
+})
+
 test('LayeredDataPlane falls through on non-fatal not-applicable errors', async () => {
   const data = new LayeredDataPlane([
     fakePlane({

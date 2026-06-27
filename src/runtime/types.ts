@@ -117,6 +117,8 @@ export type MountEntry = {
   host: string
   worker: string
   mode: 'rw' | 'ro'
+  /** False when the mount exists only inside the worker environment. */
+  daemonVisible?: boolean
 }
 
 export type PathPolicy = {
