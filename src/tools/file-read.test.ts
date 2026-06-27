@@ -54,6 +54,18 @@ describe('Read (legacy text path)', () => {
     )
   })
 
+  it('caps unpaged plain text output at 100000 characters without returning the whole file', async () => {
+    const huge = `${'x'.repeat(120)}\n`.repeat(20_000)
+    await runtime.fs.writeFile('huge.txt', huge)
+
+    const result = await fileReadTool.call({ file_path: 'huge.txt' }, context())
+    assert.equal(typeof result.output, 'object')
+    const output = result.output as FileReadStructuredOutput
+    assert.equal(output.truncated, true)
+    assert.ok(output.text.length <= 100_000)
+    assert.equal(output.sizeBytes, Buffer.byteLength(huge))
+  })
+
   it('honors offset and limit', async () => {
     await runtime.fs.writeFile('lines.txt', 'a\nb\nc\nd\ne')
     const result = await fileReadTool.call(

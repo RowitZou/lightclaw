@@ -20,6 +20,7 @@ import {
   type RlaunchRuntimeConfig,
 } from './index.js'
 import { dockerCmdRaw } from './docker.js'
+import { configureGlobalByteBudget } from './byte-budget.js'
 import type { ImageReadinessTracker } from './image-readiness.js'
 import { runProcess, withoutProxyEnv } from './process.js'
 import { deleteWorkerRecord, readWorkerState } from './rlaunch-state.js'
@@ -46,6 +47,7 @@ export class RuntimePool {
     workspaceHostPath?: string,
     tracker?: ImageReadinessTracker,
   ): Runtime {
+    configureGlobalByteBudget(config.runtime.maxConcurrentIoBytesMb * 1024 * 1024)
     this.idleTimeoutMs = config.runtime.dockerSettings.idleTimeoutMs
     const key = runtimeKey(userId, workspaceHostPath)
     const existing = this.runtimes.get(key)
@@ -478,6 +480,7 @@ export function buildDockerRuntimeConfig(
     // rlaunch setpriv wrap below. Root daemon → 0:0 = historical behavior.
     daemonUid: process.getuid?.() ?? 0,
     daemonGid: process.getgid?.() ?? 0,
+    maxExecRelayBytes: config.runtime.maxRelayBytesMb * 1024 * 1024,
   }
 }
 
@@ -535,6 +538,7 @@ export function buildRlaunchRuntimeConfig(
     env,
     daemonUid: process.getuid?.() ?? 0,
     daemonGid: process.getgid?.() ?? 0,
+    maxExecRelayBytes: config.runtime.maxRelayBytesMb * 1024 * 1024,
   }
 }
 

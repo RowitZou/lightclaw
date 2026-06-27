@@ -15,7 +15,7 @@ export class LayeredDataPlane implements DataPlane {
   constructor(
     private readonly layers: ReadonlyArray<DataPlane>,
     private readonly policy: PathPolicy,
-    private readonly config: { maxExecRelayBytes: number } = { maxExecRelayBytes: 4 * 1024 * 1024 },
+    private readonly config: { maxExecRelayBytes: number } = { maxExecRelayBytes: 1024 * 1024 * 1024 },
   ) {
     if (layers.length === 0) {
       throw new Error('LayeredDataPlane requires at least one layer')

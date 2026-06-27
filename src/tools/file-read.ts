@@ -31,6 +31,7 @@ import {
 } from '../artifacts/visual-rendering.js'
 import { suggestPathRules } from '../permission/suggestions.js'
 import { readCacheEntry } from '../provider/capability-cache.js'
+import { shellQuote } from '../runtime/process.js'
 import { buildTool, type ToolCallContext } from '../tool.js'
 import type { ToolResultContentBlock, UserToolResultBlock } from '../types.js'
 
@@ -157,19 +158,75 @@ function resolveInputPath(cwd: string, inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(cwd, inputPath)
 }
 
-function formatLines(content: string, offset: number, limit?: number): string {
-  const lines = content.split(/\r?\n/)
-  const start = Math.max(1, offset)
-  const end = limit ? start - 1 + limit : lines.length
-  const selected = lines.slice(start - 1, end)
+const STREAM_PLAIN_TEXT_SCRIPT = String.raw`
+import json, sys
+file_path = sys.argv[1]
+offset = int(sys.argv[2])
+limit = None if sys.argv[3] == '' else int(sys.argv[3])
+cap = int(sys.argv[4])
+parts = []
+chars = 0
+selected = 0
+truncated = False
+last_had_newline = False
+with open(file_path, 'rb') as handle:
+    line_no = 0
+    for raw_bytes in handle:
+        line_no += 1
+        last_had_newline = raw_bytes.endswith(b'\n')
+        if line_no < offset:
+            continue
+        if limit is not None and selected >= limit:
+            break
+        line_bytes = raw_bytes[:-1] if last_had_newline else raw_bytes
+        if last_had_newline and line_bytes.endswith(b'\r'):
+            line_bytes = line_bytes[:-1]
+        line = line_bytes.decode('utf-8', errors='replace')
+        rendered = f'{line_no:6d} | {line}'
+        extra = len(rendered.encode('utf-16-le')) // 2 + (1 if parts else 0)
+        if chars + extra > cap:
+            truncated = True
+            break
+        parts.append(rendered)
+        chars += extra
+        selected += 1
+    else:
+        if last_had_newline and (limit is None or selected < limit):
+            line_no += 1
+            if line_no >= offset:
+                rendered = f'{line_no:6d} | '
+                extra = len(rendered.encode('utf-16-le')) // 2 + (1 if parts else 0)
+                if chars + extra > cap:
+                    truncated = True
+                else:
+                    parts.append(rendered)
+text = '\n'.join(parts) if parts else '[no lines selected]'
+sys.stdout.write(json.dumps({'text': text, 'truncated': truncated}))
+`.trim()
 
-  if (selected.length === 0) {
-    return '[no lines selected]'
+async function readPlainTextStreamed(
+  context: ToolCallContext,
+  filePath: string,
+  offset: number,
+  limit?: number,
+): Promise<{ text: string; truncated: boolean }> {
+  const command = [
+    'python3',
+    '-c', shellQuote(STREAM_PLAIN_TEXT_SCRIPT),
+    shellQuote(filePath),
+    String(offset),
+    limit === undefined ? "''" : String(limit),
+    String(MAX_MAX_CHARS),
+  ].join(' ')
+  const result = await context.runtime.exec({
+    command,
+    abortSignal: context.abortSignal,
+    maxBufferBytes: 1024 * 1024,
+  })
+  if (result.exitCode !== 0) {
+    throw new Error(`readFile ${filePath}: ${result.stderr.trim() || result.stdout.trim()}`)
   }
-
-  return selected
-    .map((line, index) => `${String(start + index).padStart(6, ' ')} | ${line}`)
-    .join('\n')
+  return JSON.parse(result.stdout) as { text: string; truncated: boolean }
 }
 
 const DESCRIPTION = [
@@ -347,12 +404,29 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
       ) {
         return { output: { kind: 'unchanged' as const, filePath } }
       }
-      const content = (await context.runtime.fs.readFile(filePath)).toString('utf8')
+      const streamed = await readPlainTextStreamed(
+        context,
+        filePath,
+        input.offset ?? 1,
+        input.limit,
+      )
       if (plainStat.isFile) {
         markRead({ filePath, mtimeMs: plainStat.mtimeMs, variant: plainVariant })
       }
+      if (streamed.truncated) {
+        return {
+          output: {
+            filePath,
+            format: 'text',
+            text: streamed.text,
+            truncated: true,
+            sizeBytes: plainStat.size,
+            warnings: [],
+          },
+        }
+      }
       return {
-        output: formatLines(content, input.offset ?? 1, input.limit),
+        output: streamed.text,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

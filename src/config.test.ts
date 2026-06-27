@@ -42,6 +42,8 @@ const ENV_KEYS = [
   'LIGHTCLAW_SKILL_MAX_INLINE_COMPOSE_PER_TURN',
   'LIGHTCLAW_SKILL_COMPOSITION_MAX_DORMANT_PASSES',
   'LIGHTCLAW_RETRY_AFTER_CAP_MS',
+  'LIGHTCLAW_MAX_RELAY_BYTES_MB',
+  'LIGHTCLAW_MAX_CONCURRENT_IO_BYTES_MB',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -981,6 +983,40 @@ describe('config: runtime.dockerSettings.security', () => {
       },
     })
     assert.throws(() => getConfig(), /workspaceQuotaMb must be a non-negative number/)
+  })
+})
+
+describe('config: runtime IO byte limits', () => {
+  it('defaults relay and process-wide IO budgets', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.runtime.maxRelayBytesMb, 1024)
+    assert.equal(cfg.runtime.maxConcurrentIoBytesMb, 3072)
+  })
+
+  it('accepts file values and env overrides', () => {
+    process.env.LIGHTCLAW_MAX_RELAY_BYTES_MB = '64'
+    process.env.LIGHTCLAW_MAX_CONCURRENT_IO_BYTES_MB = '512'
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      runtime: { maxRelayBytesMb: 32, maxConcurrentIoBytesMb: 256 },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.runtime.maxRelayBytesMb, 64)
+    assert.equal(cfg.runtime.maxConcurrentIoBytesMb, 512)
+  })
+
+  it('rejects non-positive file values', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      runtime: { maxRelayBytesMb: 0 },
+    })
+    assert.throws(() => getConfig(), /runtime\.maxRelayBytesMb must be a positive number/)
   })
 })
 

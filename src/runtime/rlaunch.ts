@@ -14,6 +14,7 @@ import type {
   RuntimeStat,
 } from './types.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
+import { withByteBudget } from './byte-budget.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
@@ -64,6 +65,7 @@ export type RlaunchRuntimeConfig = {
    */
   daemonUid: number
   daemonGid: number
+  maxExecRelayBytes?: number
 }
 
 type ProcessState =
@@ -232,17 +234,18 @@ export class RlaunchRuntime implements Runtime {
         return sharedClusterFsData.readdir(pathname)
       },
     }
-    this._data = new LayeredDataPlane(
+    const layeredData: DataPlane = new LayeredDataPlane(
       [
         guardedSharedClusterFsData,
         this.execRelayFs,
       ],
       this._paths,
-      { maxExecRelayBytes: 4 * 1024 * 1024 },
+      { maxExecRelayBytes: config.maxExecRelayBytes ?? 1024 * 1024 * 1024 },
     )
+    layeredData.writeFileViaHostMount = this.execRelayFs.writeFileViaHostMount
+    layeredData.readFileViaHostMount = this.execRelayFs.readFileViaHostMount
+    this._data = withByteBudget(layeredData)
     this._fs = this._data
-    this._fs.writeFileViaHostMount = this.execRelayFs.writeFileViaHostMount
-    this._fs.readFileViaHostMount = this.execRelayFs.readFileViaHostMount
   }
 
   /** Returns the successor runtime if this instance has been marked retired

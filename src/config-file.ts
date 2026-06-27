@@ -283,6 +283,8 @@ export type ConfigFileShape = {
   runtime?: {
     driver?: 'brainpp' | null
     backend?: string
+    maxRelayBytesMb?: number
+    maxConcurrentIoBytesMb?: number
     dockerSettings?: {
       image?: string
       imageOverride?: string

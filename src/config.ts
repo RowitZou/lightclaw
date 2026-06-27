@@ -406,6 +406,8 @@ export type LightClawConfig = {
   runtime: {
     driver: RuntimeDriver
     backend: RuntimeKind
+    maxRelayBytesMb: number
+    maxConcurrentIoBytesMb: number
     dockerSettings: DockerRuntimeSettings
     clusterSettings: RlaunchRuntimeSettings
     network: NetworkBridgeSettings
@@ -696,6 +698,14 @@ function parsePositiveNumber(value: string | undefined, fieldName: string): numb
     throw new Error(`${fieldName} must be a positive number; got ${parsed}.`)
   }
   return parsed
+}
+
+function parsePositiveConfigNumber(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${fieldName} must be a positive number; got ${String(value)}.`)
+  }
+  return value
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -1662,6 +1672,17 @@ export function getConfig(): LightClawConfig {
     : ['/tmp']
   const clusterConfig = resolveClusterSettings(runtimeBackend, clusterFileConfig)
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
+  const maxRelayBytesMb = parsePositiveNumber(
+    process.env.LIGHTCLAW_MAX_RELAY_BYTES_MB,
+    'runtime.maxRelayBytesMb',
+  ) ?? parsePositiveConfigNumber(fileConfig.runtime?.maxRelayBytesMb, 'runtime.maxRelayBytesMb') ?? 1024
+  const maxConcurrentIoBytesMb = parsePositiveNumber(
+    process.env.LIGHTCLAW_MAX_CONCURRENT_IO_BYTES_MB,
+    'runtime.maxConcurrentIoBytesMb',
+  ) ?? parsePositiveConfigNumber(
+    fileConfig.runtime?.maxConcurrentIoBytesMb,
+    'runtime.maxConcurrentIoBytesMb',
+  ) ?? 3072
 
   // — dispatch —
   const taskrun = resolveTaskRunConfig(fileConfig)
@@ -1786,6 +1807,8 @@ export function getConfig(): LightClawConfig {
     runtime: {
       driver: runtimeDriver,
       backend: runtimeBackend,
+      maxRelayBytesMb,
+      maxConcurrentIoBytesMb,
       dockerSettings: {
         ...(dockerConfig.image ? { image: dockerConfig.image } : {}),
         ...(process.env.LIGHTCLAW_DOCKER_IMAGE || dockerConfig.imageOverride

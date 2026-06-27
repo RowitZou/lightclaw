@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { runProcess } from './process.js'
+import { withByteBudget } from './byte-budget.js'
 import type {
   ControlPlane,
   DataPlane,
@@ -54,7 +55,8 @@ export class LocalRuntime implements Runtime {
       isRunning: () => this.isRunning(),
       isAvailable: () => this.isAvailable(),
     }
-    this.data = this.fs
+    this.data = withByteBudget(this.fs)
+    this.fs = this.data
     this.paths = {
       mountTable: [],
       toHostPath: pathname => this.absolutize(pathname),
@@ -170,4 +172,3 @@ function buildLocalProxyEnv(
     NO_PROXY: merged,
   }
 }
-

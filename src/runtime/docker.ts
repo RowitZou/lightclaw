@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import type {
@@ -17,6 +19,7 @@ import {
   formatPullError,
 } from './image-readiness.js'
 import { BindMountData } from './data-plane/bind-mount.js'
+import { withByteBudget } from './byte-budget.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
@@ -55,6 +58,7 @@ export type DockerRuntimeConfig = {
   cpuLimit: number
   network: string
   autoPull: boolean
+  maxExecRelayBytes?: number
   security: DockerRuntimeSecurity
   /**
    * The uid/gid agent-dispatched (non-privileged) execs drop to via
@@ -87,7 +91,6 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // fs.readFile single-hop ceiling: docker exec stdout is unbounded but child_process
 // buffering is not. 64 MB covers a 30 MB file (~40 MB base64) plus headroom.
-const READ_FILE_BUFFER_BYTES = 64 * 1024 * 1024
 // Cache TTL for the workspace `du` poll. Du on a multi-GB workspace is not
 // free, but a 60s lag on quota detection is acceptable: the quota is the
 // runaway-write tripwire, not a precise accountant.
@@ -105,7 +108,7 @@ const SCRATCH_DIR = '/scratch'
 // capability: 32 MiB base64-expands to ~42MB, within READ_FILE_BUFFER_BYTES
 // (64MB) headroom. Container-local reads (`/tmp`, …) up to this size flow
 // through exec-relay instead of being pre-refused.
-const DOCKER_MAX_EXEC_RELAY_BYTES = 32 * 1024 * 1024
+const DEFAULT_MAX_EXEC_RELAY_BYTES = 1024 * 1024 * 1024
 
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
@@ -200,14 +203,14 @@ export class DockerRuntime implements Runtime {
         return bindMountData.readdir(pathname)
       },
     }
-    this.data = new LayeredDataPlane(
+    this.data = withByteBudget(new LayeredDataPlane(
       [
         guardedBindMountData,
         this.execRelayFs,
       ],
       this.paths,
-      { maxExecRelayBytes: DOCKER_MAX_EXEC_RELAY_BYTES },
-    )
+      { maxExecRelayBytes: config.maxExecRelayBytes ?? DEFAULT_MAX_EXEC_RELAY_BYTES },
+    ))
     this.fs = this.data
   }
 
@@ -359,20 +362,20 @@ export class DockerRuntime implements Runtime {
     reliability: 'depends-on-control-plane',
     readFile: async pathname => {
       const containerPath = this.toContainerPath(pathname)
-      // base64 transit keeps binary content intact across the docker exec
-      // string pipe (StringDecoder is UTF-8 and would mangle non-text bytes).
-      // Single-hop with a roomy buffer: docker exec has no ws frame ceiling,
-      // so a 30 MB file (~40 MB base64) fits in one read with READ_FILE_BUFFER
-      // headroom. If we ever need >50 MB reads, switch to chunked dd like
-      // RlaunchRuntime does.
+      const id = randomUUID()
+      const stageContainer = path.posix.join(this.workspaceRoot, '.lightclaw', 'exec', `${id}.read`)
+      const stageHost = path.join(this.cfg.workspaceHostPath, '.lightclaw', 'exec', `${id}.read`)
       const result = await this.exec({
-        command: `base64 -w 0 ${shellQuote(containerPath)}`,
-        maxBufferBytes: READ_FILE_BUFFER_BYTES,
+        command: `mkdir -p ${shellQuote(path.posix.dirname(stageContainer))} && cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
       })
       if (result.exitCode !== 0) {
         throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
       }
-      return Buffer.from(result.stdout.trim(), 'base64')
+      try {
+        return await fsp.readFile(stageHost)
+      } finally {
+        await fsp.rm(stageHost, { force: true }).catch(() => undefined)
+      }
     },
     writeFile: async (pathname, content) => {
       const containerPath = this.toContainerPath(pathname)
