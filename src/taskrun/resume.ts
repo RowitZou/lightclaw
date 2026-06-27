@@ -11,6 +11,7 @@ import { loadBackgroundTasks } from '../background-task/store.js'
 import { buildPromptForRole } from '../prompt.js'
 import { getConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
+import { ABORT_FAILURE_PATTERN } from '../transient-error.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
@@ -305,6 +306,22 @@ export async function resumeRunWithBlock(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    // A worker that self-parks via TaskUpdate(action:'wait') seals its shift by
+    // aborting its own in-flight turn (task-update.ts: "a run cannot be waiting
+    // while its session keeps executing"); /stop and a requester-hold abort the
+    // same way. That intentional abort surfaces here as ABORT_FAILURE_PATTERN —
+    // it is NOT a resume failure: the run is now `waiting`, and its declared
+    // wake brings the next shift. Recording it as a failure (the scheduler
+    // chain stores it in lastFailureByRun) makes the watchdog flag the live
+    // wake as a dead-wake-source and prematurely revive the worker. Mirror the
+    // scheduler fire path, which already classifies an abort outcome as benign
+    // 'aborted' rather than a failure.
+    if (ABORT_FAILURE_PATTERN.test(message)) {
+      const parked = (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run
+      if (parked.status === 'waiting') {
+        return { ok: true, run: parked, mode, assistantText: '' }
+      }
+    }
     const failed = await markDelivered(run.id, { ok: false, error: message.slice(0, 500) }, Date.now(), run.ownerCanonicalUser)
     // A child-join parent must learn the run delivered-with-failure too; no
     // resultText, so the wake falls back to the recorded error.

@@ -624,6 +624,55 @@ test('resume resolves the owner BYO model (per-user config), not the empty globa
   }
 })
 
+test('a resumed worker that self-parks (TaskUpdate wait → abort) is not a resume failure', async () => {
+  // TaskUpdate(action:'wait') self-park seals the shift by aborting the
+  // worker's own in-flight turn (task-update.ts); on a resumed shift that
+  // abort lands in resumeRunWithBlock's catch as "Request was aborted." It
+  // must NOT become a query-failed result — the scheduler chain would store it
+  // in lastFailureByRun and the watchdog would flag the live wake as a
+  // dead-wake-source, prematurely reviving the worker before its declared
+  // timer. Mirrors the scheduler fire path's benign 'aborted' classification.
+  writeMinimalConfig(tmpHome)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-selfpark',
+    chainId: 'chain-resume-selfpark',
+    dispatcherRole: 'generalist',
+  })
+  const ctx = createSessionContext({
+    cwd: tmpHome,
+    model: 'fake-model',
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+    runtime: fakeRuntime(tmpHome),
+  })
+  try {
+    const result = await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(runId, {
+        via: 'timer',
+        reason: 'your declared timer fired',
+        body: '<taskrun-timer-wake />',
+      }, 'alice', async () => {
+        // The worker self-parks mid-turn, then the wait's abort interrupts it.
+        await markWaiting(
+          runId,
+          { reason: 'timer', wake: { kind: 'timer', at: Date.now() + 600_000 } },
+          Date.now(),
+          'alice',
+        )
+        throw new Error('Request was aborted.')
+      }),
+    )
+    assert.equal(result.ok, true)
+    assert.equal((await getTaskRun(runId, 'alice'))?.status, 'waiting')
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-selfpark')
+    channelInterjectionQueue.drain('taskrun-resume-selfpark')
+  }
+})
+
 function writeMinimalConfig(home: string): void {
   writeFileSync(path.join(home, 'config.json'), JSON.stringify({
     endpoints: { fake: { apiKey: 'sk-fake' } },
