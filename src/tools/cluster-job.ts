@@ -50,10 +50,10 @@ const submitInput = z.object({
   image: z.string().min(1).describe('Container image to run.'),
   command: z.string().min(1).describe('Command to run inside the job. Multi-step commands are wrapped with bash -lc.'),
   namespace: z.string().min(1).optional().describe(
-    "Kubernetes namespace. Defaults to your environment's; set only to target a different namespace.",
+    "Kubernetes namespace. Bound to the charged group from the user's configured pair — leave it unset and the pair decides it; set it only when the tool reports the group you named is ambiguous across the user's namespaces (you can't see the configured list yourself).",
   ),
   chargedGroup: z.string().min(1).optional().describe(
-    "Charged / quota group. Defaults to your environment's; set only to target a different group.",
+    "Charged / quota group to bill against. Omit to use the user's default configured pair; set it only to a group the user explicitly named — you can't see their configured list, so don't guess.",
   ),
   mounts: z.array(z.string().min(1).refine(path => path.startsWith('/'), {
     message: 'mount paths must be absolute',
