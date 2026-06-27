@@ -44,6 +44,13 @@ describe('Read error-recovery hints', () => {
 })
 
 describe('Read (legacy text path)', () => {
+  it('keeps the owner-approved text description byte-locked', () => {
+    assert.equal(
+      fileReadTool.description.split('\n')[1],
+      '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output, capped at 100000 characters. Optional `offset` + `limit` (line-based) for paging; past the cap, page with `offset`/`limit` or scan with Bash (`rg`/`sed`).',
+    )
+  })
+
   it('returns line-numbered content for plain text files', async () => {
     await runtime.fs.writeFile('notes.txt', 'alpha\nbeta\ngamma')
     const result = await fileReadTool.call({ file_path: 'notes.txt' }, context())
@@ -62,7 +69,10 @@ describe('Read (legacy text path)', () => {
     assert.equal(typeof result.output, 'object')
     const output = result.output as FileReadStructuredOutput
     assert.equal(output.truncated, true)
-    assert.ok(output.text.length <= 100_000)
+    assert.ok(output.text.length <= 100_000 + 200)
+    assert.ok(output.text.endsWith(
+      '\n\n[Output truncated at 100000 characters. Read more via `offset`/`limit` (line-based) or scan with Bash (`rg`/`sed`).]',
+    ))
     assert.equal(output.sizeBytes, Buffer.byteLength(huge))
   })
 

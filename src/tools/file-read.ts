@@ -231,7 +231,7 @@ async function readPlainTextStreamed(
 
 const DESCRIPTION = [
   'Read a file from the workspace. Routes by file type:',
-  '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output. Optional `offset` + `limit` (line-based) for paging.',
+  '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output, capped at 100000 characters. Optional `offset` + `limit` (line-based) for paging; past the cap, page with `offset`/`limit` or scan with Bash (`rg`/`sed`).',
   '- PDF (whole document, default): returns extracted text via pdftotext layout mode, capped by `max_chars` (default 50000). Use this for short PDFs or to skim the start of a long one.',
   '- PDF (specific pages, text — preferred for long docs): pass `pages` ("1", "1-5", "31-31") and the tool returns just those pages\' text via pdftotext `-f -l`. Lets you jump straight to a numbered section (e.g. "go read page 31") without paying full-document `max_chars`.',
   '- PDF (specific pages, visual): pass `pages` AND `visual: true` to prefer inline PDF document output on models that support pdf@inToolResult, falling back to pdftoppm inline image blocks otherwise (figures, formulas, scanned-only PDFs, complex layouts where text extraction loses structure). Max 20 pages per call.',
@@ -414,6 +414,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         markRead({ filePath, mtimeMs: plainStat.mtimeMs, variant: plainVariant })
       }
       if (streamed.truncated) {
+        streamed.text += '\n\n[Output truncated at 100000 characters. Read more via `offset`/`limit` (line-based) or scan with Bash (`rg`/`sed`).]'
         return {
           output: {
             filePath,
