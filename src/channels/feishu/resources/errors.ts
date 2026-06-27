@@ -144,7 +144,7 @@ export function formatFeishuErrorForLog(error: unknown, op: string): string {
   const parts = [`op=${op}`, `kind=${c.kind}`]
   if (c.code !== undefined) parts.push(`code=${c.code}`)
   if (c.logId) parts.push(`logId=${c.logId}`)
-  if (c.fieldViolations?.length) parts.push(`violations=${JSON.stringify(c.fieldViolations)}`)
+  if (c.fieldViolations?.length) parts.push(`violations=${safeJsonStringify(c.fieldViolations)}`)
   if (c.msg) parts.push(`msg=${JSON.stringify(c.msg)}`)
   return parts.join(' ')
 }
@@ -178,7 +178,7 @@ export function formatFeishuHttpError(error: unknown): string {
     const status = [response.status, response.statusText].filter(Boolean).join(' ')
     const data = typeof response.data === 'string'
       ? response.data
-      : JSON.stringify(response.data)
+      : safeJsonStringify(response.data)
     const logId = response.headers?.['x-tt-logid'] ?? response.headers?.['x-tt-log-id']
     return [
       status ? `Feishu HTTP ${status}` : 'Feishu HTTP error',
@@ -316,7 +316,7 @@ function appendFieldViolations(message: string, fieldViolations: unknown[] | und
     const obj = v as Record<string, unknown>
     return [
       obj.field !== undefined ? `field=${String(obj.field)}` : null,
-      obj.value !== undefined ? `value=${JSON.stringify(obj.value)}` : null,
+      obj.value !== undefined ? `value=${safeJsonStringify(obj.value)}` : null,
       obj.description !== undefined ? `description=${String(obj.description)}` : null,
     ].filter(Boolean).join(' ')
   }).join('\n')
@@ -354,6 +354,23 @@ function parseObject(input: unknown): Record<string, unknown> | null {
 
 function arrayFrom(input: unknown): unknown[] {
   return Array.isArray(input) ? input : []
+}
+
+/** `JSON.stringify` that never throws. These error formatters serialize
+ *  upstream-supplied / axios-error-derived values (`response.data`, field
+ *  violations) whose shape we do not control — on a binary endpoint 502 the
+ *  axios error's `response.data` is the raw Node `IncomingMessage` stream,
+ *  which is circular (`socket -> _httpMessage(ClientRequest) -> res`) and made
+ *  `JSON.stringify` throw `Converting circular structure to JSON` straight out
+ *  of the error formatter, masking the real 502 and surfacing as
+ *  `materializeAttachment threw` (2026-06-27 dogfood). A formatter must never
+ *  throw — fall back to a marker. */
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return '[unserializable]'
+  }
 }
 
 function numberFrom(input: unknown): number | undefined {

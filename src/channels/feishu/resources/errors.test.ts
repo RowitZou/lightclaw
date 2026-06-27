@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { classifyFeishuError, FeishuApiError } from './errors.js'
+import { classifyFeishuError, FeishuApiError, formatFeishuErrorForLog } from './errors.js'
 
 describe('classifyFeishuError', () => {
   it('classifies scope-missing from permission violations', () => {
@@ -133,3 +133,29 @@ function axiosLike(input: {
     response: input,
   }
 }
+
+describe('formatFeishuErrorForLog: circular response.data', () => {
+  it('does not throw on an axios error whose response.data is a circular stream', () => {
+    // A binary endpoint (im.messageResource.get) 502 hands axios the raw Node
+    // IncomingMessage as response.data, which is circular
+    // (socket -> _httpMessage(ClientRequest) -> res). Pre-fix the error
+    // formatter's JSON.stringify(response.data) threw `Converting circular
+    // structure to JSON` straight out of the catch handler, masking the 502 and
+    // surfacing as `materializeAttachment threw` (2026-06-27 dogfood).
+    const socket: Record<string, unknown> = {}
+    const incoming: Record<string, unknown> = { socket }
+    const clientRequest: Record<string, unknown> = { res: incoming }
+    socket._httpMessage = clientRequest
+    incoming.req = clientRequest
+
+    const err = axiosLike({ status: 502, statusText: 'Bad Gateway', data: incoming, headers: {} })
+
+    let line = ''
+    assert.doesNotThrow(() => {
+      line = formatFeishuErrorForLog(err, 'im.messageResource.get')
+    })
+    assert.match(line, /op=im\.messageResource\.get/)
+    // classifyFeishuError walks the same formatter chain — must also not throw.
+    assert.doesNotThrow(() => classifyFeishuError(err))
+  })
+})
