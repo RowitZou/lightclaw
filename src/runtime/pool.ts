@@ -473,6 +473,11 @@ export function buildDockerRuntimeConfig(
     network: dockerNetwork,
     autoPull: docker.autoPull,
     security: docker.security,
+    // Agent-dispatched execs drop to the daemon uid/gid (docker exec --user) so
+    // workspace files they create are daemon-owned — the Docker analogue of the
+    // rlaunch setpriv wrap below. Root daemon → 0:0 = historical behavior.
+    daemonUid: process.getuid?.() ?? 0,
+    daemonGid: process.getgid?.() ?? 0,
   }
 }
 

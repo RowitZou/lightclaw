@@ -56,9 +56,23 @@ export type DockerRuntimeConfig = {
   network: string
   autoPull: boolean
   security: DockerRuntimeSecurity
+  /**
+   * The uid/gid agent-dispatched (non-privileged) execs drop to via
+   * `docker exec --user`. Defaults to the daemon's own uid/gid at
+   * `buildDockerRuntimeConfig` time. Files the agent creates in the
+   * bind-mounted workspace are then daemon-owned, so the host-direct
+   * `BindMountData` layer (which reads/writes as the daemon uid) has no
+   * EACCES surface — the Docker analogue of RlaunchRuntime's setpriv wrap.
+   * `ExecInput.privileged === true` bypasses the drop and runs as root for
+   * bootstrap-only callers. When the daemon itself runs as root these are 0,
+   * i.e. the historical default-user behavior, so root-daemon deployments are
+   * unaffected.
+   */
+  daemonUid: number
+  daemonGid: number
 }
 
-type ContainerState =
+export type ContainerState =
   | 'absent'
   | 'created'
   | 'running'
@@ -85,6 +99,13 @@ const WORKSPACE_DU_CACHE_MS = 60_000
 // of paying the GPFS metadata penalty of the workspace bind mount.
 // Provisioned by `ensureScratchDir`; see `Runtime.scratchRoot`.
 const SCRATCH_DIR = '/scratch'
+// exec-relay read cap for the LayeredDataPlane. Unlike rlaunch's brainctl
+// channel (`unreliable-large`, capped at the conservative 4MB default),
+// `docker exec` stdout is `guaranteed`, so this tracks the real single-hop
+// capability: 32 MiB base64-expands to ~42MB, within READ_FILE_BUFFER_BYTES
+// (64MB) headroom. Container-local reads (`/tmp`, …) up to this size flow
+// through exec-relay instead of being pre-refused.
+const DOCKER_MAX_EXEC_RELAY_BYTES = 32 * 1024 * 1024
 
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
@@ -112,6 +133,10 @@ export class DockerRuntime implements Runtime {
   // container recreate (`createContainer`) and removal (`remove`) so a fresh
   // rootfs gets re-provisioned.
   private scratchReady = false
+  // The current container id, refreshed by `inspectState`. Serves as the
+  // restart "generation" token for `currentGeneration()`; null before any
+  // container has been inspected / created and after `remove()`.
+  private currentContainerId: string | null = null
 
   constructor(config: DockerRuntimeConfig, tracker: ImageReadinessTracker) {
     this.cfg = config
@@ -181,6 +206,7 @@ export class DockerRuntime implements Runtime {
         this.execRelayFs,
       ],
       this.paths,
+      { maxExecRelayBytes: DOCKER_MAX_EXEC_RELAY_BYTES },
     )
     this.fs = this.data
   }
@@ -216,7 +242,11 @@ export class DockerRuntime implements Runtime {
     // createContainer's catch.
     await this.createContainer()
     await this.dockerCmd(['start', this.cfg.containerName])
-    this.lastKnownState = 'running'
+    // Re-inspect so `currentContainerId` reflects the freshly created
+    // container's id (its rootfs is new — /tmp, /scratch, in-container
+    // processes are gone). The reuse branches above kept the existing
+    // container, whose id the top-of-start inspectState already captured.
+    await this.inspectState()
   }
 
   async isAvailable(): Promise<RuntimeAvailability> {
@@ -284,10 +314,23 @@ export class DockerRuntime implements Runtime {
     await this.dockerCmd(['rm', '-f', this.cfg.containerName]).catch(() => {})
     this.lastKnownState = 'absent'
     this.scratchReady = false
+    this.currentContainerId = null
   }
 
   isRunning(): boolean {
     return this.lastKnownState === 'running'
+  }
+
+  /**
+   * Restart "generation" token: the current container id. It changes whenever
+   * the container is replaced (`createContainer` after a dead/removing state,
+   * or after `remove()`), which is exactly when container-local /tmp /scratch
+   * and in-container processes are lost. `query.ts` diffs this per session to
+   * inject the runtime-restart reminder. Null before any container has been
+   * inspected / created. Mirrors RlaunchRuntime.currentGeneration (worker name).
+   */
+  currentGeneration(): string | null {
+    return this.currentContainerId
   }
 
   async exec(input: ExecInput): Promise<ExecResult> {
@@ -463,13 +506,19 @@ export class DockerRuntime implements Runtime {
   }
 
   private async runDockerExec(input: ExecInput): Promise<ExecResult> {
-    const args = ['exec', '-i', '--workdir', input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot]
-    if (input.env) {
-      for (const [key, value] of Object.entries(input.env)) {
-        args.push('-e', `${key}=${value}`)
-      }
-    }
-    args.push(this.cfg.containerName, 'bash', '-c', input.command)
+    const args = buildDockerExecArgs({
+      containerName: this.cfg.containerName,
+      workdir: input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot,
+      env: input.env,
+      command: input.command,
+      // Agent-dispatched (non-privileged) execs drop to the daemon uid so the
+      // files they create in the workspace bind mount are daemon-owned and the
+      // host-direct BindMountData layer has no EACCES surface. Only bootstrap
+      // callers set privileged; root-daemon deployments resolve to `0:0`.
+      user: input.privileged === true
+        ? '0:0'
+        : `${this.cfg.daemonUid}:${this.cfg.daemonGid}`,
+    })
     return runProcess('docker', args, {
       abortSignal: input.abortSignal,
       stdin: input.stdin,
@@ -525,13 +574,17 @@ export class DockerRuntime implements Runtime {
   }
 
   private async inspectState(): Promise<ContainerState> {
-    const result = await dockerCmdRaw(['inspect', '--format', '{{.State.Status}}', this.cfg.containerName])
+    const result = await dockerCmdRaw([
+      'inspect', '--format', '{{.Id}} {{.State.Status}}', this.cfg.containerName,
+    ])
     if (result.exitCode !== 0) {
       this.lastKnownState = 'absent'
+      this.currentContainerId = null
       return 'absent'
     }
-    const state = result.stdout.trim() as ContainerState
-    this.lastKnownState = state || 'unknown'
+    const { id, state } = parseDockerInspect(result.stdout)
+    this.currentContainerId = id
+    this.lastKnownState = state
     return this.lastKnownState
   }
 
@@ -606,6 +659,47 @@ export function buildDockerCreateArgs(cfg: DockerRuntimeConfig): string[] {
   }
   args.push(cfg.image, 'sleep', 'infinity')
   return args
+}
+
+/**
+ * Pure builder for `docker exec` argv. Extracted so the `--user` uid-drop
+ * (the Docker analogue of RlaunchRuntime's setpriv wrap) is unit-testable
+ * without spawning docker. `-u` is always emitted: agent-dispatched execs pass
+ * the daemon `uid:gid`, bootstrap-only callers pass `0:0`, and a root daemon
+ * naturally resolves to `0:0` (the historical default-user behavior).
+ */
+export function buildDockerExecArgs(opts: {
+  containerName: string
+  workdir: string
+  command: string
+  env?: Record<string, string>
+  user: string
+}): string[] {
+  const args = ['exec', '-i', '-u', opts.user, '--workdir', opts.workdir]
+  if (opts.env) {
+    for (const [key, value] of Object.entries(opts.env)) {
+      args.push('-e', `${key}=${value}`)
+    }
+  }
+  args.push(opts.containerName, 'bash', '-c', opts.command)
+  return args
+}
+
+/**
+ * Parse `docker inspect --format '{{.Id}} {{.State.Status}}'` output into the
+ * container id (the restart "generation" token) and lifecycle state. A blank /
+ * malformed line yields `{ id: null, state: 'unknown' }` so a transient
+ * inspect glitch never fabricates a generation.
+ */
+export function parseDockerInspect(
+  stdout: string,
+): { id: string | null; state: ContainerState } {
+  const trimmed = stdout.trim()
+  if (!trimmed) return { id: null, state: 'unknown' }
+  const sep = trimmed.indexOf(' ')
+  const id = sep === -1 ? trimmed : trimmed.slice(0, sep)
+  const stateRaw = sep === -1 ? '' : trimmed.slice(sep + 1).trim()
+  return { id: id || null, state: (stateRaw || 'unknown') as ContainerState }
 }
 
 function formatTmpfsArg(entry: string, defaultOptions: string): string {

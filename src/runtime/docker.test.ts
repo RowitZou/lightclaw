@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   buildDockerCreateArgs,
+  buildDockerExecArgs,
+  parseDockerInspect,
   DockerRuntime,
   type DockerRuntimeConfig,
   type DockerRuntimeSecurity,
@@ -35,6 +37,8 @@ function makeConfig(overrides: Partial<DockerRuntimeConfig> = {}): DockerRuntime
     network: 'bridge',
     autoPull: true,
     security: { ...DEFAULT_SECURITY, ulimits: { ...DEFAULT_SECURITY.ulimits } },
+    daemonUid: 10250,
+    daemonGid: 10250,
     ...overrides,
   }
 }
@@ -168,6 +172,78 @@ test('buildDockerCreateArgs preserves the workspace bind mount and image positio
   assert.equal(args[args.length - 3], 'ghcr.io/test/lightclaw-sandbox:latest')
   assert.equal(args[args.length - 2], 'sleep')
   assert.equal(args[args.length - 1], 'infinity')
+})
+
+// PR1 (uid alignment): agent-dispatched execs must drop to the daemon uid via
+// `docker exec --user`. Without it the agent's container exec runs as the
+// image's default user (root), creating root-owned files in the workspace bind
+// mount that the non-root daemon's host-direct BindMountData then cannot
+// rewrite (EACCES) — the Docker analogue of the rlaunch setpriv bug.
+test('buildDockerExecArgs drops to the daemon uid:gid for non-privileged execs', () => {
+  const args = buildDockerExecArgs({
+    containerName: 'lightclaw-u1-abc',
+    workdir: '/workspace',
+    command: 'echo hi',
+    env: { FOO: 'bar' },
+    user: '10250:10250',
+  })
+  assert.deepEqual(args.slice(0, 2), ['exec', '-i'])
+  assert.deepEqual(pairsAfter(args, '-u'), ['10250:10250'])
+  assert.deepEqual(pairsAfter(args, '--workdir'), ['/workspace'])
+  assert.deepEqual(pairsAfter(args, '-e'), ['FOO=bar'])
+  // container name + `bash -c <command>` are the trailing positionals.
+  assert.equal(args[args.length - 4], 'lightclaw-u1-abc')
+  assert.equal(args[args.length - 3], 'bash')
+  assert.equal(args[args.length - 2], '-c')
+  assert.equal(args[args.length - 1], 'echo hi')
+})
+
+test('buildDockerExecArgs runs privileged bootstrap execs as root (0:0)', () => {
+  const args = buildDockerExecArgs({
+    containerName: 'c',
+    workdir: '/workspace',
+    command: 'x',
+    user: '0:0',
+  })
+  assert.deepEqual(pairsAfter(args, '-u'), ['0:0'])
+})
+
+test('buildDockerExecArgs omits -e when no env is supplied', () => {
+  const args = buildDockerExecArgs({
+    containerName: 'c',
+    workdir: '/workspace',
+    command: 'x',
+    user: '1000:1000',
+  })
+  assert.equal(args.includes('-e'), false)
+})
+
+// PR2 (currentGeneration): docker must report a restart "generation" so the
+// container-recreate path triggers the runtime-restart reminder, the way
+// rlaunch's worker name already does.
+test('parseDockerInspect extracts the container id and lifecycle state', () => {
+  assert.deepEqual(parseDockerInspect('abc123def running\n'), {
+    id: 'abc123def',
+    state: 'running',
+  })
+  assert.deepEqual(parseDockerInspect('  deadbeef exited '), {
+    id: 'deadbeef',
+    state: 'exited',
+  })
+})
+
+test('parseDockerInspect tolerates id-only and blank output without fabricating a generation', () => {
+  assert.deepEqual(parseDockerInspect('abc123'), { id: 'abc123', state: 'unknown' })
+  assert.deepEqual(parseDockerInspect(''), { id: null, state: 'unknown' })
+  assert.deepEqual(parseDockerInspect('   '), { id: null, state: 'unknown' })
+})
+
+test('DockerRuntime.currentGeneration is null before any container is inspected', () => {
+  // The method existing at all is the regression marker: on pre-fix code
+  // `currentGeneration` is undefined, so query.ts' `currentGeneration?.()`
+  // returns undefined and the restart reminder never fires for docker.
+  const runtime = new DockerRuntime(makeConfig(), new ImageReadinessTracker())
+  assert.equal(runtime.currentGeneration(), null)
 })
 
 describe('DockerRuntime isAvailable retryable mapping', () => {

@@ -95,6 +95,32 @@ test('LayeredDataPlane refuses large reads through exec-relay fallback', async (
   assert.equal(readCalled, false)
 })
 
+test('LayeredDataPlane honors a raised maxExecRelayBytes (DockerRuntime passes 32MB)', async () => {
+  // PR3: docker exec stdout is `guaranteed`, so DockerRuntime constructs its
+  // LayeredDataPlane with a 32MB exec-relay cap instead of inheriting the 4MB
+  // default rlaunch needs for its unreliable brainctl channel. An 8MB
+  // container-local read must flow through rather than being pre-refused.
+  let readCalled = false
+  const data = new LayeredDataPlane([
+    fakePlane({
+      kind: 'exec-relay',
+      stat: async () => ({
+        size: 8 * 1024 * 1024,
+        isFile: true,
+        isDirectory: false,
+        mtimeMs: 1,
+      }),
+      readFile: async () => {
+        readCalled = true
+        return Buffer.from('ok')
+      },
+    }),
+  ], policy, { maxExecRelayBytes: 32 * 1024 * 1024 })
+
+  assert.equal((await data.readFile('/etc/big.bin')).toString(), 'ok')
+  assert.equal(readCalled, true)
+})
+
 test('LayeredDataPlane chmod uses the first chmod-capable applicable layer', async () => {
   const calls: Array<{ layer: string; path: string; mode: number }> = []
   const data = new LayeredDataPlane([

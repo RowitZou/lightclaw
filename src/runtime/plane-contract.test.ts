@@ -149,6 +149,8 @@ describe('Runtime plane contract — DockerRuntime', () => {
       network: 'bridge',
       autoPull: false,
       security: defaultSecurity,
+      daemonUid: 1000,
+      daemonGid: 1000,
     }
   }
 
