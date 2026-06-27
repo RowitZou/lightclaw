@@ -762,7 +762,7 @@ export const LOCALES = {
     'mount.notDirectory': '该路径必须是目录：{path}',
     'mount.lacksAccess': '对该路径缺少 {access} 权限：{path}（{detail}）',
     'mount.restart.skipped': '本次跳过沙箱重启。',
-    'mount.restart.done': '沙箱已重启。',
+    'mount.restart.done': '沙箱 worker 已重建；无需重启 daemon。',
     'mount.restart.failed': '挂载已保存，但沙箱重启失败：{detail}',
 
     // ---- /config (user) ----
@@ -1757,7 +1757,7 @@ export const LOCALES = {
     'mount.notDirectory': 'Path must be a directory: {path}',
     'mount.lacksAccess': 'Path lacks {access} access: {path} ({detail})',
     'mount.restart.skipped': 'Sandbox restart skipped this time.',
-    'mount.restart.done': 'Sandbox restarted.',
+    'mount.restart.done': 'Sandbox worker rebuilt; daemon restart not required.',
     'mount.restart.failed': 'Mount saved, but sandbox restart failed: {detail}',
 
     // ---- /config (user) ----

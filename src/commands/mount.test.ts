@@ -66,7 +66,7 @@ describe('/mount command', () => {
     const added = await runMount(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
     assert.match(added, /mode: ro/)
-    assert.match(added, /Sandbox restarted/)
+    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 
     const unchanged = await runMount(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
@@ -76,7 +76,7 @@ describe('/mount command', () => {
     approveMountRw('alice', 'gpfs://gpfs1/datasets')
     const updated = await runMount(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Updated mount:/)
-    assert.match(updated, /Sandbox restarted/)
+    assert.match(updated, /Sandbox worker rebuilt; daemon restart not required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
     const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
@@ -87,7 +87,7 @@ describe('/mount command', () => {
 
     const removed = await runMount(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(removed, /Unmounted:/)
-    assert.match(removed, /Sandbox restarted/)
+    assert.match(removed, /Sandbox worker rebuilt; daemon restart not required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
@@ -114,7 +114,7 @@ describe('/mount command', () => {
     assert.match(added, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(added, new RegExp(escapeRegExp(`- ${dataB}`)))
     assert.match(added, /mode: rw/)
-    assert.match(added, /Sandbox restarted/)
+    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
     assert.equal(restartCount, 1)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'rw' },
@@ -124,7 +124,7 @@ describe('/mount command', () => {
     const updated = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Mounted:/)
     assert.match(updated, /Updated mounts:/)
-    assert.match(updated, /Sandbox restarted/)
+    assert.match(updated, /Sandbox worker rebuilt; daemon restart not required/)
     assert.equal(restartCount, 2)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'ro' },
@@ -141,7 +141,7 @@ describe('/mount command', () => {
     assert.match(removed, /Unmounted:/)
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataB}`)))
-    assert.match(removed, /Sandbox restarted/)
+    assert.match(removed, /Sandbox worker rebuilt; daemon restart not required/)
     assert.equal(restartCount, 3)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'ro' }])
   })
@@ -164,7 +164,7 @@ describe('/mount command', () => {
       deps,
     )
     assert.match(added, /Mounted:/)
-    assert.match(added, /Sandbox restarted/)
+    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
   })
 

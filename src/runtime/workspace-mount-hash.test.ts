@@ -1,11 +1,15 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import {
   buildDockerRuntimeConfig,
   buildRlaunchRuntimeConfig,
 } from './pool.js'
 import type { LightClawConfig } from '../config.js'
+import { setUserRlaunchMount } from './rlaunch-mounts.js'
 
 // Regression guard for the "report success but pod/container not actually
 // swapped" bug class: when the workspace host path changes (e.g. via
@@ -107,5 +111,33 @@ describe('workspace mount is folded into deployment identity', () => {
 
     assert.notEqual(before.containerName, after.containerName,
       'a workspace switch must change the docker container identity, else start reuses the old container')
+  })
+
+  it('worker-only mounts change only the owning user deployment identity', () => {
+    const config = makeConfig()
+    const home = mkdtempSync(path.join(tmpdir(), 'lightclaw-worker-only-hash-'))
+    const savedHome = process.env.LIGHTCLAW_HOME
+    const savedWorkspace = process.env.LIGHTCLAW_WORKSPACE_ROOT
+    process.env.LIGHTCLAW_HOME = home
+    process.env.LIGHTCLAW_WORKSPACE_ROOT = '/mnt/shared-storage-user/ailab-hs/workspaces'
+    try {
+      const aliceBefore = buildRlaunchRuntimeConfig('alice', '/unused', config, 'deadbeef')
+      const bobBefore = buildRlaunchRuntimeConfig('bob', '/unused', config, 'deadbeef')
+
+      setUserRlaunchMount('alice', '/remote-team/private-dataset', 'ro', 'worker-only')
+
+      const aliceAfter = buildRlaunchRuntimeConfig('alice', '/unused', config, 'deadbeef')
+      const bobAfter = buildRlaunchRuntimeConfig('bob', '/unused', config, 'deadbeef')
+      assert.notEqual(aliceAfter.deploymentHash, aliceBefore.deploymentHash)
+      assert.equal(bobAfter.deploymentHash, bobBefore.deploymentHash)
+      assert.equal(aliceAfter.extraMounts?.[0]?.daemonVisible, false)
+      assert.equal(bobAfter.extraMounts?.length ?? 0, 0)
+    } finally {
+      if (savedHome === undefined) delete process.env.LIGHTCLAW_HOME
+      else process.env.LIGHTCLAW_HOME = savedHome
+      if (savedWorkspace === undefined) delete process.env.LIGHTCLAW_WORKSPACE_ROOT
+      else process.env.LIGHTCLAW_WORKSPACE_ROOT = savedWorkspace
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
