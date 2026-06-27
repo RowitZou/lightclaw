@@ -75,7 +75,7 @@ The terminal does not run the agent — talk to the agent over Feishu. Everythin
 | `/system` `(feishu)` | Your runtime resources: `key` (secrets) / `mount` (gpfs paths) / `data` (export·import) |
 | `/feedback` | Leave feedback for the admin |
 | `/stop` `(feishu)` | Abort the current session's in-flight turn |
-| `/admin` `(admin)` | Deployment ops: `cost` / `user` / `pairing` / `ceiling` / `sandbox` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
+| `/admin` `(admin)` | Deployment ops: `cost` / `user` / `pairing` / `ceiling` / `sandbox` / `mount` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
 
 **Permissions**: four modes from strict to loose — `read` / `ask` / `auto` / `yolo`, with approval cards for risky operations. `/config mode` cannot exceed the ceiling the admin grants (`/admin ceiling set <user> <mode>`). Even under `yolo` you can lock specific operations with the `ask` list in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`).
 
@@ -92,6 +92,8 @@ Tools run sandboxed by default; `runtime.backend` picks the backend:
 | `rlaunch` | Cluster (kubebrain) | Per-user long-lived cluster worker, gpfs mounted at `/workspace` |
 
 When the sandbox can't reach the internet directly (docker host networking / cluster pods behind NAT), set `runtime.network.mode: "host"` to start an in-process forward proxy. Image contents, networking, and hardening fields are all in the `runtime` section of [`config.example.jsonc`](./config.example.jsonc).
+
+On the cluster backend, `/system mount add <path> --worker-only [--ro|--rw]` mounts a GPFS path only inside that user's worker, so the daemon host does not need the same path mounted. Read-only requests are automatic; read-write requests stay read-only until an admin approves the fileset with `/admin mount approve <path-or-fileset>`. A mount change rebuilds only that user's worker and does not restart the daemon.
 
 ---
 
