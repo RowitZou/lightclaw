@@ -10,6 +10,7 @@ import {
   saveUserRlaunchMounts,
   userMountToRuntimeMount,
   type RlaunchMountMode,
+  type RlaunchMountScope,
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
@@ -60,7 +61,7 @@ export async function runMountCommand(
     if (typeof parsed === 'string') {
       return `${parsed}\n`
     }
-    const { mountPaths, mode } = parsed
+    const { mountPaths, mode, scope } = parsed
     const effectiveModeByPath = new Map<string, RlaunchMountMode>()
     const pendingFilesetByPath = new Map<string, string>()
     const pendingPaths: string[] = []
@@ -79,7 +80,7 @@ export async function runMountCommand(
         }
       }
       effectiveModeByPath.set(mountPath, effectiveMode)
-      const validation = await validateMountPath(ctxWithUser, mountPath, effectiveMode)
+      const validation = await validateMountPath(ctxWithUser, mountPath, effectiveMode, scope)
       if (validation) {
         return validation
       }
@@ -88,10 +89,16 @@ export async function runMountCommand(
       requestMountRwApproval(userId, fileset, mountPath)
     }
     const current = loadUserRlaunchMounts(userId)
-    const currentByPath = new Map(current.map(mount => [mount.path, mount.mode] as const))
+    const currentByPath = new Map(current.map(mount => [mount.path, {
+      mode: mount.mode,
+      scope: mount.scope ?? 'shared' as RlaunchMountScope,
+    }] as const))
     const nextByPath = new Map(currentByPath)
     for (const mountPath of mountPaths) {
-      nextByPath.set(mountPath, effectiveModeByPath.get(mountPath) ?? mode)
+      nextByPath.set(mountPath, {
+        mode: effectiveModeByPath.get(mountPath) ?? mode,
+        scope,
+      })
     }
     const next = mountsFromMap(nextByPath)
     const overlapError = validateMountTable(ctxWithUser, next)
@@ -100,11 +107,17 @@ export async function runMountCommand(
     }
     const added = mountPaths.filter(mountPath => !currentByPath.has(mountPath))
     const updated = mountPaths.filter(mountPath => {
-      const previousMode = currentByPath.get(mountPath)
-      return previousMode !== undefined && previousMode !== effectiveModeByPath.get(mountPath)
+      const previous = currentByPath.get(mountPath)
+      return previous !== undefined && (
+        previous.mode !== effectiveModeByPath.get(mountPath) || previous.scope !== scope
+      )
     })
     const unchanged = mountPaths.filter(
-      mountPath => currentByPath.get(mountPath) === effectiveModeByPath.get(mountPath),
+      mountPath => {
+        const previous = currentByPath.get(mountPath)
+        if (previous === undefined) return false
+        return previous.mode === effectiveModeByPath.get(mountPath) && previous.scope === scope
+      },
     )
     if (added.length === 0 && updated.length === 0) {
       if (pendingPaths.length > 0) {
@@ -128,6 +141,7 @@ export async function runMountCommand(
           : t('mount.addedSingle', { path: mountPaths[0] }),
         t('mount.modeLine', { mode: effectiveModeByPath.get(mountPaths[0]) ?? mode }),
         t('mount.workerPathLine', { path: mountPaths[0] }),
+        t(scope === 'worker-only' ? 'mount.scope.workerOnly' : 'mount.scope.shared'),
         ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
         ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
         restart,
@@ -144,6 +158,7 @@ export async function runMountCommand(
           : t('mount.mode.mixed'),
       }),
       t('mount.workerPathsSame'),
+      t(scope === 'worker-only' ? 'mount.scope.workerOnly' : 'mount.scope.shared'),
       ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
       ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
       restart,
@@ -200,7 +215,11 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   return [
     t('mount.list.header'),
     ...mounts.map(mount =>
-      t('mount.list.row', { path: mount.path, perm: formatLightclawPermission(mount.mode) }),
+      t('mount.list.row', {
+        path: mount.path,
+        perm: formatLightclawPermission(mount.mode),
+        scope: mount.scope === 'worker-only' ? t('mount.scope.workerOnlyShort') : t('mount.scope.sharedShort'),
+      }),
     ),
     '',
   ].join('\n')
@@ -213,9 +232,10 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
  *  absolute paths plus the resolved mode. */
 function parseMountAddInput(
   rest: readonly string[],
-): { mountPaths: string[]; mode: RlaunchMountMode } | string {
+): { mountPaths: string[]; mode: RlaunchMountMode; scope: RlaunchMountScope } | string {
   const positional: string[] = []
   let mode: RlaunchMountMode | undefined
+  let scope: RlaunchMountScope = 'shared'
   for (const token of rest) {
     if (token === '--ro' || token === '--rw') {
       const next: RlaunchMountMode = token === '--rw' ? 'rw' : 'ro'
@@ -223,6 +243,8 @@ function parseMountAddInput(
         return t('mount.modeAmbiguous')
       }
       mode = next
+    } else if (token === '--worker-only') {
+      scope = 'worker-only'
     } else if (token.startsWith('--')) {
       return t('mount.unknownFlag', { flag: token })
     } else {
@@ -236,6 +258,7 @@ function parseMountAddInput(
     return {
       mountPaths: dedupePaths(positional.map(normalizeRlaunchMountPath)),
       mode: mode ?? 'ro',
+      scope,
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
@@ -261,12 +284,18 @@ async function validateMountPath(
   ctx: MountCommandContext & { userId: string },
   mountPath: string,
   mode: RlaunchMountMode,
+  scope: RlaunchMountScope,
 ): Promise<string | null> {
   try {
-    userMountToRuntimeMount({ path: mountPath, mode }, ctx.config.runtime.clusterSettings)
+    userMountToRuntimeMount({
+      path: mountPath,
+      mode,
+      ...(scope === 'worker-only' ? { scope } : {}),
+    }, ctx.config.runtime.clusterSettings)
   } catch (error) {
     return `${error instanceof Error ? error.message : String(error)}\n`
   }
+  if (scope === 'worker-only') return null
   let stat
   try {
     stat = statSync(mountPath)
@@ -303,6 +332,7 @@ function validateMountTable(
           host: runtimeMount.hostPath,
           worker: runtimeMount.workerPath,
           mode: runtimeMount.mode,
+          ...(runtimeMount.daemonVisible === false ? { daemonVisible: false } : {}),
         }
       }),
     ])
@@ -315,10 +345,16 @@ function validateMountTable(
   }
 }
 
-function mountsFromMap(mounts: ReadonlyMap<string, RlaunchMountMode>): UserRlaunchMount[] {
+function mountsFromMap(
+  mounts: ReadonlyMap<string, { mode: RlaunchMountMode; scope: RlaunchMountScope }>,
+): UserRlaunchMount[] {
   return [...mounts.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mountPath, mode]) => ({ path: mountPath, mode }))
+    .map(([mountPath, value]) => ({
+      path: mountPath,
+      mode: value.mode,
+      ...(value.scope === 'worker-only' ? { scope: 'worker-only' as const } : {}),
+    }))
 }
 
 function dedupePaths(paths: readonly string[]): string[] {

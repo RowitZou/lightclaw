@@ -11,10 +11,12 @@ import {
 import { filesetKeyFromGpfsMount, isMountRwApproved } from './mount-authz.js'
 
 export type RlaunchMountMode = 'ro' | 'rw'
+export type RlaunchMountScope = 'shared' | 'worker-only'
 
 export type UserRlaunchMount = {
   path: string
   mode: RlaunchMountMode
+  scope?: 'worker-only'
 }
 
 type RlaunchMountFile = {
@@ -30,6 +32,7 @@ export type RlaunchRuntimeMount = {
   requestedMode?: RlaunchMountMode
   fileset?: string
   adminApproved?: boolean
+  daemonVisible?: boolean
 }
 
 export function normalizeRlaunchMountPath(input: string): string {
@@ -60,7 +63,11 @@ export function loadUserRlaunchMounts(canonicalUser: string): UserRlaunchMount[]
     }
     const mode = record.mode === 'rw' ? 'rw' : 'ro'
     try {
-      mounts.push({ path: normalizeRlaunchMountPath(record.path), mode })
+      mounts.push({
+        path: normalizeRlaunchMountPath(record.path),
+        mode,
+        ...(record.scope === 'worker-only' ? { scope: 'worker-only' as const } : {}),
+      })
     } catch {
       // Ignore one bad persisted entry instead of breaking runtime startup.
     }
@@ -83,17 +90,18 @@ export function setUserRlaunchMount(
   canonicalUser: string,
   mountPath: string,
   mode: RlaunchMountMode,
+  scope: RlaunchMountScope = 'shared',
 ): { mounts: UserRlaunchMount[]; changed: boolean; updated: boolean } {
   const normalizedPath = normalizeRlaunchMountPath(mountPath)
   const existing = loadUserRlaunchMounts(canonicalUser)
   const next = existing.filter(mount => mount.path !== normalizedPath)
   const previous = existing.find(mount => mount.path === normalizedPath)
-  next.push({ path: normalizedPath, mode })
+  next.push({ path: normalizedPath, mode, ...(scope === 'worker-only' ? { scope } : {}) })
   next.sort((a, b) => a.path.localeCompare(b.path))
   saveUserRlaunchMounts(canonicalUser, next)
   return {
     mounts: next,
-    changed: !previous || previous.mode !== mode,
+    changed: !previous || previous.mode !== mode || (previous.scope ?? 'shared') !== scope,
     updated: Boolean(previous),
   }
 }
@@ -126,6 +134,7 @@ export function resolveUserRlaunchRuntimeMounts(
       mode: effectiveMode,
       fileset,
       adminApproved,
+      ...(mount.scope === 'worker-only' ? { daemonVisible: false } : {}),
     }
   })
 }
@@ -135,11 +144,22 @@ export function userMountToRuntimeMount(
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchRuntimeMount {
   const hostPath = normalizeRlaunchMountPath(mount.path)
+  let gpfsMount: string
+  try {
+    gpfsMount = buildGpfsMountString(hostPath, hostPath, rlaunchConfig)
+  } catch (error) {
+    if (mount.scope !== 'worker-only' || rlaunchConfig.gpfsMounts.length !== 1) throw error
+    const onlyRule = rlaunchConfig.gpfsMounts[0]
+    const prefix = onlyRule?.mountPrefix.trim().replace(/\/+$/, '')
+    if (!prefix) throw error
+    gpfsMount = `${prefix}${hostPath}:${hostPath}`
+  }
   return {
     hostPath,
     workerPath: hostPath,
-    gpfsMount: buildGpfsMountString(hostPath, hostPath, rlaunchConfig),
+    gpfsMount,
     mode: mount.mode,
+    ...(mount.scope === 'worker-only' ? { daemonVisible: false } : {}),
   }
 }
 
@@ -165,6 +185,7 @@ export function rlaunchMountFingerprint(mounts: readonly RlaunchRuntimeMount[]):
       requestedMode: mount.requestedMode,
       fileset: mount.fileset,
       adminApproved: mount.adminApproved,
+      daemonVisible: mount.daemonVisible,
     }))
     .sort((a, b) => a.hostPath.localeCompare(b.hostPath))
   return createHash('sha256')
@@ -174,11 +195,14 @@ export function rlaunchMountFingerprint(mounts: readonly RlaunchRuntimeMount[]):
 }
 
 function dedupeMounts(mounts: readonly UserRlaunchMount[]): UserRlaunchMount[] {
-  const byPath = new Map<string, RlaunchMountMode>()
+  const byPath = new Map<string, { mode: RlaunchMountMode; scope?: 'worker-only' }>()
   for (const mount of mounts) {
-    byPath.set(normalizeRlaunchMountPath(mount.path), mount.mode)
+    byPath.set(normalizeRlaunchMountPath(mount.path), {
+      mode: mount.mode,
+      ...(mount.scope === 'worker-only' ? { scope: 'worker-only' } : {}),
+    })
   }
   return [...byPath.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([mountPath, mode]) => ({ path: mountPath, mode }))
+    .map(([mountPath, value]) => ({ path: mountPath, ...value }))
 }

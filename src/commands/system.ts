@@ -107,7 +107,11 @@ export async function runSystemCommand(
       // null on any usage fallback, which we map to the card.
       const mountCard = (): string => {
         const rows: MountShowRow[] = ctx.userId
-          ? loadUserRlaunchMounts(ctx.userId).map(m => ({ path: m.path, mode: m.mode }))
+          ? loadUserRlaunchMounts(ctx.userId).map(m => ({
+              path: m.path,
+              mode: m.mode,
+              ...(m.scope === 'worker-only' ? { scope: m.scope } : {}),
+            }))
           : []
         const spec = systemMountCardSpec(rows)
         ctx.setCommandListCard?.(spec)

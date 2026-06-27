@@ -58,6 +58,7 @@ export type RlaunchRuntimeConfig = {
     requestedMode?: 'rw' | 'ro'
     fileset?: string
     adminApproved?: boolean
+    daemonVisible?: boolean
   }[]
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
   env: Readonly<Record<string, string>>
@@ -202,6 +203,7 @@ export class RlaunchRuntime implements Runtime {
         host: mount.hostPath,
         worker: mount.workerPath,
         mode: mount.mode,
+        ...(mount.daemonVisible === false ? { daemonVisible: false } : {}),
       })),
     ]
     this.mountTable = mounts.map(mount => [

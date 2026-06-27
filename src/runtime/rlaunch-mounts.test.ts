@@ -102,4 +102,31 @@ describe('rlaunch dynamic mounts store', () => {
   it('requires absolute mount paths', () => {
     assert.throws(() => normalizeRlaunchMountPath('relative/path'), /must be absolute/)
   })
+
+  it('preserves worker-only scope and marks its runtime mount daemon-invisible', () => {
+    const dataPath = path.join(gpfsRoot, 'worker-only-data')
+    setUserRlaunchMount('alice', dataPath, 'ro', 'worker-only')
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{
+      path: dataPath,
+      mode: 'ro',
+      scope: 'worker-only',
+    }])
+    const [mount] = resolveUserRlaunchRuntimeMounts('alice', {
+      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
+    })
+    assert.equal(mount?.daemonVisible, false)
+  })
+
+  it('lets a worker-only mount use the sole GPFS source without a host-prefix match', () => {
+    const mount = setUserRlaunchMount('alice', '/remote-team/dataset', 'ro', 'worker-only')
+    assert.equal(mount.changed, true)
+    const [runtimeMount] = resolveUserRlaunchRuntimeMounts('alice', {
+      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
+    })
+    assert.equal(
+      runtimeMount?.gpfsMount,
+      'gpfs://gpfs1/remote-team/dataset:/remote-team/dataset',
+    )
+    assert.equal(runtimeMount?.daemonVisible, false)
+  })
 })

@@ -691,6 +691,7 @@ export interface MountShowRow {
   path: string
   // 'ro' | 'rw'
   mode: string
+  scope?: 'worker-only'
 }
 
 export function systemMountCardSpec(rows: readonly MountShowRow[]): CommandListCardSpec {
@@ -704,7 +705,7 @@ export function systemMountCardSpec(rows: readonly MountShowRow[]): CommandListC
             ? t('card.system.mount.empty')
             : numberedShow(
                 rows.map(r => ({
-                  label: `${r.path}（${r.mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')}）`,
+                  label: `${r.path}（${r.mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')}，${r.scope === 'worker-only' ? t('mount.scope.workerOnlyShort') : t('mount.scope.sharedShort')}）`,
                 })),
               ),
       },
@@ -718,7 +719,10 @@ export function systemMountCardSpec(rows: readonly MountShowRow[]): CommandListC
       { markdown: t('card.system.mount.note') },
       {
         heading: t('card.examples'),
-        codeExamples: ['/system mount add /shared/data/foo --rw', '/system mount rm /shared/data/foo'],
+        codeExamples: [
+          '/system mount add /shared/data/foo --worker-only',
+          '/system mount rm /shared/data/foo',
+        ],
       },
     ],
   }

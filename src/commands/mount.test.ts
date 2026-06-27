@@ -82,7 +82,7 @@ describe('/mount command', () => {
     const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(
       listed,
-      new RegExp(escapeRegExp(`${dataPath} (read-write)`)),
+      new RegExp(escapeRegExp(`${dataPath} (read-write, shared)`)),
     )
 
     const removed = await runMount(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
@@ -190,6 +190,21 @@ describe('/mount command', () => {
     )
     assert.match(approved, /Updated mount/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
+  })
+
+  it('persists a daemon-inaccessible worker-only mount without host access checks', async () => {
+    const workerOnlyPath = '/remote-team/not-mounted-on-daemon/dataset'
+    const added = await runMount(
+      `add ${workerOnlyPath} --worker-only`,
+      { config: makeConfig(), userId: 'alice' },
+      { restartRlaunch: async () => 'worker-worker-only' },
+    )
+    assert.match(added, /Mounted:/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{
+      path: workerOnlyPath,
+      mode: 'ro',
+      scope: 'worker-only',
+    }])
   })
 
   it('rejects non-rlaunch backends, outside-prefix paths, and workspace-overlapping mounts', async () => {
