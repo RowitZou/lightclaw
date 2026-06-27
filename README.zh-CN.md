@@ -15,7 +15,7 @@ LightClaw 是一个**自托管的多用户 AI Agent**。它作为常驻 daemon �
 <tr><td><b>沙箱隔离</b></td><td>工具默认跑在本地 / Docker / 集群（rlaunch）沙箱里，碰不到主机其它部分——接给别人用不等于给他们 shell。</td></tr>
 <tr><td><b>长任务记忆</b></td><td>跨 session 记住你、你的项目、当前任务；自动压缩前先落盘，后台周期把散乱记忆整合成主题知识。</td></tr>
 <tr><td><b>多 Agent 协作</b></td><td>主 agent 是管理者：把活派给专门子 agent（编码 / 调研 / 飞书 / 复审…），可并行扇出、后台跑、定时触发。每次派活都是一张可持久的<b>工单（task run）</b>——daemon 重启不丢、可挂起等唤醒、卡住有 watchdog 拉起。</td></tr>
-<tr><td><b>模型灵活</b></td><td>同时接 Anthropic / OpenAI 兼容 / Codex OAuth，按角色钉不同模型（主对话走 Claude、记忆抽取走小模型）。</td></tr>
+<tr><td><b>模型灵活</b></td><td>同时接 Anthropic / OpenAI 兼容 / Codex OAuth，按 lane 钉不同模型（主对话走 Claude、后台记忆 / 压缩走小模型）。每个用户还能在共享池之上自带自己的模型。</td></tr>
 <tr><td><b>可扩展</b></td><td>MCP server、生命周期 hook、admin 自定义角色、自然语言触发的 skill。</td></tr>
 </table>
 
@@ -31,7 +31,7 @@ pnpm dev                  # tsx src/cli.ts —— 免构建，迭代最快
 # 或 pnpm build && pnpm start
 ```
 
-写一个最小的 `~/.lightclaw/config.json` 即可启动（只有 `endpoints` / `models` / `defaultModel` 必填）：
+写一个最小的 `~/.lightclaw/config.json` 配上一个模型服务 + 一个模型（也可以启动后用 `/config endpoint` + `/config backend` 在运行时加）：
 
 ```json
 {
@@ -53,9 +53,9 @@ pnpm dev                  # tsx src/cli.ts —— 免构建，迭代最快
 
 ## 配置
 
-所有配置集中在 `<LIGHTCLAW_HOME>/config.json`（默认 `~/.lightclaw/config.json`）。**完整的可配置项与每一项默认值见 [`config.example.jsonc`](./config.example.jsonc)**——除上面三个必填项外其余全部可选，环境变量优先级高于文件。运行时是纯 `JSON.parse`，拷字段时记得删掉注释。
+所有配置集中在 `<LIGHTCLAW_HOME>/config.json`（默认 `~/.lightclaw/config.json`）。**完整的可配置项与每一项默认值见 [`config.example.jsonc`](./config.example.jsonc)**——严格说没有任何字段是启动必填的（模型注册表为空也能起来），但你至少得配一个模型，写在这里或启动后用 `/config` 加；其余全部可选，环境变量优先级高于文件。运行时是纯 `JSON.parse`，拷字段时记得删掉注释。
 
-同目录兄弟文件：`permissions.json`（权限规则）、`mcp.json`（MCP server）、`hooks/*.mjs`（hook）、`roles/<name>/ROLE.md`（自定义角色）。
+同 home 下的兄弟文件 / 目录：`mcp.json`（MCP server）、`hooks/*.mjs`（hook）、`roles/<name>/ROLE.md`（admin 自定义角色）、`identity/`（配对状态）。每个配对用户自己的状态——配置覆盖、权限规则、密钥、记忆、session——都自包含在 `users/<canonical>/` 下。
 
 ---
 
@@ -66,19 +66,18 @@ lightclaw                 # 拉起 daemon：启用的 channel + 终端 admin 控
 lightclaw --home <dir>    # 临时切 home    lightclaw --config <file>  # 外部只读配置
 ```
 
-终端不跑 agent——和 agent 对话走飞书。常用 slash（终端与飞书共用，`admin` / `飞书` 标注例外）：
+终端不跑 agent——和 agent 对话走飞书。所有命令收拢到几个 hub 下（终端与飞书共用，`admin` / `飞书` 标注例外）；裸跑某个 hub（如 `/config`）即可看其子命令：
 
 | 命令 | 说明 |
 |---|---|
-| `/help` `/status` | 命令列表 / 当前 user·mode·model·用量 |
-| `/model` `/mode` | 切模型 / 切权限严格度 |
-| `/rules` | 看 / 撤 / 加权限规则 |
-| `/stop` `(飞书)` | 中断当前会话的 turn |
-| `/secret` `/mount` `(飞书)` | 个人密钥 / 动态 gpfs 挂载 |
+| `/help` | 命令列表 |
+| `/config` | 你自己的设置：`model` / `mode` / `lang` / `rule`（权限规则）/ `workspace` / `lane`（分用途模型），外加自带 `endpoint` + `backend` |
+| `/system` `(飞书)` | 你的运行时资源：`key`（密钥）/ `mount`（gpfs 路径）/ `data`（导入·导出） |
 | `/feedback` | 给 admin 留反馈 |
-| `/user` `/ceiling` `/cost` `/sandbox` `/feishu-workspace` `/auth` `(admin)` | 配对、权限上限、用量、沙箱、云空间、Codex 登录 |
+| `/stop` `(飞书)` | 中断当前会话的 turn |
+| `/admin` `(admin)` | 部署运维：`cost` / `user` / `pairing` / `ceiling` / `sandbox` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
 
-**权限**：四档从严到宽 `read` / `ask` / `auto` / `yolo`，危险操作弹卡确认。`/mode` 不能超过 admin 给的上限（`/ceiling <user> <mode>`）。即便 `yolo` 也能用 `permissions.json` 的 `ask` 列表锁死指定操作（如 `"ask": ["Bash(rm:*)"]`）。
+**权限**：四档从严到宽 `read` / `ask` / `auto` / `yolo`，危险操作弹卡确认。`/config mode` 不能超过 admin 给的上限（`/admin ceiling set <user> <mode>`）。即便 `yolo` 也能用 `permissions.json` 的 `ask` 列表锁死指定操作（如 `"ask": ["Bash(rm:*)"]`）。
 
 ---
 
@@ -102,7 +101,7 @@ lightclaw --home <dir>    # 临时切 home    lightclaw --config <file>  # 外�
 
 > `allowUsers` / `allowChats` 两个都为空会丢弃所有入站消息；放开某维度用 `["*"]`。
 
-未知 sender 会收到配对码，admin 用 `/user approve <code> --as <name>` 审批，之后该用户拥有独立 workspace / 记忆 / 规则。助手做需确认的事时发三按钮卡片（批准本次 / 批准这一类 / 拒绝），高危操作不允许「批准这一类」永久放行。
+未知 sender 会收到配对码，admin 用 `/admin pairing approve <code> --as <name>` 审批，之后该用户拥有独立 workspace / 记忆 / 规则。助手做需确认的事时发三按钮卡片（批准本次 / 批准这一类 / 拒绝），高危操作不允许「批准这一类」永久放行。
 
 <details>
 <summary>自托管所需的飞书开放平台权限与事件</summary>

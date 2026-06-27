@@ -15,7 +15,7 @@ LightClaw is a **self-hosted, multi-user AI agent**. It runs as a long-lived dae
 <tr><td><b>Sandboxed</b></td><td>Tools run in a local / Docker / cluster (rlaunch) sandbox by default — handing the bot to someone is not handing them a shell.</td></tr>
 <tr><td><b>Long-horizon memory</b></td><td>Remembers you, your project, and the current task across sessions; flushes hard facts before auto-compaction, consolidates scattered notes in the background.</td></tr>
 <tr><td><b>Multi-agent</b></td><td>The main agent is a manager: it delegates to specialist sub-agents (coding / research / Feishu / review…) — fan out in parallel, run in the background, or schedule. Every delegation is a durable <b>task run</b>: it survives daemon restarts, pauses on declared wakes, and a watchdog revives whatever stalls.</td></tr>
-<tr><td><b>Model-flexible</b></td><td>Anthropic / OpenAI-compatible / Codex OAuth at once; pin different models per role (Claude for the main chat, a small model for memory extraction).</td></tr>
+<tr><td><b>Model-flexible</b></td><td>Anthropic / OpenAI-compatible / Codex OAuth at once; route a different model per lane (Claude for the main chat, a small model for background memory / compaction work). Each user can also bring their own models on top of the shared pool.</td></tr>
 <tr><td><b>Extensible</b></td><td>MCP servers, lifecycle hooks, admin-defined roles, and natural-language-triggered skills.</td></tr>
 </table>
 
@@ -31,7 +31,7 @@ pnpm dev                  # tsx src/cli.ts —— build-free, fastest iteration
 # or: pnpm build && pnpm start
 ```
 
-A minimal `~/.lightclaw/config.json` is enough to boot (only `endpoints` / `models` / `defaultModel` are required):
+A minimal `~/.lightclaw/config.json` wires up one model service and one model (you can also add these later at runtime via `/config endpoint` + `/config backend`):
 
 ```json
 {
@@ -53,9 +53,9 @@ First launch creates a single admin identity bound to the current terminal user,
 
 ## Configuration
 
-Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config.json`). **The full list of options with every default is in [`config.example.jsonc`](./config.example.jsonc)** — only the three required fields above are mandatory; everything else is optional, and environment variables override the file. The runtime uses plain `JSON.parse`, so strip the comments when copying fields over.
+Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config.json`). **The full list of options with every default is in [`config.example.jsonc`](./config.example.jsonc)** — nothing is strictly required to boot (the daemon comes up even with an empty model registry), but you'll want at least one model defined, here or at runtime via `/config`; everything else is optional, and environment variables override the file. The runtime uses plain `JSON.parse`, so strip the comments when copying fields over.
 
-Sibling files in the same dir: `permissions.json` (permission rules), `mcp.json` (MCP servers), `hooks/*.mjs` (hooks), `roles/<name>/ROLE.md` (custom roles).
+Sibling files / dirs in the same home: `mcp.json` (MCP servers), `hooks/*.mjs` (hooks), `roles/<name>/ROLE.md` (admin-defined roles), `identity/` (pairing state). Each paired user's own state — config overrides, permission rules, secrets, memory, sessions — lives self-contained under `users/<canonical>/`.
 
 ---
 
@@ -66,19 +66,18 @@ lightclaw                 # start the daemon: enabled channels + terminal admin 
 lightclaw --home <dir>    # temp home    lightclaw --config <file>  # external read-only config
 ```
 
-The terminal does not run the agent — talk to the agent over Feishu. Common slash commands (shared by terminal and Feishu, except where tagged `admin` / `feishu`):
+The terminal does not run the agent — talk to the agent over Feishu. Everything is organized under a few hub commands (shared by terminal and Feishu, except where tagged `admin` / `feishu`); run a hub bare (e.g. `/config`) to see its subcommands:
 
 | Command | What it does |
 |---|---|
-| `/help` `/status` | Command list / current user·mode·model·usage |
-| `/model` `/mode` | Switch model / permission strictness |
-| `/rules` | List / revoke / add permission rules |
-| `/stop` `(feishu)` | Abort the current session's in-flight turn |
-| `/secret` `/mount` `(feishu)` | Personal secrets / dynamic gpfs mounts |
+| `/help` | Command list |
+| `/config` | Your settings: `model` / `mode` / `lang` / `rule` (permission rules) / `workspace` / `lane` (per-use model), plus bring-your-own `endpoint` + `backend` |
+| `/system` `(feishu)` | Your runtime resources: `key` (secrets) / `mount` (gpfs paths) / `data` (export·import) |
 | `/feedback` | Leave feedback for the admin |
-| `/user` `/ceiling` `/cost` `/sandbox` `/feishu-workspace` `/auth` `(admin)` | Pairing, ceilings, usage, sandbox, cloud workspace, Codex login |
+| `/stop` `(feishu)` | Abort the current session's in-flight turn |
+| `/admin` `(admin)` | Deployment ops: `cost` / `user` / `pairing` / `ceiling` / `sandbox` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
 
-**Permissions**: four modes from strict to loose — `read` / `ask` / `auto` / `yolo`, with approval cards for risky operations. `/mode` cannot exceed the ceiling the admin grants (`/ceiling <user> <mode>`). Even under `yolo` you can lock specific operations with the `ask` list in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`).
+**Permissions**: four modes from strict to loose — `read` / `ask` / `auto` / `yolo`, with approval cards for risky operations. `/config mode` cannot exceed the ceiling the admin grants (`/admin ceiling set <user> <mode>`). Even under `yolo` you can lock specific operations with the `ask` list in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`).
 
 ---
 
@@ -102,7 +101,7 @@ Configure the `channels.feishu` section in `config.json` and set `enabled: true`
 
 > If both `allowUsers` and `allowChats` are empty, all inbound messages are dropped; open a dimension with `["*"]`.
 
-An unknown sender gets a pairing code; the admin approves with `/user approve <code> --as <name>`, after which the user has an isolated workspace / memory / rules. When the assistant wants to do something that needs confirmation it sends a three-button card (Allow once / Allow this kind / Deny); high-risk operations cannot be permanently allowed via "Allow this kind".
+An unknown sender gets a pairing code; the admin approves with `/admin pairing approve <code> --as <name>`, after which the user has an isolated workspace / memory / rules. When the assistant wants to do something that needs confirmation it sends a three-button card (Allow once / Allow this kind / Deny); high-risk operations cannot be permanently allowed via "Allow this kind".
 
 <details>
 <summary>Feishu open-platform scopes and events for self-hosting</summary>
