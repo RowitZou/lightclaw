@@ -140,6 +140,13 @@ export function getCurrentTaskRunId(): string | undefined {
   return currentState().currentTaskRunId
 }
 
+/** Platform messageId of the inbound that opened the current main turn, if
+ *  any. Used by `TaskCreate` to stamp a created root onto the recall-root
+ *  index so a later recall of that message can find the root it started. */
+export function getOpenerMessageId(): string | undefined {
+  return currentState().openerMessageId
+}
+
 /** The chat/sender a created cloud resource (Feishu doc) should be shared with.
  *  Set per inbound channel message; inherited down a dispatch chain via the
  *  childCtx spread. Read at Dispatch time so a background fire can carry the

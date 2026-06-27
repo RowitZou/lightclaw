@@ -22,6 +22,8 @@ import type { AgentSignal } from '../signal-bus/types.js'
 import type { Runtime } from '../runtime/types.js'
 import { channelInterjectionQueue } from './feishu/interjection-queue.js'
 import type { InterjectionEntry } from './feishu/interjection-queue.js'
+import { createRootTaskRun } from '../taskrun/store.js'
+import { recallRootIndex } from '../taskrun/recall-index.js'
 
 import {
   applyAttachmentMaterialization,
@@ -1851,6 +1853,78 @@ describe('ChannelRunner recall handling', () => {
     const runner = new ChannelRunner(strategy)
     await runner.handleRecall({ messageId: 'om_unknown', chatId: 'oc_x' })
     assert.equal(strategy.chatNotices.length, 0)
+  })
+
+  it('surfaces a soft withdrawal note when an already-drained interjection is recalled', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_recall_drained'
+    channelInterjectionQueue.markInFlight(sessionId)
+    channelInterjectionQueue.push(sessionId, {
+      messageId: 'om_drained',
+      senderOpenId: 'ou_alice',
+      text: 'also check the logs',
+      arrivedAt: Date.now(),
+    })
+    channelInterjectionQueue.drain(sessionId) // the model has now seen it
+    try {
+      await runner.handleRecall({ messageId: 'om_drained', chatId: 'oc_recall_drained' })
+      const queued = channelInterjectionQueue.drain(sessionId)
+      assert.equal(queued.length, 1, 'a withdrawal note is queued for the next tool boundary')
+      assert.match(queued[0]!.text, /RECALLED/)
+      assert.equal(queued[0]!.synthetic, true)
+      assert.equal(strategy.chatNotices.length, 0, 'soft path posts no user-facing notice')
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(sessionId)
+    }
+  })
+
+  it('surfaces a recalled-root signal to main and does NOT hard-abort the opener turn', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_recall_root'
+    const run = await createRootTaskRun('alice', sessionId, { objective: 'long horizon task' })
+    recallRootIndex.register('om_kickoff', 'alice', sessionId, run.id)
+    // Same message also opened the still-running turn (opener + abort
+    // controller installed). Root precedence must win: soft surface, no abort.
+    channelInterjectionQueue.markInFlight(sessionId, 'om_kickoff')
+    const controller = new AbortController()
+    setAbortControllerForSession(sessionId, controller)
+    try {
+      await runner.handleRecall({ messageId: 'om_kickoff', chatId: 'oc_recall_root' })
+      assert.equal(controller.signal.aborted, false, 'root precedence: turn is NOT hard-aborted')
+      assert.equal(strategy.chatNotices.length, 0, 'no interrupted notice on the soft path')
+      const queued = channelInterjectionQueue.drain(sessionId)
+      assert.equal(queued.length, 1, 'kickoff-withdrawn block surfaced to main')
+      assert.match(queued[0]!.text, /recalled-task-kickoff/)
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(sessionId)
+      recallRootIndex.clear()
+    }
+  })
+
+  it('falls through to the turn-level abort when the recalled root is already terminal', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_recall_terminal'
+    // Register an index entry pointing at a runId that has no live TaskRun on
+    // disk — surfaceRecalledRootsToMain finds nothing live and returns false.
+    recallRootIndex.register('om_kickoff2', 'alice', sessionId, 'tr_does_not_exist')
+    channelInterjectionQueue.markInFlight(sessionId, 'om_kickoff2')
+    const controller = new AbortController()
+    setAbortControllerForSession(sessionId, controller)
+    try {
+      await runner.handleRecall({ messageId: 'om_kickoff2', chatId: 'oc_recall_terminal' })
+      assert.equal(controller.signal.aborted, true, 'no live root → opener turn is aborted')
+      assert.equal(strategy.chatNotices.length, 1, 'interrupted notice posted on the hard path')
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(sessionId)
+      recallRootIndex.clear()
+    }
   })
 })
 

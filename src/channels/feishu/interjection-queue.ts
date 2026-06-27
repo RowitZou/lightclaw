@@ -1,11 +1,24 @@
-import type { InterjectionEntry } from '../../agents/invocation-context.js'
+import { isSyntheticInterjection, type InterjectionEntry } from '../../agents/invocation-context.js'
 import { traceInterjection, waitedMs } from './interjection-trace.js'
 
 export type { InterjectionEntry } from '../../agents/invocation-context.js'
 
+/** Cap on remembered drained interjections per in-flight session. A turn's
+ *  user-typed interjections are bounded in practice (dozens at most); the cap
+ *  is a safety valve against an unbounded long turn, evicting oldest first. */
+const MAX_DRAINED_REMEMBERED = 100
+
 export class InterjectionQueue {
   private readonly queueBySession = new Map<string, InterjectionEntry[]>()
   private readonly inFlightSessions = new Set<string>()
+  // sessionId -> genuine user interjections already drained into the model
+  // during this in-flight turn (messageId + text). Recorded by `drain`,
+  // cleared by `unmarkInFlight`. The recall handler consults this so a recall
+  // of an interjection that was ALREADY injected can surface a soft
+  // withdrawal note — it cannot be un-injected, but the model can be told it
+  // was withdrawn. Bounded by MAX_DRAINED_REMEMBERED; synthetic / bg entries
+  // are skipped (their synthetic messageIds never match a platform recall).
+  private readonly drainedBySession = new Map<string, Array<{ messageId: string; text: string }>>()
   // sessionId -> the messageId that opened the in-flight turn. Populated by
   // markInFlight, cleared by unmarkInFlight. The recall handler walks this
   // map (it only ever holds one entry per concurrently in-flight session, so
@@ -37,6 +50,7 @@ export class InterjectionQueue {
   unmarkInFlight(sessionId: string): InterjectionEntry[] {
     this.inFlightSessions.delete(sessionId)
     this.openerMessageBySession.delete(sessionId)
+    this.drainedBySession.delete(sessionId)
     const leftover = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
     traceInterjection('inflight-clear', { session: sessionId, leftover: leftover.length })
@@ -91,6 +105,27 @@ export class InterjectionQueue {
       if (index !== -1) {
         entries.splice(index, 1)
         return sessionId
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Find a genuine user interjection that was ALREADY drained into the model
+   * this in-flight turn, by its messageId. Returns the sessionId it drained
+   * under plus the original text (so the recall handler can quote it in the
+   * withdrawal note), or undefined if no drained entry matched. Distinct from
+   * `removeQueuedByMessageId`: that one catches a recall before injection (and
+   * drops it); this one catches a recall AFTER injection, where the only
+   * available remedy is a soft note to the model.
+   */
+  drainedInterjectionByMessageId(
+    messageId: string,
+  ): { sessionId: string; text: string } | undefined {
+    for (const [sessionId, entries] of this.drainedBySession) {
+      const match = entries.find(entry => entry.messageId === messageId)
+      if (match) {
+        return { sessionId, text: match.text }
       }
     }
     return undefined
@@ -156,6 +191,15 @@ export class InterjectionQueue {
         source: entry.source,
         waitedMs: waitedMs(entry.arrivedAt),
       })
+      // Remember genuine user interjections so a later recall of one can still
+      // surface a withdrawal note. Synthetic / bg entries are skipped — their
+      // ids never match a platform recall and they carry no user words.
+      if (!isSyntheticInterjection(entry)) {
+        const remembered = this.drainedBySession.get(sessionId) ?? []
+        remembered.push({ messageId: entry.messageId, text: entry.text })
+        while (remembered.length > MAX_DRAINED_REMEMBERED) remembered.shift()
+        this.drainedBySession.set(sessionId, remembered)
+      }
     }
     return entries
   }

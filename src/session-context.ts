@@ -110,6 +110,12 @@ export type SessionContext = {
   // a child uses this id as the child's parentRunId; main turns leave it unset
   // until later phases introduce top-level goal task runs.
   currentTaskRunId?: string
+  /** Platform messageId of the inbound that opened this main turn (Feishu
+   *  message_id). Set on channel main turns only; absent for dispatched
+   *  workers / background fires / synthetic turns. `TaskCreate` stamps it onto
+   *  the recall-root index so a later recall of that opener message can find
+   *  the root TaskRun(s) it started and surface a withdrawal signal to main. */
+  openerMessageId?: string
   /** Transient per-handling flag: set when this turn-sequence concluded a
    *  TaskRun via TaskUpdate deliver (a root closed / a run delivered). The
    *  channel runner reads it to route a synthetic-wake FINAL block to chat —
@@ -183,6 +189,7 @@ export function createSessionContext(input: {
   isBackgroundTask?: boolean
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
   currentTaskRunId?: string
+  openerMessageId?: string
 }): SessionContext {
   return {
     sessionId: input.sessionId ?? randomUUID(),
@@ -223,6 +230,7 @@ export function createSessionContext(input: {
     isBackgroundTask: input.isBackgroundTask,
     onPermissionDenial: input.onPermissionDenial,
     currentTaskRunId: input.currentTaskRunId,
+    openerMessageId: input.openerMessageId,
   }
 }
 

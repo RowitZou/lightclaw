@@ -122,6 +122,40 @@ describe('InterjectionQueue', () => {
       ['drained-1', 'drained-2', 'new-after-drain'],
     )
   })
+
+  it('remembers drained genuine-user interjections for recall lookup', () => {
+    // The recall handler uses this to surface a withdrawal note for an
+    // interjection that was already injected (and so cannot be un-injected).
+    const queue = new InterjectionQueue()
+    queue.markInFlight('s1')
+    queue.push('s1', entry('m1', 'follow up please'))
+    queue.drain('s1')
+    const hit = queue.drainedInterjectionByMessageId('m1')
+    assert.deepEqual(hit, { sessionId: 's1', text: 'follow up please' })
+    assert.equal(queue.drainedInterjectionByMessageId('never'), undefined)
+  })
+
+  it('does not remember synthetic / background-task drained entries', () => {
+    // Synthetic ids never match a platform recall event, and carry framework
+    // text, not user words — recording them would be noise.
+    const queue = new InterjectionQueue()
+    queue.markInFlight('s1')
+    queue.push('s1', { ...entry('bg1', 'bg result'), synthetic: true })
+    queue.push('s1', { ...entry('m2', 'wake'), source: 'background-task' as const })
+    queue.drain('s1')
+    assert.equal(queue.drainedInterjectionByMessageId('bg1'), undefined)
+    assert.equal(queue.drainedInterjectionByMessageId('m2'), undefined)
+  })
+
+  it('clears remembered drained interjections on unmarkInFlight', () => {
+    const queue = new InterjectionQueue()
+    queue.markInFlight('s1')
+    queue.push('s1', entry('m1', 'hi'))
+    queue.drain('s1')
+    assert.ok(queue.drainedInterjectionByMessageId('m1'))
+    queue.unmarkInFlight('s1')
+    assert.equal(queue.drainedInterjectionByMessageId('m1'), undefined)
+  })
 })
 
 function entry(messageId: string, text: string) {

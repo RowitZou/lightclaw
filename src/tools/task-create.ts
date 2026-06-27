@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 import { createRootTaskRun } from '../taskrun/store.js'
-import { getCurrentRole, getSessionId, requireCurrentUserId } from '../state.js'
+import { recallRootIndex } from '../taskrun/recall-index.js'
+import { getCurrentRole, getOpenerMessageId, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
 const TASK_CREATE_DESCRIPTION = [
@@ -39,6 +40,13 @@ export const taskCreateTool = buildTool({
       objective: input.objective,
       title: input.title,
     })
+    // Stamp the opener message -> root so a recall of that message can surface
+    // a soft "kickoff withdrawn" signal to main. Best-effort, in-memory only;
+    // absent on synthetic / off-channel turns that carry no opener messageId.
+    const openerMessageId = getOpenerMessageId()
+    if (openerMessageId) {
+      recallRootIndex.register(openerMessageId, owner, sessionId, run.id)
+    }
     return {
       output: JSON.stringify({
         runId: run.id,

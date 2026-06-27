@@ -4,7 +4,10 @@ import path from 'node:path'
 import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { type TaskCardTarget } from './feishu/task-card-patcher.js'
-import { appendProgress } from '../taskrun/store.js'
+import { appendProgress, getTaskRun } from '../taskrun/store.js'
+import { recallRootIndex } from '../taskrun/recall-index.js'
+import { wakeOrInterject } from './feishu/wake-or-interject.js'
+import { formatRecalledInterjectionNote, formatRecalledRootBlock } from './feishu/recall-blocks.js'
 import { dispatchChannelSlash, type ChannelSlashResult } from '../commands/dispatch-channel.js'
 import type { CommandListCardSpec } from '../commands/registry.js'
 import { getConfig, type LightClawConfig } from '../config.js'
@@ -26,6 +29,7 @@ import {
   updatePendingUserInfo,
 } from '../identity/pairing.js'
 import {
+  getAdmin,
   getAdminFeishuOpenId,
   getIdentity,
   getUserPermissionCeiling,
@@ -899,6 +903,13 @@ export class ChannelRunner {
               sendFile: file => this.strategy.sendFile!(message, file),
             }
           : null
+        // Opener messageId of this turn — keyed the same as the in-flight
+        // opener map (markInFlight below uses message.messageId). Synthetic
+        // turns (bg-result wake / post-approval replay) carry an id the
+        // platform never saw, so leave it unset; only genuine inbounds can be
+        // recalled. `TaskCreate` reads it to stamp created roots into the
+        // recall-root index.
+        sessionContext.openerMessageId = message.synthetic ? undefined : message.messageId
         await runWithSessionContext(sessionContext, async () => {
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
@@ -935,10 +946,12 @@ export class ChannelRunner {
         const pinnedApprover = sessionContext.permissionApprover
         const pinnedChannelFileSender = sessionContext.channelFileSender
         const pinnedResourceGrantTarget = sessionContext.resourceGrantTarget
+        const pinnedOpenerMessageId = sessionContext.openerMessageId
         Object.assign(sessionContext, resolvedContext)
         sessionContext.permissionApprover = pinnedApprover
         sessionContext.channelFileSender = pinnedChannelFileSender
         sessionContext.resourceGrantTarget = pinnedResourceGrantTarget
+        sessionContext.openerMessageId = pinnedOpenerMessageId
         await refreshSkillRegistry(getCwd(), getCurrentUserId())
         if (!meta) {
           await runHook('onSessionStart', {
@@ -1929,20 +1942,40 @@ export class ChannelRunner {
 
   /**
    * Handle a user recalling a message. Feishu's im.message.recalled_v1 only
-   * carries message_id + chat_id, so we map the recalled messageId back to a
-   * sessionId via the in-flight opener registry rather than recomputing the
-   * Phase 26 sessionId formula (which would need the sender open_id the
-   * recall event does not include).
+   * carries message_id + chat_id, so we map the recalled messageId back to its
+   * effect via in-memory registries rather than recomputing the Phase 26
+   * sessionId formula (which would need the sender open_id the recall event
+   * does not include).
    *
-   *  - Recalled message opened a still-running turn → abort that turn (an
-   *    implicit /stop for it) and post a non-error "interrupted" notice to
-   *    the chat so the user sees the recall was honored.
-   *  - Recalled message is a not-yet-drained queued interjection → drop it
-   *    so it never reaches the model. No notice — nothing was running for
-   *    it, and an already-drained interjection cannot be un-injected.
-   *  - Neither (turn already finished, or never tracked) → no-op.
+   * The handling strength follows what the recalled message actually started,
+   * from soft (defer to main / advise the model) to hard (abort the turn):
+   *
+   *  1. It started root task run(s) → surface a soft "kickoff withdrawn"
+   *     signal to main and let main decide whether to cancel. A long-horizon
+   *     task may have already produced value or run detached from this turn,
+   *     so a hard auto-cancel is the wrong default; a recall is advisory.
+   *  2. It opened a still-running turn (no root) → abort that turn (an
+   *     implicit /stop for it) and post an "interrupted" notice. This is the
+   *     genuine regret-stop case: the turn's whole premise was retracted.
+   *  3. It is a not-yet-drained queued interjection → drop it before the model
+   *     ever sees it.
+   *  4. It is an interjection that was ALREADY drained into a still-in-flight
+   *     turn → it cannot be un-injected, so surface a soft withdrawal note at
+   *     the next tool boundary and let the model decide whether to act on it.
+   *  5. None of the above (turn finished, root terminal, restart dropped the
+   *     mapping, never tracked) → no-op.
    */
   async handleRecall(recall: { messageId: string; chatId: string }): Promise<void> {
+    // 1. Recalled message started root task run(s) → soft, defer to main.
+    const rootEntry = recallRootIndex.lookup(recall.messageId)
+    if (rootEntry) {
+      const surfaced = await this.surfaceRecalledRootsToMain(recall.messageId, rootEntry)
+      // If every mapped root is already terminal there is nothing to surface;
+      // fall through to the turn-level branches below.
+      if (surfaced) return
+    }
+
+    // 2. Recalled message opened a still-running turn (no root) → hard abort.
     const openerSessionId = channelInterjectionQueue.sessionIdForOpenerMessage(
       recall.messageId,
     )
@@ -1961,6 +1994,8 @@ export class ChannelRunner {
       }
       return
     }
+
+    // 3. Recalled message is a not-yet-drained queued interjection → drop.
     const queuedSessionId = channelInterjectionQueue.removeQueuedByMessageId(
       recall.messageId,
     )
@@ -1970,9 +2005,80 @@ export class ChannelRunner {
       )
       return
     }
-    process.stderr.write(
-      `${this.strategy.channelId}: recall ${recall.messageId} -> no in-flight turn or queued interjection; ignored\n`,
+
+    // 4. Recalled message was an already-drained interjection in a live turn →
+    //    soft withdrawal note (cannot be un-injected).
+    const drained = channelInterjectionQueue.drainedInterjectionByMessageId(
+      recall.messageId,
     )
+    if (drained && channelInterjectionQueue.hasInflightFor(drained.sessionId)) {
+      channelInterjectionQueue.push(drained.sessionId, {
+        text: formatRecalledInterjectionNote(drained.text),
+        messageId: `recall:${recall.messageId}`,
+        senderOpenId: 'recall',
+        arrivedAt: Date.now(),
+        synthetic: true,
+      })
+      process.stderr.write(
+        `${this.strategy.channelId}: recall ${recall.messageId} -> withdrawal note to in-flight ${drained.sessionId}\n`,
+      )
+      return
+    }
+
+    process.stderr.write(
+      `${this.strategy.channelId}: recall ${recall.messageId} -> no matching turn/root/interjection; ignored\n`,
+    )
+  }
+
+  /**
+   * Surface a "kickoff message withdrawn" signal to main for the root task
+   * run(s) a recalled message started. Returns true when at least one
+   * non-terminal root was surfaced (the recall is fully handled here); false
+   * when every mapped root is already terminal or no delivery target resolves
+   * (caller falls through to the turn-level branches). Best-effort: a wake
+   * delivery failure still counts as "handled" so we don't double-process.
+   */
+  private async surfaceRecalledRootsToMain(
+    messageId: string,
+    entry: { owner: string; callerSessionId: string; rootRunIds: Set<string> },
+  ): Promise<boolean> {
+    const liveRoots: Array<{ runId: string; title: string }> = []
+    for (const runId of entry.rootRunIds) {
+      const run = await getTaskRun(runId, entry.owner).catch(() => null)
+      if (!run) continue
+      if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
+        continue
+      }
+      liveRoots.push({ runId, title: run.title })
+    }
+    if (liveRoots.length === 0) return false
+
+    // Admin-only delivery under local backend, mirroring the scheduler /
+    // watchdog wake gates: surfacing spins a synthetic main turn that
+    // re-enters LocalRuntime, which must stay admin-only.
+    const config = getConfig()
+    if (config.runtime.backend === 'local') {
+      const adminId = await getAdmin().catch(() => null)
+      if (adminId !== null && adminId !== entry.owner) return false
+    }
+    const identity = await getIdentity(entry.owner).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (!ownerOpenId) return false
+
+    const emittedAt = Date.now()
+    const result = await wakeOrInterject({
+      targetSessionId: entry.callerSessionId,
+      block: formatRecalledRootBlock(liveRoots),
+      ownerOpenId,
+      messageId: `recall-root-${messageId}`,
+      emittedAt,
+      source: 'background-task',
+      logPrefix: '[recall]',
+    })
+    process.stderr.write(
+      `${this.strategy.channelId}: recall ${messageId} -> surfaced ${liveRoots.length} root(s) to main ${entry.callerSessionId} (${result.ok ? result.mode : `failed:${result.reason}`})\n`,
+    )
+    return true
   }
 
   /**
