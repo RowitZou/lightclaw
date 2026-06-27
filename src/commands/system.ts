@@ -262,7 +262,11 @@ async function runDataExportFeishu(userId: string, withSessions: boolean): Promi
   const name = `lightclaw-data-${userId}-${stamp}.zip`
   let sent
   try {
-    sent = await sender.sendFile({ content: result.buffer, name })
+    sent = await sender.sendFile({
+      name,
+      sizeBytes: result.buffer.byteLength,
+      read: async () => result.buffer,
+    })
   } catch (err) {
     return errorLine(err)
   }

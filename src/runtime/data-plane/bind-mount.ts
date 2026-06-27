@@ -1,4 +1,5 @@
 import * as fsp from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import path from 'node:path'
 
 import type { DataPlane, PathPolicy, RuntimeStat } from '../types.js'
@@ -13,6 +14,10 @@ export class BindMountData implements DataPlane {
 
   async readFile(workerPath: string): Promise<Buffer> {
     return fsp.readFile(this.hostPath(workerPath))
+  }
+
+  async createReadStream(workerPath: string) {
+    return createReadStream(this.hostPath(workerPath))
   }
 
   async writeFile(workerPath: string, content: Buffer | string): Promise<void> {

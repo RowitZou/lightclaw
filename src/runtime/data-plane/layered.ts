@@ -1,4 +1,5 @@
 import type { DataPlane, DataPlaneKind, PathPolicy, RuntimeStat } from '../types.js'
+import type { Readable } from 'node:stream'
 
 export class DataPlaneNotApplicableError extends Error {
   constructor(message: string) {
@@ -37,6 +38,15 @@ export class LayeredDataPlane implements DataPlane {
         }
       }
       return layer.readFile(pathname)
+    })
+  }
+
+  async createReadStream(pathname: string): Promise<Readable> {
+    return this.tryLayers('createReadStream', pathname, async layer => {
+      if (!layer.createReadStream) {
+        throw new DataPlaneNotApplicableError(`${layer.kind} cannot stream ${pathname}`)
+      }
+      return layer.createReadStream(pathname)
     })
   }
 

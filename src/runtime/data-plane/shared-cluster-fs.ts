@@ -1,4 +1,5 @@
 import * as fsp from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import path from 'node:path'
 
 import type { DataPlane, PathPolicy, RuntimeStat } from '../types.js'
@@ -19,6 +20,11 @@ export class SharedClusterFsData implements DataPlane {
   async readFile(workerPath: string): Promise<Buffer> {
     const hostPath = this.hostPath(workerPath)
     return this.guard('read', () => fsp.readFile(hostPath))
+  }
+
+  async createReadStream(workerPath: string) {
+    const hostPath = this.hostPath(workerPath)
+    return createReadStream(hostPath)
   }
 
   async writeFile(workerPath: string, content: Buffer | string): Promise<void> {

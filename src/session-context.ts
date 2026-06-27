@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
+import type { Readable } from 'node:stream'
 
 import { clampPermissionMode, type PermissionApprover, type PermissionMode, type PermissionRule } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
@@ -10,8 +11,10 @@ import type { Role } from './agents/types.js'
 import type { ChainState } from './signal-bus/chain-state.js'
 
 export type ChannelFileSendInput = {
-  content: Buffer
   name: string
+  sizeBytes: number
+  read: () => Promise<Buffer>
+  createReadStream?: () => Promise<Readable>
   mimeType?: string
 }
 

@@ -229,6 +229,10 @@ export class RlaunchRuntime implements Runtime {
         await this.ensureRunning()
         return sharedClusterFsData.readFile(pathname)
       },
+      createReadStream: async pathname => {
+        await this.ensureRunning()
+        return sharedClusterFsData.createReadStream(pathname)
+      },
       writeFile: async (pathname, content) => {
         await this.ensureRunning()
         return sharedClusterFsData.writeFile(pathname, content)

@@ -546,9 +546,11 @@ export class FeishuSender {
     // gets the file in one round-trip. Below the ceiling, keep the legacy
     // IM attachment path: a native IM file card is preferable to a link
     // when the platform can render it inline.
-    if (file.content.byteLength <= IM_ATTACHMENT_MAX_BYTES) {
+    let buffered: Buffer | undefined
+    if (file.sizeBytes <= IM_ATTACHMENT_MAX_BYTES) {
       try {
-        const fileKey = await this.uploadFile(file)
+        buffered = await file.read()
+        const fileKey = await this.uploadFile(file.name, buffered)
         await this.sendReplyOrCreate({
           chatId: message.chatId,
           replyToMessageId: this.replyTargetFor(message),
@@ -580,12 +582,12 @@ export class FeishuSender {
           )
         } else {
           process.stderr.write(
-            `[feishu-uploads] IM file upload rejected as too large for "${file.name}" (${file.content.byteLength} bytes); falling back to drive upload.\n`,
+            `[feishu-uploads] IM file upload rejected as too large for "${file.name}" (${file.sizeBytes} bytes); falling back to drive upload.\n`,
           )
         }
       }
     }
-    return this.sendFileViaDrive(message, file)
+    return this.sendFileViaDrive(message, file, buffered)
   }
 
   // Cloud fallback: upload to the user's per-canonical uploads folder under
@@ -596,6 +598,7 @@ export class FeishuSender {
   private async sendFileViaDrive(
     message: NormalizedChannelMessage,
     file: OutgoingChannelFile,
+    buffered?: Buffer,
   ): Promise<ChannelFileSendOutput> {
     const ctx = await resolveCurrentFeishuWorkspace(this.client)
     const uploadsFolder = await getOrCreateUserUploadsFolder(
@@ -608,7 +611,12 @@ export class FeishuSender {
       client: this.client,
       parentFolderToken: uploadsFolder.folderToken,
       name: file.name,
-      content: file.content,
+      size: file.sizeBytes,
+      ...(buffered
+        ? { content: buffered }
+        : file.createReadStream
+          ? { stream: await file.createReadStream() }
+          : { content: await file.read() }),
     })
     process.stderr.write(
       `[feishu-uploads] uploaded "${file.name}" canonical=${ctx.canonicalUser} fileToken=${uploaded.fileToken} sizeBytes=${uploaded.size} chunks=${uploaded.chunks}\n`,
@@ -641,18 +649,18 @@ export class FeishuSender {
     return { kind: 'cloud-link', url, sizeBytes: uploaded.size }
   }
 
-  private async uploadFile(file: OutgoingChannelFile): Promise<string> {
+  private async uploadFile(name: string, content: Buffer): Promise<string> {
     // Caller (SendFile tool) owns size + isFile validation against runtime.fs;
     // sender just hands the buffer to the SDK as a stream.
-    const fileType = inferFeishuFileType(file.name)
+    const fileType = inferFeishuFileType(name)
     const response = await this.withMessageRetry(
       `upload ${fileType}`,
       attempt => {
         const call = () => this.client.im.file.create({
           data: {
             file_type: fileType,
-            file_name: file.name,
-            file: file.content,
+            file_name: name,
+            file: content,
           },
         }) as Promise<UploadFileResponse>
         // Attempt 1 keeps the default 5 min file-upload budget (real slow
@@ -1087,4 +1095,3 @@ function assertOk(response: SendResponse, prefix: string): void {
     })
   }
 }
-

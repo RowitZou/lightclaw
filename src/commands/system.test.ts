@@ -236,7 +236,7 @@ describe('/system command', () => {
     const sender: ChannelFileSender = {
       channelId: 'feishu',
       async sendFile(file) {
-        sentBuffer = file.content
+        sentBuffer = await file.read()
         return { kind: 'im-attachment' }
       },
     }

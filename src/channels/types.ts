@@ -166,8 +166,10 @@ export function getPendingAttachments(
 }
 
 export type OutgoingChannelFile = {
-  content: Buffer
   name: string
+  sizeBytes: number
+  read: () => Promise<Buffer>
+  createReadStream?: () => Promise<import('node:stream').Readable>
   mimeType?: string
 }
 

@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { Readable } from 'node:stream'
 
 import { z } from 'zod'
 
@@ -64,9 +65,25 @@ Don't use:
         return { output: `SendFile refused to send an empty file: ${input.file_path}`, isError: true }
       }
 
-      const content = await context.runtime.fs.readFile(input.file_path)
       const displayName = input.name?.trim() || path.basename(input.file_path)
-      const result = await sender.sendFile({ content, name: displayName })
+      const result = await sender.sendFile({
+        name: displayName,
+        sizeBytes: info.size,
+        read: () => context.runtime.fs.readFile(input.file_path),
+        ...(context.runtime.fs.createReadStream
+          ? {
+              createReadStream: async () => {
+                try {
+                  return await context.runtime.fs.createReadStream!(input.file_path)
+                } catch {
+                  // Exec-relay has no stream accessor. Preserve the existing
+                  // whole-read behavior as a transparent fallback.
+                  return Readable.from(await context.runtime.fs.readFile(input.file_path))
+                }
+              },
+            }
+          : {}),
+      })
       if (result.kind === 'cloud-link') {
         const sizeMB = (result.sizeBytes / (1024 * 1024)).toFixed(1)
         return {

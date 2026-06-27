@@ -1,4 +1,5 @@
 import type { DataPlane } from './types.js'
+import type { Readable } from 'node:stream'
 
 export type ByteBudgetRelease = () => void
 
@@ -108,6 +109,30 @@ export function withByteBudget(
     independentFromControl: inner.independentFromControl,
     reliability: inner.reliability,
     readFile: pathname => sizedRead(pathname, () => inner.readFile(pathname)),
+    ...(inner.createReadStream
+      ? {
+          createReadStream: async (pathname: string): Promise<Readable> => {
+            const info = await inner.stat(pathname)
+            const release = await budget.acquire(info.size)
+            try {
+              const stream = await inner.createReadStream!(pathname)
+              let settled = false
+              const releaseOnce = () => {
+                if (settled) return
+                settled = true
+                release()
+              }
+              stream.once('end', releaseOnce)
+              stream.once('close', releaseOnce)
+              stream.once('error', releaseOnce)
+              return stream
+            } catch (error) {
+              release()
+              throw error
+            }
+          },
+        }
+      : {}),
     writeFile: (pathname, content) => withReservation(
       typeof content === 'string' ? Buffer.byteLength(content) : content.length,
       () => inner.writeFile(pathname, content),

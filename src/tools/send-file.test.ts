@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { Readable } from 'node:stream'
 
 import type { ChannelFileSender, ChannelFileSendOutput } from '../session-context.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -12,7 +13,7 @@ describe('SendFile tool', () => {
     const sender: ChannelFileSender = {
       channelId: 'feishu',
       sendFile: async (file): Promise<ChannelFileSendOutput> => {
-        sends.push({ name: file.name, size: file.content.byteLength })
+        sends.push({ name: file.name, size: (await file.read()).byteLength })
         return { kind: 'im-attachment' }
       },
     }
@@ -27,6 +28,8 @@ describe('SendFile tool', () => {
 
   it('reports the cloud link and size when sender falls back to drive upload', async () => {
     const content = Buffer.alloc(40 * 1024 * 1024, 0x41) // 40 MB synthetic payload
+    let wholeReads = 0
+    let streamOpens = 0
     const sender: ChannelFileSender = {
       channelId: 'feishu',
       sendFile: async (): Promise<ChannelFileSendOutput> => ({
@@ -37,13 +40,21 @@ describe('SendFile tool', () => {
     }
     const result = await runWithSender(sender, () => sendFileTool.call(
       { file_path: '/workspace/qwen-image-2.pdf' },
-      buildContext(makeRuntime({ '/workspace/qwen-image-2.pdf': content })),
+      buildContext(makeRuntime(
+        { '/workspace/qwen-image-2.pdf': content },
+        {
+          onRead: () => { wholeReads += 1 },
+          onStream: () => { streamOpens += 1 },
+        },
+      )),
     ))
     assert.equal(result.isError, undefined)
     const out = String(result.output)
     assert.match(out, /Uploaded qwen-image-2\.pdf \(40\.0 MB\)/)
     assert.match(out, /share link to feishu/)
     assert.match(out, /URL: https:\/\/feishu\.cn\/file\/boxcnAbCdEf/)
+    assert.equal(wholeReads, 0, 'large host-visible SendFile must not eagerly read the whole file')
+    assert.equal(streamOpens, 0, 'the sender owns lazy stream opening')
   })
 
   it('rejects empty files without contacting the sender', async () => {
@@ -101,7 +112,10 @@ function buildContext(runtime: Runtime): {
   }
 }
 
-function makeRuntime(files: Record<string, Buffer>): Runtime {
+function makeRuntime(
+  files: Record<string, Buffer>,
+  hooks: { onRead?: () => void; onStream?: () => void } = {},
+): Runtime {
   return {
     fs: {
       stat: async (p: string) => {
@@ -112,11 +126,18 @@ function makeRuntime(files: Record<string, Buffer>): Runtime {
         return { size: buf.byteLength, isFile: true, isDirectory: false, mtimeMs: 0 }
       },
       readFile: async (p: string) => {
+        hooks.onRead?.()
         const buf = files[p]
         if (!buf) {
           throw Object.assign(new Error(`ENOENT ${p}`), { code: 'ENOENT' })
         }
         return buf
+      },
+      createReadStream: async (p: string) => {
+        hooks.onStream?.()
+        const buf = files[p]
+        if (!buf) throw Object.assign(new Error(`ENOENT ${p}`), { code: 'ENOENT' })
+        return Readable.from(buf)
       },
     },
   } as unknown as Runtime

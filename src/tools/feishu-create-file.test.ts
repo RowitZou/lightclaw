@@ -231,7 +231,7 @@ describe('FeishuCreateFile tool', () => {
             readLocalFile: async () => ({ content: Buffer.from('pdf'), name: 'report.pdf' }),
             uploadFile: async input => ({
               fileToken: 'file123',
-              size: input.content.byteLength,
+              size: 'content' in input && input.content ? input.content.byteLength : input.size,
               chunks: 1,
             }),
             grantDriveFile: async input => {
@@ -620,7 +620,7 @@ describe('FeishuCreateFile tool', () => {
             readLocalFile: async () => ({ content: Buffer.from('pdf'), name: 'report.pdf' }),
             uploadFile: async input => ({
               fileToken: 'fileAllowed',
-              size: input.content.byteLength,
+              size: 'content' in input && input.content ? input.content.byteLength : input.size,
               chunks: 1,
             }),
             grantDriveFile: async () => ({ ok: true }),

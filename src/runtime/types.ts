@@ -62,6 +62,8 @@ export type DataPlane = {
   readonly independentFromControl: boolean
   readonly reliability: 'fs-semantic' | 'protocol-multiplex' | 'depends-on-control-plane'
   readFile(pathname: string): Promise<Buffer>
+  /** Host-backed streaming read. Exec-relay planes intentionally omit this. */
+  createReadStream?(pathname: string): Promise<import('node:stream').Readable>
   writeFile(pathname: string, content: Buffer | string): Promise<void>
   chmod?(pathname: string, mode: number): Promise<void>
   stat(pathname: string): Promise<RuntimeStat>

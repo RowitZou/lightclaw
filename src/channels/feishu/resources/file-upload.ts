@@ -1,4 +1,5 @@
 import type { FeishuClient } from '../client.js'
+import type { Readable } from 'node:stream'
 import { withFileUploadTimeout } from '../client.js'
 import { callFeishu, type FeishuEnvelope } from './api.js'
 import { logFeishuRetry } from './errors.js'
@@ -24,12 +25,16 @@ const UPLOAD_ALL_MAX_BYTES = 19 * 1024 * 1024
 const UPLOAD_FIRST_ATTEMPT_TIMEOUT_MS = 5 * 60_000
 const UPLOAD_RETRY_TIMEOUT_MS = 30_000
 
-export type UploadDriveFileInput = {
+type UploadDriveFileBase = {
   client: FeishuClient
   parentFolderToken: string
   name: string
-  content: Buffer
 }
+
+export type UploadDriveFileInput = UploadDriveFileBase & (
+  | { content: Buffer; size?: number; stream?: never }
+  | { stream: Readable; size: number; content?: never }
+)
 
 export type UploadDriveFileResult = {
   fileToken: string
@@ -38,18 +43,29 @@ export type UploadDriveFileResult = {
 }
 
 export async function uploadDriveFile(input: UploadDriveFileInput): Promise<UploadDriveFileResult> {
-  const size = input.content.byteLength
+  const size = 'content' in input && input.content
+    ? (input.size ?? input.content.byteLength)
+    : input.size
   if (size <= 0) {
     throw new Error('uploadDriveFile refused an empty buffer.')
   }
-  if (size <= UPLOAD_ALL_MAX_BYTES) {
-    const token = await uploadSingleShot(input, size)
-    return { fileToken: token, size, chunks: 1 }
+  try {
+    if (size <= UPLOAD_ALL_MAX_BYTES) {
+      const token = await uploadSingleShot(input, size)
+      return { fileToken: token, size, chunks: 1 }
+    }
+    return await uploadChunked(input, size)
+  } finally {
+    if ('stream' in input && input.stream && !input.stream.destroyed) {
+      input.stream.destroy()
+    }
   }
-  return uploadChunked(input, size)
 }
 
 async function uploadSingleShot(input: UploadDriveFileInput, size: number): Promise<string> {
+  const content = 'content' in input && input.content
+    ? input.content
+    : await readStreamFully(input.stream, size)
   const client = input.client as unknown as FeishuFileClient
   const response = await retryWithUploadBudget('file.uploadAll', () => callFeishu(() => client.drive.v1.file.uploadAll({
     data: {
@@ -57,7 +73,7 @@ async function uploadSingleShot(input: UploadDriveFileInput, size: number): Prom
       parent_type: 'explorer',
       parent_node: input.parentFolderToken,
       size,
-      file: input.content,
+      file: content,
     },
   })))
   const fileToken = readUploadString(response, 'file_token')
@@ -85,11 +101,12 @@ async function uploadChunked(input: UploadDriveFileInput, size: number): Promise
       `Feishu file.uploadPrepare response missing upload_id/block_size/block_num (got ${formatUploadResponse(prepared)}).`,
     )
   }
+  const chunks = createChunkReader(input)
   // Sanity: blockNum * blockSize covers size, last chunk can be short.
   for (let seq = 0; seq < blockNum; seq += 1) {
     const start = seq * blockSize
     const end = Math.min(start + blockSize, size)
-    const chunk = input.content.subarray(start, end)
+    const chunk = await chunks.read(end - start)
     await retryWithUploadBudget(`file.uploadPart#${seq}`, () => callFeishu(() => client.drive.v1.file.uploadPart({
       data: {
         upload_id: uploadId,
@@ -110,6 +127,59 @@ async function uploadChunked(input: UploadDriveFileInput, size: number): Promise
     throw new Error(`Feishu file.uploadFinish response did not include file_token (got ${formatUploadResponse(finished)}).`)
   }
   return { fileToken, size, chunks: blockNum }
+}
+
+function createChunkReader(input: UploadDriveFileInput): { read(size: number): Promise<Buffer> } {
+  if ('content' in input && input.content) {
+    let offset = 0
+    return {
+      async read(size: number) {
+        const chunk = input.content!.subarray(offset, offset + size)
+        offset += chunk.byteLength
+        if (chunk.byteLength !== size) throw new Error('uploadDriveFile content ended before declared size.')
+        return chunk
+      },
+    }
+  }
+
+  const iterator = input.stream[Symbol.asyncIterator]()
+  const queue: Buffer[] = []
+  let queuedBytes = 0
+  return {
+    async read(size: number): Promise<Buffer> {
+      while (queuedBytes < size) {
+        const next = await iterator.next()
+        if (next.done) throw new Error('uploadDriveFile stream ended before declared size.')
+        const buffer = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value)
+        if (buffer.length === 0) continue
+        queue.push(buffer)
+        queuedBytes += buffer.length
+      }
+      const output = Buffer.allocUnsafe(size)
+      let written = 0
+      while (written < size) {
+        const head = queue[0]!
+        const take = Math.min(head.length, size - written)
+        head.copy(output, written, 0, take)
+        written += take
+        queuedBytes -= take
+        if (take === head.length) queue.shift()
+        else queue[0] = head.subarray(take)
+      }
+      return output
+    },
+  }
+}
+
+async function readStreamFully(stream: Readable, expectedSize: number): Promise<Buffer> {
+  const reader = createChunkReader({
+    client: null as unknown as FeishuClient,
+    parentFolderToken: '',
+    name: '',
+    stream,
+    size: expectedSize,
+  })
+  return reader.read(expectedSize)
 }
 
 // Retry budget mirrors sender.uploadFile (IM attachments): first attempt

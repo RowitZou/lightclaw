@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs'
 import { chmod, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -132,6 +133,7 @@ export class LocalRuntime implements Runtime {
     independentFromControl: true,
     reliability: 'fs-semantic',
     readFile: async pathname => readFile(this.absolutize(pathname)),
+    createReadStream: async pathname => createReadStream(this.absolutize(pathname)),
     writeFile: async (pathname, content) => {
       const resolved = this.absolutize(pathname)
       await mkdir(path.dirname(resolved), { recursive: true })
