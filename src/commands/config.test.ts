@@ -772,7 +772,7 @@ describe('/config workspace set --y', () => {
       userId: 'b5wsrestart',
       restartRlaunch: async () => {
         restartCalls += 1
-        return 'ws-worker-123'
+        return { worker: 'ws-worker-123', report: { degraded: [], unmountable: [] } }
       },
     })
     assert.equal(restartCalls, 1, 'workspace set must restart the sandbox')
@@ -811,7 +811,7 @@ describe('/config workspace set --y', () => {
       userId: 'b5wsr',
       restartRlaunch: async () => {
         restartCalls += 1
-        return 'ws-worker-456'
+        return { worker: 'ws-worker-456', report: { degraded: [], unmountable: [] } }
       },
     })
     assert.equal(restartCalls, 1, 'reset that actually changed the workspace must restart')
@@ -827,7 +827,7 @@ describe('/config workspace set --y', () => {
       userId: 'b5wsnoop',
       restartRlaunch: async () => {
         restartCalls += 1
-        return 'ws-worker-789'
+        return { worker: 'ws-worker-789', report: { degraded: [], unmountable: [] } }
       },
     })
     assert.equal(restartCalls, 0, 'no workspace override → no remount needed')

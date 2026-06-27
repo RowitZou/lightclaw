@@ -45,6 +45,7 @@ import {
   type ModelShowRow,
 } from './card-specs.js'
 import type { CommandListCardSpec } from './registry.js'
+import type { MountRebuildResult } from './mount-ops.js'
 import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, clearProviderCache } from '../provider/index.js'
 import { resolveEffectiveProxy } from '../provider/proxy.js'
@@ -91,7 +92,7 @@ type ConfigCommandContext = {
   // remounted into the live worker (mirrors `/system mount`'s auto-restart).
   // Absent on minimal callers (tests, non-rlaunch backends) — setWorkspace /
   // resetWorkspace then fall back to the "needs restart" note.
-  restartRlaunch?: () => Promise<string>
+  restartRlaunch?: () => Promise<MountRebuildResult>
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/

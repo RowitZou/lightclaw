@@ -31,7 +31,7 @@ import {
 } from '../artifacts/visual-rendering.js'
 import { suggestPathRules } from '../permission/suggestions.js'
 import { readCacheEntry } from '../provider/capability-cache.js'
-import { shellQuote } from '../runtime/process.js'
+import type { Readable } from 'node:stream'
 import { buildTool, type ToolCallContext } from '../tool.js'
 import type { ToolResultContentBlock, UserToolResultBlock } from '../types.js'
 
@@ -158,75 +158,130 @@ function resolveInputPath(cwd: string, inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(cwd, inputPath)
 }
 
-const STREAM_PLAIN_TEXT_SCRIPT = String.raw`
-import json, sys
-file_path = sys.argv[1]
-offset = int(sys.argv[2])
-limit = None if sys.argv[3] == '' else int(sys.argv[3])
-cap = int(sys.argv[4])
-parts = []
-chars = 0
-selected = 0
-truncated = False
-last_had_newline = False
-with open(file_path, 'rb') as handle:
-    line_no = 0
-    for raw_bytes in handle:
-        line_no += 1
-        last_had_newline = raw_bytes.endswith(b'\n')
-        if line_no < offset:
-            continue
-        if limit is not None and selected >= limit:
-            break
-        line_bytes = raw_bytes[:-1] if last_had_newline else raw_bytes
-        if last_had_newline and line_bytes.endswith(b'\r'):
-            line_bytes = line_bytes[:-1]
-        line = line_bytes.decode('utf-8', errors='replace')
-        rendered = f'{line_no:6d} | {line}'
-        extra = len(rendered.encode('utf-16-le')) // 2 + (1 if parts else 0)
-        if chars + extra > cap:
-            truncated = True
-            break
-        parts.append(rendered)
-        chars += extra
-        selected += 1
-    else:
-        if last_had_newline and (limit is None or selected < limit):
-            line_no += 1
-            if line_no >= offset:
-                rendered = f'{line_no:6d} | '
-                extra = len(rendered.encode('utf-16-le')) // 2 + (1 if parts else 0)
-                if chars + extra > cap:
-                    truncated = True
-                else:
-                    parts.append(rendered)
-text = '\n'.join(parts) if parts else '[no lines selected]'
-sys.stdout.write(json.dumps({'text': text, 'truncated': truncated}))
-`.trim()
+type PlainTextRead = { text: string; truncated: boolean }
 
+type PlainTextState = {
+  parts: string[]
+  chars: number
+  lineNo: number
+  selected: number
+  truncated: boolean
+}
+
+/** Render one line into the line-numbered, char-capped accumulator. Returns
+ *  'stop' once `limit` lines or the MAX_MAX_CHARS budget is reached. Char
+ *  counting is UTF-16 code units (JS `.length`), matching the historical
+ *  formatLines + the `+1` per inter-line newline. */
+function emitPlainTextLine(
+  state: PlainTextState,
+  line: string,
+  offset: number,
+  limit: number | undefined,
+): 'continue' | 'stop' {
+  state.lineNo += 1
+  if (state.lineNo < offset) return 'continue'
+  if (limit !== undefined && state.selected >= limit) return 'stop'
+  const rendered = `${String(state.lineNo).padStart(6, ' ')} | ${line}`
+  const extra = rendered.length + (state.parts.length > 0 ? 1 : 0)
+  if (state.chars + extra > MAX_MAX_CHARS) {
+    state.truncated = true
+    return 'stop'
+  }
+  state.parts.push(rendered)
+  state.chars += extra
+  state.selected += 1
+  return 'continue'
+}
+
+function finalizePlainText(state: PlainTextState): PlainTextRead {
+  return {
+    text: state.parts.length > 0 ? state.parts.join('\n') : '[no lines selected]',
+    truncated: state.truncated,
+  }
+}
+
+/** Daemon-side text read: line-numbered output capped at MAX_MAX_CHARS,
+ *  reading only as far as the cap requires (bounded memory, no whole-file
+ *  buffer). In-workspace / shared paths stream the gpfs file directly
+ *  (zero-copy, no worker exec); container-local / worker-only-mount paths
+ *  stream a relay-staged copy. Backends/paths without a stream accessor fall
+ *  back to a bounded whole-file read with identical cap logic. */
 async function readPlainTextStreamed(
   context: ToolCallContext,
   filePath: string,
   offset: number,
   limit?: number,
-): Promise<{ text: string; truncated: boolean }> {
-  const command = [
-    'python3',
-    '-c', shellQuote(STREAM_PLAIN_TEXT_SCRIPT),
-    shellQuote(filePath),
-    String(offset),
-    limit === undefined ? "''" : String(limit),
-    String(MAX_MAX_CHARS),
-  ].join(' ')
-  const result = await context.runtime.exec({
-    command,
-    abortSignal: context.abortSignal,
-    maxBufferBytes: 1024 * 1024,
-  })
-  if (result.exitCode !== 0) {
-    throw new Error(`readFile ${filePath}: ${result.stderr.trim() || result.stdout.trim()}`)
+): Promise<PlainTextRead> {
+  const make = context.runtime.fs.createReadStream
+  if (make) {
+    let stream: Readable | null = null
+    try {
+      stream = await make.call(context.runtime.fs, filePath)
+    } catch {
+      // No stream accessor for this path (e.g. an exec-relay layer without
+      // createReadStream): fall through to the buffered read below.
+      stream = null
+    }
+    if (stream) return readPlainTextFromStream(stream, offset, limit)
   }
-  return JSON.parse(result.stdout) as { text: string; truncated: boolean }
+  const content = (await context.runtime.fs.readFile(filePath)).toString('utf8')
+  return readPlainTextFromBuffer(content, offset, limit)
+}
+
+function readPlainTextFromBuffer(
+  content: string,
+  offset: number,
+  limit: number | undefined,
+): PlainTextRead {
+  const state: PlainTextState = { parts: [], chars: 0, lineNo: 0, selected: 0, truncated: false }
+  for (const line of content.split(/\r?\n/)) {
+    if (emitPlainTextLine(state, line, offset, limit) === 'stop') break
+  }
+  return finalizePlainText(state)
+}
+
+async function readPlainTextFromStream(
+  stream: Readable,
+  offset: number,
+  limit: number | undefined,
+): Promise<PlainTextRead> {
+  stream.setEncoding('utf8')
+  const state: PlainTextState = { parts: [], chars: 0, lineNo: 0, selected: 0, truncated: false }
+  let buf = ''
+  let stopped = false
+  try {
+    outer: for await (const chunk of stream as AsyncIterable<string>) {
+      buf += chunk
+      let match: RegExpExecArray | null
+      while ((match = /\r?\n/.exec(buf)) !== null) {
+        const line = buf.slice(0, match.index)
+        buf = buf.slice(match.index + match[0].length)
+        if (emitPlainTextLine(state, line, offset, limit) === 'stop') {
+          stopped = true
+          break outer
+        }
+      }
+      // Bound memory on a single line longer than the whole cap.
+      if (buf.length > MAX_MAX_CHARS) {
+        if (state.lineNo + 1 >= offset && (limit === undefined || state.selected < limit)) {
+          emitPlainTextLine(state, buf, offset, limit) // exceeds cap → truncated → stop
+          stopped = true
+          break outer
+        }
+        // A skipped (pre-offset) line: discard its content; its terminating
+        // newline still advances lineNo when it arrives.
+        buf = ''
+      }
+    }
+  } finally {
+    stream.destroy()
+  }
+  if (!stopped) {
+    // Final segment after the last newline — always emitted to mirror
+    // `content.split(/\r?\n/)` (a trailing newline yields an empty final line).
+    emitPlainTextLine(state, buf, offset, limit)
+  }
+  return finalizePlainText(state)
 }
 
 const DESCRIPTION = [

@@ -9,6 +9,7 @@ import { FeishuDedup } from './dedup.js'
 import type { PairingCardAction } from './pairing-card.js'
 import type { AskUserCardAction } from './askuser-card.js'
 import type { CircuitBreakerCardAction } from './circuit-breaker-card.js'
+import type { MountApprovalCardAction } from './mount-approval-card.js'
 import type {
   FeishuCardAction,
   FeishuCardActionResponse,
@@ -101,7 +102,7 @@ export async function startFeishuWsClient(input: {
    */
   onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction,
+    action: FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction | MountApprovalCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -135,7 +136,9 @@ export async function startFeishuWsClient(input: {
             ? action.applicationToken
             : 'taskId' in action
               ? action.taskId
-              : action.id
+              : 'fileset' in action
+                ? action.fileset
+                : action.id
     process.stderr.write(
       `feishu ws: card action request=${actionId} action=${action.action}\n`,
     )
@@ -241,7 +244,7 @@ export async function startFeishuWsClient(input: {
 
 export function normalizeCardAction(
   data: unknown,
-): FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction | null {
+): FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction | MountApprovalCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -254,7 +257,8 @@ export function normalizeCardAction(
     value?.kind !== 'lightclaw_permission' &&
     value?.kind !== 'lightclaw_pairing' &&
     value?.kind !== 'lightclaw_askuser' &&
-    value?.kind !== 'lightclaw_circuit_breaker'
+    value?.kind !== 'lightclaw_circuit_breaker' &&
+    value?.kind !== 'lightclaw_mount_rw'
   ) {
     return null
   }
@@ -288,6 +292,26 @@ export function normalizeCardAction(
       kind: 'lightclaw_pairing',
       action: actionKind,
       applicationToken,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
+    }
+  }
+
+  if (value.kind === 'lightclaw_mount_rw') {
+    const actionKind = value.action === 'approve' || value.action === 'reject' ? value.action : null
+    const user = stringValue(value.user)
+    const fileset = stringValue(value.fileset)
+    const path = stringValue(value.path)
+    if (!actionKind || !user || !fileset || !path) {
+      return null
+    }
+    const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
+    return {
+      kind: 'lightclaw_mount_rw',
+      action: actionKind,
+      user,
+      fileset,
+      path,
       ...(operatorOpenId ? { operatorOpenId } : {}),
       ...(openMessageId ? { openMessageId } : {}),
     }

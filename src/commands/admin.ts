@@ -16,19 +16,13 @@ import {
 import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
 import { listActiveCanonicalUsers } from '../identity/store.js'
-import { getRuntimePool } from '../state.js'
 import {
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
-  saveUserRlaunchMounts,
-  userMountToRuntimeMount,
 } from '../runtime/rlaunch-mounts.js'
-import {
-  approveMountRw,
-  filesetKeyFromGpfsMount,
-  loadMountRwApprovals,
-  revokeMountRw,
-} from '../runtime/mount-authz.js'
+import { loadMountRwApprovals, type MountReport } from '../runtime/mount-authz.js'
+import { approveUserMountRw, mountFilesetForPath, revokeUserMountRw } from './mount-ops.js'
+import { notifyMountReportToUser } from '../channels/feishu/mount-approval-card.js'
 
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
@@ -224,28 +218,29 @@ async function runAdminMountInner(parts: string[], config: LightClawConfig): Pro
   const target = parts[2]
   if (!user || !target) return `${t('admin.mount.usage')}\n`
   const fileset = resolveAdminMountFileset(user, target, config)
-  const before = loadMountRwApprovals(user)
   if (verb === 'approve') {
-    const pendingPaths = new Set(
-      before.pending.filter(entry => entry.fileset === fileset).map(entry => entry.path),
-    )
-    approveMountRw(user, fileset)
-    const mounts = loadUserRlaunchMounts(user)
-    const next = mounts.map(mount => pendingPaths.has(mount.path) ? { ...mount, mode: 'rw' as const } : mount)
-    saveUserRlaunchMounts(user, next)
-    const worker = await restartAdminTargetRlaunch(user, config)
-    return `${t('admin.mount.approved', { user, fileset, worker })}\n`
+    const { report } = await approveUserMountRw(user, fileset, config)
+    const scoped = scopeMountReport(report, fileset)
+    // The requester is not at this slash — push the read-only / unmountable
+    // outcome to their DM (best-effort; no-ops without a channel).
+    await notifyMountReportToUser(user, scoped)
+    return `${t('admin.mount.approved', { user, fileset })}${adminMountNote(scoped)}\n`
   }
-  revokeMountRw(user, fileset)
-  const mounts = loadUserRlaunchMounts(user)
-  const next = mounts.map(mount =>
-    mount.mode === 'rw' && mountFileset(mount.path, config) === fileset
-      ? { ...mount, mode: 'ro' as const }
-      : mount,
-  )
-  saveUserRlaunchMounts(user, next)
-  const worker = await restartAdminTargetRlaunch(user, config)
-  return `${t('admin.mount.revoked', { user, fileset, worker })}\n`
+  await revokeUserMountRw(user, fileset, config)
+  return `${t('admin.mount.revoked', { user, fileset })}\n`
+}
+
+function scopeMountReport(report: MountReport, fileset: string): MountReport {
+  return {
+    degraded: report.degraded.filter(issue => issue.fileset === fileset),
+    unmountable: report.unmountable.filter(issue => issue.fileset === fileset),
+  }
+}
+
+function adminMountNote(report: MountReport): string {
+  if (report.unmountable.length > 0) return ` ${t('admin.mount.note.unmountable')}`
+  if (report.degraded.length > 0) return ` ${t('admin.mount.note.degraded')}`
+  return ''
 }
 
 function resolveAdminMountFileset(
@@ -261,24 +256,7 @@ function resolveAdminMountFileset(
   const normalized = normalizeRlaunchMountPath(target)
   const mount = loadUserRlaunchMounts(user).find(entry => entry.path === normalized)
   if (!mount) throw new Error(`Mount not found for ${user}: ${normalized}`)
-  return mountFileset(mount.path, config)
-}
-
-function mountFileset(mountPath: string, config: LightClawConfig): string {
-  const runtimeMount = userMountToRuntimeMount(
-    { path: mountPath, mode: 'ro' },
-    config.runtime.clusterSettings,
-  )
-  return filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
-}
-
-async function restartAdminTargetRlaunch(user: string, config: LightClawConfig): Promise<string> {
-  if (config.runtime.backend !== 'cluster' || config.runtime.driver !== 'brainpp') {
-    return '<not-cluster>'
-  }
-  const next = getRuntimePool().swapRlaunchRuntime(user, config)
-  await next.start('admin mount authorization changed')
-  return next.name ?? '<scheduling>'
+  return mountFilesetForPath(mount.path, config)
 }
 
 // ── ops nouns ────────────────────────────────────────────────────────────────

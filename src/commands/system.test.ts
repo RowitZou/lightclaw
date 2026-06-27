@@ -115,7 +115,7 @@ describe('/system command', () => {
   it('routes `mount rm <path>` to the mount remove path', async () => {
     const dataPath = path.join(gpfsRoot, 'datasets')
     mkdirSync(dataPath, { recursive: true })
-    const deps = { restartRlaunch: async () => 'worker-1' }
+    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { degraded: [], unmountable: [] } }) }
     await runSystemCommand(`mount add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 

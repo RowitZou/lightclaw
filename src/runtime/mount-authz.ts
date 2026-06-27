@@ -36,22 +36,48 @@ export function observePuyuclawMode(procMounts: string, workerPath: string): Obs
   return 'none'
 }
 
+/** One mount's authorization outcome. Soft conditions (storage didn't mount
+ *  the path at all, or only granted read-only where read-write was approved)
+ *  are reported, not thrown — they degrade gracefully instead of failing the
+ *  whole worker. Only a genuine privilege-escalation risk (wanting ro but the
+ *  kernel remount can't enforce it) stays a hard failure, handled at the call
+ *  site. */
+export type MountGrant =
+  | { status: 'ok'; mode: RequestedMountMode }
+  | { status: 'degraded-ro'; mode: 'ro' }
+  | { status: 'unmountable' }
+
+/** One path that could not be granted as requested, for user/admin reporting. */
+export type MountIssue = { fileset: string; path: string }
+
+/** Per-rebuild summary of mounts that did not land as requested. */
+export type MountReport = { degraded: MountIssue[]; unmountable: MountIssue[] }
+
 export function resolveGrantedMode(
   requestedMode: RequestedMountMode,
   puyuclawMode: ObservedMountMode,
   adminApproved: boolean,
-): RequestedMountMode {
+): MountGrant {
   if (puyuclawMode === 'none') {
-    throw new Error('runtime mount is not mounted for the daemon service identity')
+    // Storage never mounted this path into the worker (wrong path, or the
+    // service identity has no access at all). Nothing to serve and nothing
+    // to enforce — caller skips it and keeps the worker up.
+    return { status: 'unmountable' }
   }
-  if (requestedMode === 'ro') return 'ro'
+  if (requestedMode === 'ro') return { status: 'ok', mode: 'ro' }
   if (!adminApproved) {
+    // Unreachable: the config layer forces effectiveMode to ro for unapproved
+    // rw, so requestedMode is never 'rw' without approval here. Kept as a loud
+    // assertion against a future config-build regression.
     throw new Error('read-write runtime mount requires admin approval')
   }
   if (puyuclawMode !== 'rw') {
-    throw new Error('read-write runtime mount was approved, but the service identity mount is read-only')
+    // Approved for read-write, but the storage only grants the service identity
+    // read-only. Serve read-only; the approval persists, so a later re-mount
+    // once the user gains write access upgrades without re-approval.
+    return { status: 'degraded-ro', mode: 'ro' }
   }
-  return 'rw'
+  return { status: 'ok', mode: 'rw' }
 }
 
 export function buildReadOnlyRemountCommand(workerPath: string): string {

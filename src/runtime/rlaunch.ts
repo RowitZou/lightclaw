@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import * as fsp from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import path from 'node:path'
 
 import type {
@@ -22,8 +23,10 @@ import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
   buildReadOnlyRemountCommand,
+  filesetKeyFromGpfsMount,
   observePuyuclawMode,
   resolveGrantedMode,
+  type MountReport,
 } from './mount-authz.js'
 import {
   deleteWorkerRecord,
@@ -173,6 +176,10 @@ export class RlaunchRuntime implements Runtime {
   private provisionDriveFor: string | null = null
   private mountAuthReadyFor: string | null = null
   private inflightMountAuth: Promise<void> | null = null
+  /** Mounts from the last applyMountAuthorizations pass that did not land as
+   *  requested (storage absent, or rw approved but storage only ro). Read once
+   *  by a mount-change rebuild via consumeMountReport(). */
+  private lastMountReport: MountReport = { degraded: [], unmountable: [] }
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -641,6 +648,29 @@ export class RlaunchRuntime implements Runtime {
         await fsp.rm(stageHost, { force: true }).catch(() => {})
       }
     },
+    createReadStream: async pathname => {
+      // Streaming sibling of readFile: stage the (possibly container-local /
+      // worker-only-mount) file onto the gpfs-backed scratch dir with `cp`,
+      // then stream it host-side. Bytes never traverse brainctl; the scratch
+      // copy is removed once the stream closes (end / error / destroy all emit
+      // 'close'). Lets callers cap output without buffering the whole file.
+      const containerPath = this.toContainerPath(pathname)
+      const id = this.execScratchId()
+      const stageContainer = path.posix.join(this.execScratchDirContainer(), `${id}.read`)
+      const stageHost = this.toHostPath(stageContainer)
+      if (!stageHost) {
+        throw new Error(`createReadStream ${pathname}: cannot resolve a host-visible scratch path`)
+      }
+      const result = await this.exec({
+        command: `cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
+      })
+      if (result.exitCode !== 0) {
+        throw new Error(`createReadStream ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+      }
+      const stream = createReadStream(stageHost)
+      stream.once('close', () => { void fsp.rm(stageHost, { force: true }).catch(() => {}) })
+      return stream
+    },
     writeFile: async (pathname, content) => {
       // Write the payload to the gpfs-backed scratch dir host-side (zero-copy,
       // byte-exact), then `cp` it into place inside the worker. No base64, no
@@ -870,18 +900,52 @@ export class RlaunchRuntime implements Runtime {
     return this.inflightMountAuth
   }
 
+  /** Read and clear the mount issues recorded by the last authorization pass.
+   *  Called by a mount-change rebuild (see mount-ops.ts) so the user / admin
+   *  can be told which paths landed degraded or could not be mounted. */
+  consumeMountReport(): MountReport {
+    const report = this.lastMountReport
+    this.lastMountReport = { degraded: [], unmountable: [] }
+    return report
+  }
+
+  /** Wait for the worker to be running and its mounts authorized (skips the
+   *  slower helper-staging step), then return + clear the mount report. The
+   *  rebuild path awaits this so its slash / card response can reflect the
+   *  actual mount outcome. */
+  async applyMountsAndReport(): Promise<MountReport> {
+    await this.waitUntilRunning()
+    await this.ensureMountAuthorizations()
+    return this.consumeMountReport()
+  }
+
   private async applyMountAuthorizations(): Promise<void> {
     const mounts = this.cfg.extraMounts ?? []
-    if (mounts.length === 0) {
-      this.mountAuthReadyFor = this.workerName
-      return
-    }
+    const degraded: MountReport['degraded'] = []
+    const unmountable: MountReport['unmountable'] = []
     for (const mount of mounts) {
       const before = await this.readProcMounts()
       const observed = observePuyuclawMode(before, mount.workerPath)
       const requested = mount.requestedMode ?? mount.mode
-      const granted = resolveGrantedMode(requested, observed, mount.adminApproved === true)
-      if (granted === 'ro' && observed === 'rw') {
+      const grant = resolveGrantedMode(requested, observed, mount.adminApproved === true)
+      const issue = {
+        fileset: mount.fileset ?? filesetKeyFromGpfsMount(mount.gpfsMount),
+        path: mount.workerPath,
+      }
+      if (grant.status === 'unmountable') {
+        // Storage never mounted this path — leave the worker up without it.
+        unmountable.push(issue)
+        continue
+      }
+      if (grant.status === 'degraded-ro') {
+        // Approved rw, but storage only grants ro: it is already mounted ro,
+        // so there is nothing to enforce — just record the downgrade.
+        degraded.push(issue)
+        continue
+      }
+      if (grant.mode === 'ro' && observed === 'rw') {
+        // Wanted ro but storage mounted rw: this MUST be enforced or it is a
+        // privilege escalation, so a failure here is a hard error.
         const result = await this.runBrainctlExec({
           command: buildReadOnlyRemountCommand(mount.workerPath),
           timeoutMs: 30_000,
@@ -899,6 +963,7 @@ export class RlaunchRuntime implements Runtime {
         }
       }
     }
+    this.lastMountReport = { degraded, unmountable }
     this.mountAuthReadyFor = this.workerName
   }
 

@@ -39,6 +39,7 @@ import { runAdminCommand } from './admin.js'
 import { runConfigCommand } from './config.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runSystemCommand } from './system.js'
+import type { MountRebuildResult } from './mount-ops.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -70,7 +71,7 @@ export function createBuiltinReplRegistry(
   return registry
 }
 
-async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
+async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<MountRebuildResult> {
   const userId = ctx.userId ?? getCurrentUserId()
   if (!userId) {
     throw new Error(t('common.error.noActiveIdentity'))
@@ -88,7 +89,8 @@ async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
   const next = getRuntimePool().swapRlaunchRuntime(userId, ctx.config)
   setRuntime(next)
   await next.start()
-  return next.name ?? t('sandbox.workerNone')
+  const report = await next.applyMountsAndReport()
+  return { worker: next.name ?? t('sandbox.workerNone'), report }
 }
 
 function buildBuiltinCommands(): ReplCommand[] {

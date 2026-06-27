@@ -18,12 +18,15 @@ test('observePuyuclawMode reads the effective ro/rw flag from /proc/mounts', () 
 })
 
 test('resolveGrantedMode makes ro automatic and gates rw on admin plus puyuclaw rw', () => {
-  assert.equal(resolveGrantedMode('ro', 'ro', false), 'ro')
-  assert.equal(resolveGrantedMode('ro', 'rw', false), 'ro')
-  assert.equal(resolveGrantedMode('rw', 'rw', true), 'rw')
+  assert.deepEqual(resolveGrantedMode('ro', 'ro', false), { status: 'ok', mode: 'ro' })
+  assert.deepEqual(resolveGrantedMode('ro', 'rw', false), { status: 'ok', mode: 'ro' })
+  assert.deepEqual(resolveGrantedMode('rw', 'rw', true), { status: 'ok', mode: 'rw' })
+  // Unreachable double-gate assertion: config layer never sends unapproved rw.
   assert.throws(() => resolveGrantedMode('rw', 'rw', false), /admin approval/)
-  assert.throws(() => resolveGrantedMode('rw', 'ro', true), /read-only/)
-  assert.throws(() => resolveGrantedMode('ro', 'none', false), /not mounted/)
+  // Approved rw but storage only ro: degrade to ro instead of failing.
+  assert.deepEqual(resolveGrantedMode('rw', 'ro', true), { status: 'degraded-ro', mode: 'ro' })
+  // Storage never mounted the path: report unmountable instead of failing.
+  assert.deepEqual(resolveGrantedMode('ro', 'none', false), { status: 'unmountable' })
 })
 
 test('read-only downgrade uses a self-bind followed by a bind remount', () => {

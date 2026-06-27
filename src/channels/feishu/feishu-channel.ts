@@ -37,6 +37,12 @@ import {
   registerCircuitBreakerCardCoordinator,
   type CircuitBreakerCardAction,
 } from './circuit-breaker-card.js'
+import {
+  MountApprovalCoordinator,
+  clearMountApprovalCoordinator,
+  registerMountApprovalCoordinator,
+  type MountApprovalCardAction,
+} from './mount-approval-card.js'
 import { AskUserScheduler } from './askuser-scheduler.js'
 import { registerSessionAbortHook } from '../../state.js'
 import { getBackgroundTaskScheduler } from '../../background-task/scheduler.js'
@@ -118,8 +124,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           getBackgroundTaskScheduler().notifyTaskChanged(canonicalUser, taskId),
       })
       const askUserScheduler = new AskUserScheduler()
+      const mountApprovalCoordinator = new MountApprovalCoordinator(sender)
       registerAskUserQuestionCoordinator(askUserCoordinator)
       registerCircuitBreakerCardCoordinator(circuitBreakerCoordinator)
+      registerMountApprovalCoordinator(mountApprovalCoordinator)
       // Bridge `/stop` (state.ts) to the AskUser coordinator without
       // making state.ts depend on the feishu module. state.ts only knows
       // about an opaque session abort hook; we register ours here.
@@ -263,6 +271,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             if ('kind' in action && action.kind === 'lightclaw_circuit_breaker') {
               return circuitBreakerCoordinator.handleCardAction(action as CircuitBreakerCardAction)
             }
+            if ('kind' in action && action.kind === 'lightclaw_mount_rw') {
+              return mountApprovalCoordinator.handleCardAction(action as MountApprovalCardAction)
+            }
             return permissionCoordinator.handleCardAction(action as FeishuCardAction)
           },
         })
@@ -276,6 +287,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             setTaskCardPipeline(null)
             clearAskUserQuestionCoordinator(askUserCoordinator)
             clearCircuitBreakerCardCoordinator(circuitBreakerCoordinator)
+            clearMountApprovalCoordinator(mountApprovalCoordinator)
             clearFeishuSender(sender)
             clearFeishuClient(client)
             clearChannelRunner(runner)
@@ -301,6 +313,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           setTaskCardPipeline(null)
           clearAskUserQuestionCoordinator(askUserCoordinator)
           clearCircuitBreakerCardCoordinator(circuitBreakerCoordinator)
+          clearMountApprovalCoordinator(mountApprovalCoordinator)
           clearFeishuSender(sender)
           clearFeishuClient(client)
           return server.close()

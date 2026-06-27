@@ -54,7 +54,7 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return `worker-${restartCount}`
+        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
       },
     }
 
@@ -66,7 +66,7 @@ describe('/mount command', () => {
     const added = await runMount(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
     assert.match(added, /mode: ro/)
-    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(added, /Applied to the Agent; no restart required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 
     const unchanged = await runMount(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
@@ -76,7 +76,7 @@ describe('/mount command', () => {
     approveMountRw('alice', 'gpfs://gpfs1/datasets')
     const updated = await runMount(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Updated mount:/)
-    assert.match(updated, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(updated, /Applied to the Agent; no restart required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
     const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
@@ -87,7 +87,7 @@ describe('/mount command', () => {
 
     const removed = await runMount(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(removed, /Unmounted:/)
-    assert.match(removed, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(removed, /Applied to the Agent; no restart required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
@@ -102,7 +102,7 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return `worker-${restartCount}`
+        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
       },
     }
 
@@ -114,7 +114,7 @@ describe('/mount command', () => {
     assert.match(added, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(added, new RegExp(escapeRegExp(`- ${dataB}`)))
     assert.match(added, /mode: rw/)
-    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(added, /Applied to the Agent; no restart required/)
     assert.equal(restartCount, 1)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'rw' },
@@ -124,7 +124,7 @@ describe('/mount command', () => {
     const updated = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Mounted:/)
     assert.match(updated, /Updated mounts:/)
-    assert.match(updated, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(updated, /Applied to the Agent; no restart required/)
     assert.equal(restartCount, 2)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'ro' },
@@ -141,7 +141,7 @@ describe('/mount command', () => {
     assert.match(removed, /Unmounted:/)
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataB}`)))
-    assert.match(removed, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(removed, /Applied to the Agent; no restart required/)
     assert.equal(restartCount, 3)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'ro' }])
   })
@@ -154,7 +154,7 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return `worker-${restartCount}`
+        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
       },
     }
 
@@ -164,21 +164,21 @@ describe('/mount command', () => {
       deps,
     )
     assert.match(added, /Mounted:/)
-    assert.match(added, /Sandbox worker rebuilt; daemon restart not required/)
+    assert.match(added, /Applied to the Agent; no restart required/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
   })
 
   it('queues unapproved rw requests and mounts them read-only until approval', async () => {
     const dataPath = path.join(gpfsRoot, 'approval-data')
     mkdirSync(dataPath, { recursive: true })
-    const deps = { restartRlaunch: async () => 'worker-1' }
+    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { degraded: [], unmountable: [] } }) }
 
     const pending = await runMount(
       `add ${dataPath} --rw`,
       { config: makeConfig(), userId: 'alice' },
       deps,
     )
-    assert.match(pending, /pending admin approval/)
+    assert.match(pending, /needs admin approval/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
     assert.equal(loadMountRwApprovals('alice').pending[0]?.fileset, 'gpfs://gpfs1/approval-data')
 
@@ -197,7 +197,7 @@ describe('/mount command', () => {
     const added = await runMount(
       `add ${workerOnlyPath} --worker-only`,
       { config: makeConfig(), userId: 'alice' },
-      { restartRlaunch: async () => 'worker-worker-only' },
+      { restartRlaunch: async () => ({ worker: 'worker-worker-only', report: { degraded: [], unmountable: [] } }) },
     )
     assert.match(added, /Mounted:/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{

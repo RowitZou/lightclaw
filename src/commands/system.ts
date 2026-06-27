@@ -23,6 +23,7 @@ import {
 } from './card-specs.js'
 import { requireConfirm } from './confirm.js'
 import { runMountCommand } from './mount.js'
+import type { MountRebuildResult } from './mount-ops.js'
 import type { CommandListCardSpec } from './registry.js'
 import { runSecretCommand } from './secret.js'
 
@@ -70,7 +71,7 @@ function formatSystemUsageCard(): string {
 }
 
 type SystemCommandDeps = {
-  restartRlaunch?: () => Promise<string>
+  restartRlaunch?: () => Promise<MountRebuildResult>
 }
 
 /**

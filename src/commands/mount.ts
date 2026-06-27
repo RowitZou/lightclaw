@@ -18,7 +18,10 @@ import {
   filesetKeyFromGpfsMount,
   isMountRwApproved,
   requestMountRwApproval,
+  type MountReport,
 } from '../runtime/mount-authz.js'
+import { pruneUnmountableMounts, type MountRebuildResult } from './mount-ops.js'
+import { notifyMountRwRequest } from '../channels/feishu/mount-approval-card.js'
 
 type MountCommandContext = {
   config: LightClawConfig
@@ -26,7 +29,7 @@ type MountCommandContext = {
 }
 
 type MountCommandDeps = {
-  restartRlaunch?: () => Promise<string>
+  restartRlaunch?: () => Promise<MountRebuildResult>
 }
 
 export async function runMountCommand(
@@ -85,8 +88,13 @@ export async function runMountCommand(
         return validation
       }
     }
+    const pushedFilesets = new Set<string>()
     for (const [mountPath, fileset] of pendingFilesetByPath) {
       requestMountRwApproval(userId, fileset, mountPath)
+      if (!pushedFilesets.has(fileset)) {
+        pushedFilesets.add(fileset)
+        await notifyMountRwRequest({ user: userId, path: mountPath, fileset })
+      }
     }
     const current = loadUserRlaunchMounts(userId)
     const currentByPath = new Map(current.map(mount => [mount.path, {
@@ -133,7 +141,8 @@ export async function runMountCommand(
           ].join('\n')
     }
     saveUserRlaunchMounts(userId, next)
-    const restart = await restartAfterMountChange(deps)
+    const { line: restart, report: rebuildReport } = await restartAfterMountChange(deps)
+    pruneUnmountableMounts(userId, rebuildReport)
     if (mountPaths.length === 1) {
       return [
         updated.length > 0
@@ -145,6 +154,7 @@ export async function runMountCommand(
         ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
         ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
         restart,
+        ...mountReportNotes(rebuildReport),
         '',
       ].join('\n')
     }
@@ -162,6 +172,7 @@ export async function runMountCommand(
       ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
       ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
       restart,
+      ...mountReportNotes(rebuildReport),
       '',
     ].join('\n')
   }
@@ -188,7 +199,7 @@ export async function runMountCommand(
           ].join('\n')
     }
     saveUserRlaunchMounts(userId, current.filter(mount => !removeSet.has(mount.path)))
-    const restart = await restartAfterMountChange(deps)
+    const { line: restart } = await restartAfterMountChange(deps)
     if (parsed.length === 1) {
       return [
         t('mount.removedSingle', { path: removed[0] }),
@@ -365,14 +376,34 @@ function formatPathList(paths: readonly string[]): string[] {
   return paths.map(mountPath => `- ${mountPath}`)
 }
 
-async function restartAfterMountChange(deps: MountCommandDeps): Promise<string> {
+const EMPTY_MOUNT_REPORT: MountReport = { degraded: [], unmountable: [] }
+
+async function restartAfterMountChange(
+  deps: MountCommandDeps,
+): Promise<{ line: string; report: MountReport }> {
   if (!deps.restartRlaunch) {
-    return t('mount.restart.skipped')
+    return { line: t('mount.restart.skipped'), report: EMPTY_MOUNT_REPORT }
   }
   try {
-    const worker = await deps.restartRlaunch()
-    return t('mount.restart.done', { worker: worker || '<unknown>' })
+    const result = await deps.restartRlaunch()
+    return { line: t('mount.restart.done', { worker: result.worker || '<unknown>' }), report: result.report }
   } catch (error) {
-    return t('mount.restart.failed', { detail: error instanceof Error ? error.message : String(error) })
+    return {
+      line: t('mount.restart.failed', { detail: error instanceof Error ? error.message : String(error) }),
+      report: EMPTY_MOUNT_REPORT,
+    }
   }
+}
+
+/** Lines describing mounts that landed read-only (storage only grants ro) or
+ *  could not be mounted at all, appended to a mount-change response. */
+function mountReportNotes(report: MountReport): string[] {
+  const notes: string[] = []
+  if (report.degraded.length > 0) {
+    notes.push(t('mount.report.degraded', { paths: report.degraded.map(issue => issue.path).join(', ') }))
+  }
+  if (report.unmountable.length > 0) {
+    notes.push(t('mount.report.unmountable', { paths: report.unmountable.map(issue => issue.path).join(', ') }))
+  }
+  return notes
 }

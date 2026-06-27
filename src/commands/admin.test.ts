@@ -83,7 +83,7 @@ describe('/admin mount rw approvals', () => {
       config: cfg,
       userId: 'admin',
     })
-    assert.match(approved, /Approved read-write mount/)
+    assert.match(approved, /Approved read-write/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: mountPath, mode: 'rw' }])
     assert.deepEqual(loadMountRwApprovals('alice').approved, [
       { fileset: 'gpfs://gpfs1/team', mode: 'rw' },
@@ -93,7 +93,7 @@ describe('/admin mount rw approvals', () => {
       config: cfg,
       userId: 'admin',
     })
-    assert.match(revoked, /Revoked read-write mount/)
+    assert.match(revoked, /Revoked read-write/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: mountPath, mode: 'ro' }])
     assert.deepEqual(loadMountRwApprovals('alice').approved, [])
   })
