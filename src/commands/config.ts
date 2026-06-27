@@ -351,7 +351,7 @@ async function runEndpointSubcommand(
         return (await setEndpoint(userId, parts, ctx)) ?? usageCard()
       case 'remove':
       case 'rm':
-        return removeEndpoint(userId, parts) ?? usageCard()
+        return removeEndpoint(userId, parts, ctx) ?? usageCard()
       default:
         return usageCard()
     }
@@ -803,7 +803,98 @@ async function setEndpoint(
   )
 }
 
-function removeEndpoint(userId: string, parts: string[]): string | null {
+// ── Removal cascade helpers (shared by `endpoint rm` and `backend rm`) ────────
+//
+// Deleting a model touches three places that store a model display-name:
+// `defaultModel`, the three `lane` buckets, and (cascade) any model on a deleted
+// endpoint. Each must be reconciled at the explicit delete action — never left
+// to dangle and surface later as a use-time "Unknown model" error.
+
+const LANE_BUCKET_KEYS = ['worker', 'system', 'image'] as const
+
+// Clear any lane bucket whose bound model is in `removedNames`, returning the
+// buckets that were reset. Unlike `defaultModel` (cleared + re-promoted below),
+// the lane has no write-time membership guard, so a deleted model would
+// otherwise leave a dangling binding that `resolveRoleModel` resolves to a name
+// no longer in the registry. (resolveUserConfig gained a matching read-time
+// guard; clearing here also keeps config.json honest.)
+function clearLaneBindings(obj: Record<string, unknown>, removedNames: string[]): string[] {
+  const lane = asRecord(obj.lane)
+  const cleared: string[] = []
+  for (const bucket of LANE_BUCKET_KEYS) {
+    if (typeof lane[bucket] === 'string' && removedNames.includes(lane[bucket] as string)) {
+      delete lane[bucket]
+      cleared.push(bucket)
+    }
+  }
+  if (Object.keys(lane).length === 0) delete obj.lane
+  else obj.lane = lane
+  return cleared
+}
+
+// Promote a surviving user BYO model to default when the removed set included
+// the user's `defaultModel`. The selection happens HERE — at the explicit
+// delete — not silently at resolution time: deterministic (first remaining BYO
+// by insertion order), announced on the result card, and never drifting as the
+// registry reorders. When no BYO remains the override is left cleared so
+// `resolveUserConfig` falls back to the admin default (or the friendly no-model
+// state). Returns whether the default had been removed (drives the card line).
+function promoteDefaultAfterRemoval(
+  obj: Record<string, unknown>,
+  remainingModels: Record<string, unknown>,
+  removedNames: string[],
+): boolean {
+  const current = obj.defaultModel
+  if (typeof current !== 'string' || !removedNames.includes(current)) return false
+  delete obj.defaultModel
+  const survivor = Object.keys(remainingModels)[0]
+  if (survivor) obj.defaultModel = survivor
+  return true
+}
+
+// Consequence tail shared by both removal paths: what happened to the default
+// model and to any lane bindings. The effective default is re-resolved
+// post-write (over the admin base) so the card reflects the real next-turn state.
+function removalConsequenceLines(
+  userId: string,
+  defaultRemoved: boolean,
+  clearedLanes: string[],
+): string[] {
+  const lines: string[] = []
+  if (defaultRemoved) {
+    const effective = resolveUserConfig(userId, getConfig()).defaultModel
+    lines.push(
+      effective
+        ? t('config.removal.defaultSwitched', { model: effective })
+        : t('config.removal.defaultCleared'),
+    )
+  }
+  if (clearedLanes.length) {
+    lines.push(t('config.removal.laneReset', { buckets: clearedLanes.join(', ') }))
+  }
+  return lines
+}
+
+// Remaining-models card body, with the (default) marker so the user directly
+// SEES which model is the default after a removal.
+function remainingModelsDetails(userId: string): string {
+  const resolved = resolveUserConfig(userId, getConfig())
+  const names = Object.keys(resolved.models)
+  if (!names.length) return t('config.removal.noModelsLeft')
+  return names
+    .map(name => {
+      const entry = resolved.models[name]
+      const marker = name === resolved.defaultModel ? t('config.removal.defaultMarker') : ''
+      return `${name}${marker} (${entry.endpoint} -> ${entry.upstreamModel})`
+    })
+    .join('\n')
+}
+
+function removeEndpoint(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): string | null {
   const [alias] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -832,16 +923,20 @@ function removeEndpoint(userId: string, parts: string[]): string | null {
       removedModels.push(name)
     }
   }
-  if (typeof obj.defaultModel === 'string' && removedModels.includes(obj.defaultModel)) {
-    delete obj.defaultModel
-  }
   obj.endpoints = endpoints
   obj.models = models
+  const defaultRemoved = promoteDefaultAfterRemoval(obj, models, removedModels)
+  const clearedLanes = clearLaneBindings(obj, removedModels)
   writeEndpointConfig(userId, obj)
   const modelsNote = removedModels.length
     ? t('config.endpoint.removedModels', { models: removedModels.join(', ') })
     : ''
-  return `${t('config.endpoint.removed', { name: alias, models: modelsNote })}\n`
+  return entryResultCard(
+    ctx,
+    t('config.endpoint.removed', { name: alias, models: modelsNote }),
+    remainingModelsDetails(userId),
+    removalConsequenceLines(userId, defaultRemoved, clearedLanes),
+  )
 }
 
 // ── /config backend <verb> (BYO model registry, B3 ←/config model BYO) ───────
@@ -887,7 +982,7 @@ async function runBackendSubcommand(
         return (await checkBackend(userId, parts, ctx)) ?? usageCard()
       case 'remove':
       case 'rm':
-        return removeBackend(userId, parts) ?? usageCard()
+        return removeBackend(userId, parts, ctx) ?? usageCard()
       default:
         return usageCard()
     }
@@ -1131,7 +1226,11 @@ async function setBackend(
   )
 }
 
-function removeBackend(userId: string, parts: string[]): string | null {
+function removeBackend(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): string | null {
   const [displayName] = parts
   if (!displayName) return null
   const obj = readUserConfig(userId)
@@ -1141,9 +1240,15 @@ function removeBackend(userId: string, parts: string[]): string | null {
   }
   delete models[displayName]
   obj.models = models
-  if (obj.defaultModel === displayName) delete obj.defaultModel
+  const defaultRemoved = promoteDefaultAfterRemoval(obj, models, [displayName])
+  const clearedLanes = clearLaneBindings(obj, [displayName])
   writeUserConfig(userId, obj)
-  return `${t('config.backend.removed', { name: displayName })}\n`
+  return entryResultCard(
+    ctx,
+    t('config.backend.removed', { name: displayName }),
+    remainingModelsDetails(userId),
+    removalConsequenceLines(userId, defaultRemoved, clearedLanes),
+  )
 }
 
 // `backend check <name>` re-probes the model's capabilities AND clears the

@@ -1271,3 +1271,95 @@ describe('/config backend add — probe defers reasoning effort to the model con
     assert.ok((readUserConfigJson('gptuser').models as Record<string, unknown>)['gpt-5.5'])
   })
 })
+
+describe('/config backend|endpoint rm — removal cascade', () => {
+  // Seed defaultModel + lane onto an already-built BYO config (no slash exists
+  // for lane without a live session; defaultModel scalar needs one too).
+  function seedDefaultAndLane(
+    user: string,
+    defaultModel: string,
+    lane: Record<string, string>,
+  ): void {
+    const cfgJson = readUserConfigJson(user)
+    cfgJson.defaultModel = defaultModel
+    cfgJson.lane = lane
+    writeFileSync(userConfigPath(user), JSON.stringify(cfgJson))
+  }
+
+  it('backend rm promotes a surviving BYO to default and clears the dangling lane', async () => {
+    const cfg = modelConfig()
+    const user = 'rmb'
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: user,
+    })
+    await runConfigCommand('backend add modelA --endpoint ep --upstream up-a', { config: cfg, userId: user })
+    await runConfigCommand('backend add modelB --endpoint ep --upstream up-b', { config: cfg, userId: user })
+    seedDefaultAndLane(user, 'modelA', { worker: 'modelA', system: 'modelB' })
+
+    const out = await runConfigCommand('backend rm modelA', { config: cfg, userId: user })
+
+    const persisted = readUserConfigJson(user)
+    const models = persisted.models as Record<string, unknown>
+    assert.equal('modelA' in models, false)
+    assert.ok('modelB' in models)
+    // Default is promoted to the surviving BYO — NOT left empty (the regression
+    // the user hit: deleting the default model bricked the user).
+    assert.equal(persisted.defaultModel, 'modelB')
+    // The worker lane pointed at the deleted model → cleared; the still-valid
+    // system lane is preserved (pre-fix both survived and dangled).
+    const lane = persisted.lane as Record<string, unknown>
+    assert.equal('worker' in lane, false)
+    assert.equal(lane.system, 'modelB')
+    // Card announces both consequences so the behavior change is perceptible.
+    assert.match(out, /Removed model "modelA"/)
+    assert.match(out, /switched to "modelB"/)
+    assert.match(out, /reset to the default/)
+  })
+
+  it('backend rm of the last model clears the default and the card guides reconfigure', async () => {
+    const cfg = modelConfig()
+    const user = 'rmlast'
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: user,
+    })
+    await runConfigCommand('backend add only --endpoint ep --upstream up', { config: cfg, userId: user })
+    seedDefaultAndLane(user, 'only', {})
+
+    const out = await runConfigCommand('backend rm only', { config: cfg, userId: user })
+
+    const persisted = readUserConfigJson(user)
+    assert.equal('defaultModel' in persisted, false)
+    assert.match(out, /reconfigure/)
+  })
+
+  it('endpoint rm cascades, promotes default off the surviving endpoint, resets dangling lane', async () => {
+    const cfg = modelConfig()
+    const user = 'rme'
+    await runConfigCommand('endpoint add ep1 --type openai --key sk-1 --base-url https://1', {
+      config: cfg,
+      userId: user,
+    })
+    await runConfigCommand('endpoint add ep2 --type openai --key sk-2 --base-url https://2', {
+      config: cfg,
+      userId: user,
+    })
+    await runConfigCommand('backend add modelA --endpoint ep1 --upstream up-a', { config: cfg, userId: user })
+    await runConfigCommand('backend add modelB --endpoint ep2 --upstream up-b', { config: cfg, userId: user })
+    seedDefaultAndLane(user, 'modelA', { worker: 'modelA' })
+
+    const out = await runConfigCommand('endpoint rm ep1 --y', { config: cfg, userId: user })
+
+    const persisted = readUserConfigJson(user)
+    assert.equal('ep1' in (persisted.endpoints as Record<string, unknown>), false)
+    assert.ok('ep2' in (persisted.endpoints as Record<string, unknown>))
+    const models = persisted.models as Record<string, unknown>
+    assert.equal('modelA' in models, false)
+    assert.ok('modelB' in models)
+    assert.equal(persisted.defaultModel, 'modelB')
+    // Only-bucket cleared → the whole lane object is dropped (worker resolved away).
+    assert.equal((persisted.lane as Record<string, unknown> | undefined)?.worker, undefined)
+    assert.match(out, /switched to "modelB"/)
+  })
+})

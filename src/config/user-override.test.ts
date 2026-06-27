@@ -144,6 +144,27 @@ describe('resolveUserConfig', () => {
     assert.deepEqual(resolveUserConfig('bob', base).lane, { worker: 'm', system: 'm', image: 'm' })
   })
 
+  it('lane membership guard: drops a bucket naming a model not in the merged registry', () => {
+    // The user (or an admin) deleted the backend a lane bucket pointed at. The
+    // stale name must be dropped so resolveRoleModel falls back to defaultModel
+    // instead of resolving a dangling name → getProviderFor "Unknown model".
+    // Pre-fix the raw user value was returned verbatim and dangled.
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeUserConfigJson('alice', { lane: { worker: 'ghost-deleted', system: 'm' } })
+    const resolved = resolveUserConfig('alice', base)
+    assert.equal(resolved.lane.worker, undefined) // dangling → dropped → falls back to default
+    assert.equal(resolved.lane.system, 'm') // still in registry → kept
+  })
+
+  it('lane membership guard: drops a dangling admin bucket the user did not override', () => {
+    // The guard also covers the admin-deletes-a-model case: admin getConfig()
+    // strips its own lane, but a per-user resolve must not re-admit a stale base
+    // bucket either. (Here base.lane.worker names a model absent from MODELS.)
+    const base = makeBase({ defaultModel: 'm', models: MODELS, lane: { worker: 'gone' } })
+    const resolved = resolveUserConfig('alice', base)
+    assert.equal(resolved.lane.worker, undefined)
+  })
+
   it('lang override: user lang wins, else base lang', () => {
     const base = makeBase({ defaultModel: 'm', models: MODELS, lang: 'cn' })
     writeUserConfigJson('alice', { lang: 'en' })

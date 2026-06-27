@@ -382,14 +382,26 @@ export function resolveUserConfig(
   // Lane merge: per-bucket user-over-admin precedence. A non-empty user bucket
   // wins; an empty-string / absent user bucket falls through to admin's. Mirrors
   // how `defaultModel` resolves user-then-admin below, applied per bucket.
+  //
+  // Membership guard: a chosen bucket value that names a model NOT in the merged
+  // registry (most commonly: the user deleted the backend the bucket pointed at)
+  // is dropped to `undefined` so `resolveRoleModel` / `resolveToolModuleModel`
+  // fall back to `defaultModel` instead of returning a dangling name that makes
+  // `getProviderFor` throw "Unknown model …" at use time. This mirrors the
+  // membership guard `defaultModel` already has below. `removeBackend` /
+  // `removeEndpoint` also clear dangling buckets at write time; this read-time
+  // guard backstops already-broken config.json files and the admin-deletes-a-
+  // model-a-user-lane-points-at case.
+  const mergedModels = { ...base.models, ...userModels }
   const mergeLaneBucket = (
     bucket: 'worker' | 'system' | 'image',
   ): string | undefined => {
-    const userValue = override.lane?.[bucket]
-    if (userValue && userValue.trim()) {
-      return userValue
+    const userValue = override.lane?.[bucket]?.trim()
+    const chosen = userValue || base.lane[bucket]
+    if (chosen && mergedModels[chosen]) {
+      return chosen
     }
-    return base.lane[bucket]
+    return undefined
   }
   const lane = {
     ...(mergeLaneBucket('worker') !== undefined ? { worker: mergeLaneBucket('worker') } : {}),
