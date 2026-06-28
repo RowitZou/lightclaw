@@ -32,6 +32,7 @@ import {
 } from './skill/role-validation.js'
 import { DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER } from './skill/dispatch-brief.js'
 import type { SkillMeta } from './skill/types.js'
+import { loadUserRlaunchMounts } from './runtime/rlaunch-mounts.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -651,6 +652,7 @@ function formatEnvironmentSection(
       `deliverable sitting in scratch.`,
     )
   }
+  lines.push(...formatMountedPathsLines(config))
   lines.push(
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     formatCurrentDateLine(),
@@ -659,6 +661,35 @@ function formatEnvironmentSection(
     `Model: ${resolveRoleModel(role, config)}`,
   )
   return lines.join('\n')
+}
+
+// Paths mounted into the sandbox beyond the workspace, with the access each one
+// grants. Surfacing the mode lets the agent skip a write that would fail on a
+// read-only path. Source depends on the backend: cluster reads the user's own
+// mount list (mode is the storage's observed mode), docker reads the admin's
+// static bind mounts; local has no extra mounts.
+function formatMountedPathsLines(config: LightClawConfig): string[] {
+  const mounts = collectAgentVisibleMounts(config)
+  if (mounts.length === 0) return []
+  return [
+    '',
+    'Mounted paths:',
+    ...mounts.map(m => `- ${m.path} — ${m.mode === 'rw' ? 'read-write' : 'read-only'}`),
+    'A read-only path can be read but not written; any write to it fails.',
+  ]
+}
+
+function collectAgentVisibleMounts(config: LightClawConfig): { path: string; mode: 'ro' | 'rw' }[] {
+  const backend = config.runtime?.backend
+  if (backend === 'cluster') {
+    const userId = getCurrentUserId()
+    if (!userId) return []
+    return loadUserRlaunchMounts(userId).map(m => ({ path: m.path, mode: m.mode }))
+  }
+  if (backend === 'docker') {
+    return (config.runtime.dockerSettings?.mounts ?? []).map(m => ({ path: m.container, mode: m.mode }))
+  }
+  return []
 }
 
 function formatRoleSkillsSection(
