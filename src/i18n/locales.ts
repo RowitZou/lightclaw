@@ -669,11 +669,11 @@ export const LOCALES = {
     'card.system.key.note': '密钥值保存后不再显示；建议用一次性 / 可吊销的令牌（它会进入聊天记录）。',
     'card.system.mount.showHeading': '已挂载的路径',
     'card.system.mount.empty': '还没有挂载任何路径',
-    'card.system.mount.sub.add.cmd': 'add <路径> [--ro|--rw]',
+    'card.system.mount.sub.add.cmd': 'add <路径>',
     'card.system.mount.sub.add.desc': '挂载一个路径供 Agent 访问',
     'card.system.mount.sub.rm.cmd': 'rm <路径>',
     'card.system.mount.sub.rm.desc': '取消挂载某个路径',
-    'card.system.mount.note': '默认只读；加 --rw 申请读写（需管理员批准）。',
+    'card.system.mount.note': '挂载权限由集群按你对该路径的访问自动判定（只读 / 读写）。',
     'card.system.data.sub.export.cmd': 'export',
     'card.system.data.sub.export.desc': '导出你的数据（记忆 / 技能 / 设置等）',
     'card.system.data.sub.import.cmd': 'import',
@@ -709,10 +709,10 @@ export const LOCALES = {
     'mount.usage':
       '用法：\n' +
       '  /system mount\n' +
-      '  /system mount add <绝对路径...> [--ro|--rw]\n' +
+      '  /system mount add <绝对路径...>\n' +
       '  /system mount rm <绝对路径...>\n\n' +
       '挂载每个用户独立。\n' +
-      '默认只读（--ro）；加 --rw 允许写入。',
+      '挂载权限由集群按你对该路径的访问自动判定（只读 / 读写）。',
     'mount.requiresRlaunchRuntime': '/system mount 需要集群运行环境。',
     'mount.onlyRlaunch': '/system mount 仅在集群部署下可用。',
     'mount.noIdentity': 'LightClaw 当前没有可用身份；/system mount 需要已配对的渠道用户。',
@@ -743,8 +743,7 @@ export const LOCALES = {
     'mount.notFoundSingle': '未找到挂载：{path}',
     'mount.notFoundMultiHeader': '未找到以下挂载：',
     'mount.pathRequired': '至少需要一个挂载路径。',
-    'mount.modeAmbiguous': '挂载模式冲突：同时给了 --ro 和 --rw。',
-    'mount.unknownFlag': '未知参数：{flag}（应为 --ro 或 --rw）。',
+    'mount.unknownFlag': '未知参数：{flag}。只需给出路径，挂载权限会自动判定。',
     'mount.notAccessible': '无法访问该路径：{path}（{detail}）',
     'mount.notDirectory': '该路径必须是目录：{path}',
     'mount.lacksAccess': '对该路径缺少 {access} 权限：{path}（{detail}）',
@@ -1650,11 +1649,11 @@ export const LOCALES = {
     'card.system.key.note': 'A key value is never shown again once saved; prefer a single-use / revocable token (it lands in chat history).',
     'card.system.mount.showHeading': 'Mounted paths',
     'card.system.mount.empty': 'No paths mounted yet',
-    'card.system.mount.sub.add.cmd': 'add <path> [--ro|--rw]',
+    'card.system.mount.sub.add.cmd': 'add <path>',
     'card.system.mount.sub.add.desc': 'mount a path for the agent to access',
     'card.system.mount.sub.rm.cmd': 'rm <path>',
     'card.system.mount.sub.rm.desc': 'unmount a path',
-    'card.system.mount.note': 'Read-only by default; add --rw to request read-write (admin approval).',
+    'card.system.mount.note': 'Each mount is read-only or read-write per the access the cluster grants you on that path.',
     'card.system.data.sub.export.cmd': 'export',
     'card.system.data.sub.export.desc': 'export your data (memory / skills / settings, etc.)',
     'card.system.data.sub.import.cmd': 'import',
@@ -1691,10 +1690,10 @@ export const LOCALES = {
     'mount.usage':
       'Usage:\n' +
       '  /system mount\n' +
-      '  /system mount add <absolute-path...> [--ro|--rw]\n' +
+      '  /system mount add <absolute-path...>\n' +
       '  /system mount rm <absolute-path...>\n\n' +
       'Each user has their own mounts.\n' +
-      'Default is read-only (--ro); add --rw to allow writes.',
+      'Each mount is read-only or read-write per the access the cluster grants you on that path.',
     'mount.requiresRlaunchRuntime': '/system mount requires a cluster runtime.',
     'mount.onlyRlaunch': '/system mount is only available on a cluster deployment.',
     'mount.noIdentity': 'No active LightClaw identity; /system mount requires a paired channel user.',
@@ -1725,8 +1724,7 @@ export const LOCALES = {
     'mount.notFoundSingle': 'Mount not found: {path}',
     'mount.notFoundMultiHeader': 'Mounts not found:',
     'mount.pathRequired': 'At least one mount path is required.',
-    'mount.modeAmbiguous': 'mount mode is ambiguous: both --ro and --rw given.',
-    'mount.unknownFlag': 'unknown flag: {flag} (expected --ro or --rw).',
+    'mount.unknownFlag': 'unknown flag: {flag}. Provide paths only; the mount mode is detected automatically.',
     'mount.notAccessible': 'Path is not accessible: {path} ({detail})',
     'mount.notDirectory': 'Path must be a directory: {path}',
     'mount.lacksAccess': 'Path lacks {access} access: {path} ({detail})',

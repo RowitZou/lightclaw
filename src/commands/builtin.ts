@@ -184,7 +184,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/system key enable|disable <NAME>            Enable / disable a key for use',
       '/system key rm <NAME>                        Delete a stored key',
       '/system mount                                List mounted paths',
-      '/system mount add <path...> [--ro|--rw]      Mount a path for the agent to access',
+      '/system mount add <path...>                  Mount a path for the agent to access',
       '/system mount rm <path...>                   Unmount a path',
       '/system data export [--path <file>|--feishu] [--with-sessions]   Export your data',
       '/system data import [--path <file>|--feishu] [--replace] [--y]   Import from a backup',

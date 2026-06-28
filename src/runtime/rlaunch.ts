@@ -294,7 +294,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /** Forward path policy too — RO/RW mode bits on extra mounts diverge between
-   *  generations after a /system mount add --rw or --ro toggle, and `runtime.paths`
+   *  generations after a /system mount add/rm changes the mount set, and `runtime.paths`
    *  is the authoritative source the PathPolicy gate consults for write
    *  rejection. Stale callers using OLD.paths would otherwise enforce stale
    *  semantics. */
