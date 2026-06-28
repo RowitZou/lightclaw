@@ -386,6 +386,13 @@ export class RuntimePool {
     // preheat-on-startup / `/admin sandbox prefetch`, all of which acquire a
     // runtime without going through that path.
     mkdirSync(workspaceHostPath, { recursive: true, mode: 0o700 })
+    // Agent execs get HOME=<workspaceContainerPath>/.home (docker/rlaunch
+    // wrapCommand / runDockerExec). Create it host-side as the daemon uid so the
+    // worker — running as that same uid — can write it; persistent under the
+    // workspace mount, so HOME-default state survives worker/container restarts.
+    if (config.runtime.backend === 'docker' || config.runtime.backend === 'cluster') {
+      mkdirSync(path.join(workspaceHostPath, '.home'), { recursive: true })
+    }
     if (config.runtime.backend === 'local') {
       return createRuntime({
         kind: 'local',

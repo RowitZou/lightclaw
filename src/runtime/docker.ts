@@ -21,6 +21,7 @@ import {
 import { BindMountData } from './data-plane/bind-mount.js'
 import { withByteBudget } from './byte-budget.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
+import { agentExecEnv } from './exec-home.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
@@ -509,18 +510,22 @@ export class DockerRuntime implements Runtime {
   }
 
   private async runDockerExec(input: ExecInput): Promise<ExecResult> {
+    const privileged = input.privileged === true
     const args = buildDockerExecArgs({
       containerName: this.cfg.containerName,
       workdir: input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot,
-      env: input.env,
+      // Agent execs run as the daemon uid and cannot write the image's default
+      // HOME — point HOME at a writable, persistent dir under the workspace bind
+      // mount so HOME-default tools (pip --user, conda -n, ~/.cache, ~/.gitconfig,
+      // ~/.ssh) Just Work and survive container recreation. Mirrors rlaunch's
+      // wrapCommand. Privileged bootstrap execs keep the image HOME.
+      env: agentExecEnv(this.workspaceRoot, privileged, input.env),
       command: input.command,
       // Agent-dispatched (non-privileged) execs drop to the daemon uid so the
       // files they create in the workspace bind mount are daemon-owned and the
       // host-direct BindMountData layer has no EACCES surface. Only bootstrap
       // callers set privileged; root-daemon deployments resolve to `0:0`.
-      user: input.privileged === true
-        ? '0:0'
-        : `${this.cfg.daemonUid}:${this.cfg.daemonGid}`,
+      user: privileged ? '0:0' : `${this.cfg.daemonUid}:${this.cfg.daemonGid}`,
     })
     return runProcess('docker', args, {
       abortSignal: input.abortSignal,

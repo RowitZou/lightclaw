@@ -17,6 +17,7 @@ import type {
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { withByteBudget } from './byte-budget.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
+import { agentExecEnv } from './exec-home.js'
 import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
@@ -1284,9 +1285,15 @@ export class RlaunchRuntime implements Runtime {
   ): string {
     const cwd = input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot
     const privileged = input.privileged === true
+    // Agent execs run as the daemon uid, which cannot write the image's default
+    // HOME (/root) — every HOME-default tool (pip --user, conda -n, ~/.cache,
+    // ~/.gitconfig, ~/.ssh, HF cache) would hit permission-denied. Point HOME at
+    // a writable, persistent dir under the workspace so those Just Work and
+    // survive worker restarts. Privileged bootstrap execs keep the image HOME.
+    const env = agentExecEnv(this.workspaceRoot, privileged, input.env)
     return composeExecScript({
       command: input.command,
-      env: input.env,
+      env,
       cwd,
       dropPrivileges: privileged
         ? undefined

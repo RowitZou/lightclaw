@@ -328,6 +328,18 @@ describe('buildLaunchArgs', () => {
     assert.deepEqual(internals.consumeMountReport(), { unmountable: [] })
   })
 
+  it('wrapCommand exports HOME=<workspace>/.home before setpriv for agent execs', () => {
+    const runtime = new RlaunchRuntime(baseCfg, new WorkerReadinessTracker('alice'))
+    const wrap = (runtime as unknown as { wrapCommand(input: ExecInput): string }).wrapCommand.bind(runtime)
+    const agent = wrap({ command: 'echo hi', cwd: '/workspace' })
+    // HOME is exported (so setpriv inherits it) and points under the workspace.
+    assert.match(agent, /export HOME='\/workspace\/\.home';/)
+    assert.ok(agent.indexOf('export HOME=') < agent.indexOf('setpriv'), 'HOME must precede setpriv')
+    // Privileged bootstrap execs keep the image HOME — no HOME injected.
+    const bootstrap = wrap({ command: 'apt-get update', cwd: '/workspace', privileged: true })
+    assert.doesNotMatch(bootstrap, /HOME=/)
+  })
+
   it('records a path the cluster did not mount as unmountable without throwing', async () => {
     const runtime = new RlaunchRuntime({
       ...baseCfg,
