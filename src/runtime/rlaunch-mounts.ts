@@ -9,6 +9,7 @@ import {
   type RlaunchGpfsMountConfig,
 } from './gpfs-mount-rules.js'
 import { filesetKeyFromGpfsMount } from './mount-authz.js'
+import { MountOverlapError, MountTablePathPolicy } from './path-policy/mount-table.js'
 
 export type RlaunchMountMode = 'ro' | 'rw'
 export type RlaunchMountScope = 'shared' | 'worker-only'
@@ -157,6 +158,51 @@ export function userMountToRuntimeMount(
     gpfsMount,
     mode: mount.mode,
     ...(mount.scope === 'worker-only' ? { daemonVisible: false } : {}),
+  }
+}
+
+/**
+ * Bidirectional workspace ↔ mount overlap guard. Returns the existing mount that
+ * conflicts with a (proposed) workspace host path — same path, or one nested in
+ * the other — or `null` when none does. Mirrors `/system mount add`'s refusal of
+ * a mount that overlaps the workspace, so `/config workspace set` can refuse the
+ * reverse before persisting. Reuses `MountTablePathPolicy` so both directions
+ * share one overlap definition; the workspace is the synthetic `/workspace`
+ * entry, exactly as the runtime mount table builds it. A mount that no longer
+ * converts is skipped (the runtime mount-table backstop still rejects a genuine
+ * overlap at worker rebuild); a pure mount-vs-mount overlap is not our concern
+ * here and returns `null`.
+ */
+export function findWorkspaceMountConflict(
+  workspaceHostPath: string,
+  mounts: readonly UserRlaunchMount[],
+  clusterSettings: RlaunchGpfsMountConfig,
+): UserRlaunchMount | null {
+  const WORKSPACE_WORKER = '/workspace'
+  const runtimeMounts: Array<{ mount: UserRlaunchMount; rt: RlaunchRuntimeMount }> = []
+  for (const mount of mounts) {
+    try {
+      runtimeMounts.push({ mount, rt: userMountToRuntimeMount(mount, clusterSettings) })
+    } catch {
+      // Unconvertible pre-existing mount — skip for this UX guard.
+    }
+  }
+  try {
+    void new MountTablePathPolicy([
+      { host: workspaceHostPath, worker: WORKSPACE_WORKER, mode: 'rw' },
+      ...runtimeMounts.map(({ rt }) => ({
+        host: rt.hostPath,
+        worker: rt.workerPath,
+        mode: rt.mode,
+        ...(rt.daemonVisible === false ? { daemonVisible: false as const } : {}),
+      })),
+    ])
+    return null
+  } catch (error) {
+    if (!(error instanceof MountOverlapError)) throw error
+    if (error.workerA !== WORKSPACE_WORKER && error.workerB !== WORKSPACE_WORKER) return null
+    const offending = error.workerA === WORKSPACE_WORKER ? error.workerB : error.workerA
+    return runtimeMounts.find(({ rt }) => rt.workerPath === offending)?.mount ?? null
   }
 }
 

@@ -7,12 +7,14 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   buildGpfsMountString,
+  findWorkspaceMountConflict,
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
   removeUserRlaunchMount,
   resolveUserRlaunchRuntimeMounts,
   rlaunchMountFingerprint,
   setUserRlaunchMount,
+  type UserRlaunchMount,
 } from './rlaunch-mounts.js'
 
 let tmpHome = ''
@@ -126,5 +128,44 @@ describe('rlaunch dynamic mounts store', () => {
       'gpfs://gpfs1/remote-team/dataset:/remote-team/dataset',
     )
     assert.equal(runtimeMount?.daemonVisible, false)
+  })
+})
+
+describe('findWorkspaceMountConflict', () => {
+  const settings = (root: string) => ({ gpfsMounts: [{ hostPrefix: root, mountPrefix: 'gpfs://gpfs1' }] })
+  const mount = (p: string): UserRlaunchMount => ({ path: p, mode: 'ro' })
+
+  it('returns the mount whose path equals the proposed workspace', () => {
+    const data = path.join(gpfsRoot, 'data')
+    const hit = findWorkspaceMountConflict(data, [mount(data)], settings(gpfsRoot))
+    assert.equal(hit?.path, data)
+  })
+
+  it('flags a workspace nested inside a mount', () => {
+    const data = path.join(gpfsRoot, 'data')
+    const sub = path.join(data, 'sub')
+    const hit = findWorkspaceMountConflict(sub, [mount(data)], settings(gpfsRoot))
+    assert.equal(hit?.path, data)
+  })
+
+  it('flags a mount nested inside the workspace', () => {
+    const data = path.join(gpfsRoot, 'data')
+    const sub = path.join(data, 'sub')
+    const hit = findWorkspaceMountConflict(data, [mount(sub)], settings(gpfsRoot))
+    assert.equal(hit?.path, sub)
+  })
+
+  it('returns null when the workspace is disjoint from every mount', () => {
+    const ws = path.join(gpfsRoot, 'workspace')
+    const data = path.join(gpfsRoot, 'data')
+    assert.equal(findWorkspaceMountConflict(ws, [mount(data)], settings(gpfsRoot)), null)
+  })
+
+  it('picks the conflicting mount among several', () => {
+    const ws = path.join(gpfsRoot, 'project')
+    const other = path.join(gpfsRoot, 'data')
+    const inside = path.join(ws, 'nested')
+    const hit = findWorkspaceMountConflict(ws, [mount(other), mount(inside)], settings(gpfsRoot))
+    assert.equal(hit?.path, inside)
   })
 })

@@ -60,6 +60,7 @@ import {
 } from '../permission/storage.js'
 import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
 import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
+import { findWorkspaceMountConflict, loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
 import { loadUserSecrets, setUserSecret, validateSecretName } from '../secrets/store.js'
 import {
   getCurrentUserId,
@@ -1849,6 +1850,21 @@ async function setWorkspace(rawPath: string, ctx: ConfigCommandContext & { userI
   const validation = await validateWorkspacePath(resolved, ctx.config)
   if (validation) {
     return validation
+  }
+
+  // Bidirectional workspace ↔ mount guard: refuse a workspace that overlaps an
+  // existing mount (same path, or one nested in the other) — the reverse of
+  // `/system mount add`'s refusal. To use a mounted path as the workspace, the
+  // user removes the mount first. Cluster-only: mounts exist only there.
+  if (ctx.config.runtime.backend === 'cluster') {
+    const conflict = findWorkspaceMountConflict(
+      resolved,
+      loadUserRlaunchMounts(userId),
+      ctx.config.runtime.clusterSettings,
+    )
+    if (conflict) {
+      return `${t('config.workspace.mountOverlap', { workspace: resolved, mount: conflict.path })}\n`
+    }
   }
 
   const merged = readUserConfig(userId)
