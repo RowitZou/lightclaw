@@ -14,14 +14,8 @@ import {
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
-import {
-  filesetKeyFromGpfsMount,
-  isMountRwApproved,
-  requestMountRwApproval,
-  type MountReport,
-} from '../runtime/mount-authz.js'
+import { type MountReport } from '../runtime/mount-authz.js'
 import { pruneUnmountableMounts, type MountRebuildResult } from './mount-ops.js'
-import { notifyMountRwRequest } from '../channels/feishu/mount-approval-card.js'
 
 type MountCommandContext = {
   config: LightClawConfig
@@ -64,43 +58,22 @@ export async function runMountCommand(
     if (typeof parsed === 'string') {
       return `${parsed}\n`
     }
-    const { mountPaths, mode } = parsed
-    const effectiveModeByPath = new Map<string, RlaunchMountMode>()
+    const { mountPaths } = parsed
+    const modeByPath = new Map<string, RlaunchMountMode>()
     const scopeByPath = new Map<string, RlaunchMountScope>()
-    const pendingFilesetByPath = new Map<string, string>()
-    const pendingPaths: string[] = []
     for (const mountPath of mountPaths) {
       // Auto-detect: a path the daemon can reach is served on the host fast
       // path; one it cannot is mounted into the worker only and served via
-      // relay. The user never picks this.
+      // relay. The mode is the cluster's observed mode for the service
+      // identity — daemon and worker share that identity, so a daemon-side
+      // access(W_OK) exactly predicts the worker's mount mode. The user never
+      // picks either dimension.
       const probe = await probeMountScope(ctxWithUser, mountPath)
       if ('error' in probe) {
         return probe.error
       }
-      const scope = probe.scope
-      scopeByPath.set(mountPath, scope)
-      let effectiveMode = mode
-      if (mode === 'rw') {
-        const runtimeMount = userMountToRuntimeMount(
-          { path: mountPath, mode: 'rw', ...(scope === 'worker-only' ? { scope } : {}) },
-          ctx.config.runtime.clusterSettings,
-        )
-        const fileset = filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
-        if (!isMountRwApproved(userId, fileset)) {
-          effectiveMode = 'ro'
-          pendingPaths.push(mountPath)
-          pendingFilesetByPath.set(mountPath, fileset)
-        }
-      }
-      effectiveModeByPath.set(mountPath, effectiveMode)
-    }
-    const pushedFilesets = new Set<string>()
-    for (const [mountPath, fileset] of pendingFilesetByPath) {
-      requestMountRwApproval(userId, fileset, mountPath)
-      if (!pushedFilesets.has(fileset)) {
-        pushedFilesets.add(fileset)
-        await notifyMountRwRequest({ user: userId, path: mountPath, fileset })
-      }
+      scopeByPath.set(mountPath, probe.scope)
+      modeByPath.set(mountPath, probe.mode)
     }
     const current = loadUserRlaunchMounts(userId)
     const currentByPath = new Map(current.map(mount => [mount.path, {
@@ -110,7 +83,7 @@ export async function runMountCommand(
     const nextByPath = new Map(currentByPath)
     for (const mountPath of mountPaths) {
       nextByPath.set(mountPath, {
-        mode: effectiveModeByPath.get(mountPath) ?? mode,
+        mode: modeByPath.get(mountPath) ?? 'ro',
         scope: scopeByPath.get(mountPath) ?? 'shared',
       })
     }
@@ -123,7 +96,7 @@ export async function runMountCommand(
     const updated = mountPaths.filter(mountPath => {
       const previous = currentByPath.get(mountPath)
       return previous !== undefined && (
-        previous.mode !== effectiveModeByPath.get(mountPath)
+        previous.mode !== modeByPath.get(mountPath)
         || previous.scope !== (scopeByPath.get(mountPath) ?? 'shared')
       )
     })
@@ -131,18 +104,19 @@ export async function runMountCommand(
       mountPath => {
         const previous = currentByPath.get(mountPath)
         if (previous === undefined) return false
-        return previous.mode === effectiveModeByPath.get(mountPath)
+        return previous.mode === modeByPath.get(mountPath)
           && previous.scope === (scopeByPath.get(mountPath) ?? 'shared')
       },
     )
     if (added.length === 0 && updated.length === 0) {
-      if (pendingPaths.length > 0) {
-        return `${t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })}\n`
-      }
       return mountPaths.length === 1
-        ? `${t('mount.alreadyExistsSingle', { path: mountPaths[0], mode: effectiveModeByPath.get(mountPaths[0]) ?? mode })}\n`
+        ? `${t('mount.alreadyExistsSingle', { path: mountPaths[0], mode: modeByPath.get(mountPaths[0]) ?? 'ro' })}\n`
         : [
-            t('mount.alreadyExistsMultiHeader', { mode }),
+            t('mount.alreadyExistsMultiHeader', {
+              mode: new Set(modeByPath.values()).size === 1
+                ? [...modeByPath.values()][0]
+                : t('mount.mode.mixed'),
+            }),
             ...formatPathList(unchanged),
             t('mount.noRestartNeeded'),
             '',
@@ -152,31 +126,29 @@ export async function runMountCommand(
     const { line: restart, report: rebuildReport } = await restartAfterMountChange(deps)
     pruneUnmountableMounts(userId, rebuildReport)
     if (mountPaths.length === 1) {
+      const mode = modeByPath.get(mountPaths[0]) ?? 'ro'
       return [
         updated.length > 0
           ? t('mount.updatedSingle', { path: mountPaths[0] })
           : t('mount.addedSingle', { path: mountPaths[0] }),
-        t('mount.modeLine', { mode: effectiveModeByPath.get(mountPaths[0]) ?? mode }),
+        t('mount.modeLine', { mode }),
         t('mount.workerPathLine', { path: mountPaths[0] }),
         ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
-        ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
         restart,
         ...mountReportNotes(rebuildReport),
         '',
       ].join('\n')
     }
+    const modes = new Set(modeByPath.values())
     return [
       ...(added.length > 0 ? [t('mount.addedMultiHeader'), ...formatPathList(added)] : []),
       ...(updated.length > 0 ? [t('mount.updatedMultiHeader'), ...formatPathList(updated)] : []),
       ...(unchanged.length > 0 ? [t('mount.alreadyPresentHeader'), ...formatPathList(unchanged)] : []),
       t('mount.modeLine', {
-        mode: new Set(effectiveModeByPath.values()).size === 1
-          ? [...effectiveModeByPath.values()][0]
-          : t('mount.mode.mixed'),
+        mode: modes.size === 1 ? [...modes][0] : t('mount.mode.mixed'),
       }),
       t('mount.workerPathsSame'),
-      ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
-      ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
+      ...(modes.size === 1 && modes.has('ro') ? [t('mount.ro.auto')] : []),
       restart,
       ...mountReportNotes(rebuildReport),
       '',
@@ -241,28 +213,19 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   ].join('\n')
 }
 
-/** Parses `/system mount add` arguments: any number of positional paths, plus an
- *  optional `--ro` / `--rw` flag for mode (default `--ro`). Flag may appear
- *  before or after the paths. Conflicting flags (both --ro and --rw) and
- *  unknown `--*` flags produce explicit errors. Returns deduped, sorted
- *  absolute paths plus the resolved mode. */
+/** Parses `/system mount add` arguments: positional paths only. The mode
+ *  (ro / rw) is the cluster's observed mount mode for the service identity and
+ *  is never user-selected, so any `--*` flag is an error. Returns deduped,
+ *  sorted absolute paths. */
 function parseMountAddInput(
   rest: readonly string[],
-): { mountPaths: string[]; mode: RlaunchMountMode } | string {
+): { mountPaths: string[] } | string {
   const positional: string[] = []
-  let mode: RlaunchMountMode | undefined
   for (const token of rest) {
-    if (token === '--ro' || token === '--rw') {
-      const next: RlaunchMountMode = token === '--rw' ? 'rw' : 'ro'
-      if (mode && mode !== next) {
-        return t('mount.modeAmbiguous')
-      }
-      mode = next
-    } else if (token.startsWith('--')) {
+    if (token.startsWith('--')) {
       return t('mount.unknownFlag', { flag: token })
-    } else {
-      positional.push(token)
     }
+    positional.push(token)
   }
   if (positional.length === 0) {
     return t('mount.pathRequired')
@@ -270,7 +233,6 @@ function parseMountAddInput(
   try {
     return {
       mountPaths: dedupePaths(positional.map(normalizeRlaunchMountPath)),
-      mode: mode ?? 'ro',
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
@@ -292,27 +254,36 @@ function formatLightclawPermission(mode: RlaunchMountMode): string {
   return mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')
 }
 
-/** Auto-detect a mount's scope from daemon visibility. A path the daemon can
- *  stat + read is served shared (host fast path); one it cannot reach is mounted
- *  into the worker only and served via relay — the user never picks this. Write
- *  access is not probed: the rw approval model already requires the service
- *  identity to hold write on the fileset, so a shared rw mount's daemon-side
- *  writes are covered by that grant. Returns a `{ error }` only when the path is
- *  a non-directory the daemon can see, or its gpfs-mount shape cannot be built
- *  on this deployment. */
+/** Auto-detect a mount's scope AND observed mode from daemon visibility. The
+ *  daemon process IS the service identity (puyuclaw, same uid as the worker), so
+ *  a daemon-side `access` exactly predicts what the cluster will mount for the
+ *  worker: a path the daemon can stat + read is served shared (host fast path)
+ *  and its mode is `rw` if the daemon also holds write else `ro`; a path the
+ *  daemon cannot reach is worker-only (served via relay) and defaults to `ro`
+ *  since the daemon cannot observe its mode. Returns a `{ error }` only when the
+ *  path is a non-directory the daemon can see, or its gpfs-mount shape cannot be
+ *  built on this deployment. */
 async function probeMountScope(
   ctx: MountCommandContext & { userId: string },
   mountPath: string,
-): Promise<{ scope: RlaunchMountScope } | { error: string }> {
+): Promise<{ scope: RlaunchMountScope; mode: RlaunchMountMode } | { error: string }> {
   let scope: RlaunchMountScope = 'shared'
+  let mode: RlaunchMountMode = 'ro'
   try {
     const stat = statSync(mountPath)
     if (!stat.isDirectory()) {
       return { error: `${t('mount.notDirectory', { path: mountPath })}\n` }
     }
     await access(mountPath, fsConstants.R_OK)
+    try {
+      await access(mountPath, fsConstants.W_OK)
+      mode = 'rw'
+    } catch {
+      mode = 'ro'
+    }
   } catch {
     scope = 'worker-only'
+    mode = 'ro'
   }
   try {
     userMountToRuntimeMount(
@@ -322,7 +293,7 @@ async function probeMountScope(
   } catch (error) {
     return { error: `${error instanceof Error ? error.message : String(error)}\n` }
   }
-  return { scope }
+  return { scope, mode }
 }
 
 function validateMountTable(
@@ -372,7 +343,7 @@ function formatPathList(paths: readonly string[]): string[] {
   return paths.map(mountPath => `- ${mountPath}`)
 }
 
-const EMPTY_MOUNT_REPORT: MountReport = { degraded: [], unmountable: [] }
+const EMPTY_MOUNT_REPORT: MountReport = { unmountable: [] }
 
 async function restartAfterMountChange(
   deps: MountCommandDeps,
@@ -391,13 +362,10 @@ async function restartAfterMountChange(
   }
 }
 
-/** Lines describing mounts that landed read-only (storage only grants ro) or
- *  could not be mounted at all, appended to a mount-change response. */
+/** Lines describing mounts the cluster could not mount at all, appended to a
+ *  mount-change response. */
 function mountReportNotes(report: MountReport): string[] {
   const notes: string[] = []
-  if (report.degraded.length > 0) {
-    notes.push(t('mount.report.degraded', { paths: report.degraded.map(issue => issue.path).join(', ') }))
-  }
   if (report.unmountable.length > 0) {
     notes.push(t('mount.report.unmountable', { paths: report.unmountable.map(issue => issue.path).join(', ') }))
   }

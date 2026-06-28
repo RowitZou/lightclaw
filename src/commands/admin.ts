@@ -15,15 +15,6 @@ import {
 } from '../config-io.js'
 import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
-import { listActiveCanonicalUsers } from '../identity/store.js'
-import {
-  loadUserRlaunchMounts,
-  normalizeRlaunchMountPath,
-} from '../runtime/rlaunch-mounts.js'
-import { loadMountRwApprovals, type MountReport } from '../runtime/mount-authz.js'
-import { approveUserMountRw, mountFilesetForPath, revokeUserMountRw } from './mount-ops.js'
-import { notifyMountReportToUser } from '../channels/feishu/mount-approval-card.js'
-
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
 import {
@@ -99,7 +90,6 @@ const ADMIN_NOUNS: ReadonlyArray<readonly [string, string]> = [
   ['/admin endpoint', 'admin.list.endpoint'],
   ['/admin lane', 'admin.list.lane'],
   ['/admin proxy', 'admin.list.proxy'],
-  ['/admin mount', 'admin.list.mount'],
 ]
 
 function adminNounRows(): Array<readonly [string, string]> {
@@ -177,86 +167,11 @@ export async function runAdminCommand(
       return runAdminLane(restParts, ctx.config, ctx)
     case 'proxy':
       return runAdminProxy(restParts, ctx.config, ctx)
-    case 'mount':
-      return runAdminMount(restParts, ctx.config)
 
     default:
       ctx.setCommandListCard?.(adminListSpec())
       return `${formatAdminUsageCard()}\n`
   }
-}
-
-async function runAdminMount(parts: string[], config: LightClawConfig): Promise<string> {
-  try {
-    return await runAdminMountInner(parts, config)
-  } catch (error) {
-    return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
-  }
-}
-
-async function runAdminMountInner(parts: string[], config: LightClawConfig): Promise<string> {
-  const verb = (parts[0] ?? 'list').toLowerCase()
-  if (verb === 'list') {
-    const requestedUser = parts[1]
-    const users = requestedUser ? [requestedUser] : await listActiveCanonicalUsers()
-    const rows: string[] = []
-    for (const user of users.sort()) {
-      const state = loadMountRwApprovals(user)
-      rows.push(...state.pending.map(entry =>
-        t('admin.mount.list.pending', { user, fileset: entry.fileset, path: entry.path }),
-      ))
-      rows.push(...state.approved.map(entry =>
-        t('admin.mount.list.approved', { user, fileset: entry.fileset }),
-      ))
-    }
-    return rows.length > 0 ? `${rows.join('\n')}\n` : `${t('admin.mount.list.empty')}\n`
-  }
-  if (verb !== 'approve' && verb !== 'revoke') {
-    return `${t('admin.mount.usage')}\n`
-  }
-  const user = parts[1]
-  const target = parts[2]
-  if (!user || !target) return `${t('admin.mount.usage')}\n`
-  const fileset = resolveAdminMountFileset(user, target, config)
-  if (verb === 'approve') {
-    const { report } = await approveUserMountRw(user, fileset, config)
-    const scoped = scopeMountReport(report, fileset)
-    // The requester is not at this slash — push the read-only / unmountable
-    // outcome to their DM (best-effort; no-ops without a channel).
-    await notifyMountReportToUser(user, scoped)
-    return `${t('admin.mount.approved', { user, fileset })}${adminMountNote(scoped)}\n`
-  }
-  await revokeUserMountRw(user, fileset, config)
-  return `${t('admin.mount.revoked', { user, fileset })}\n`
-}
-
-function scopeMountReport(report: MountReport, fileset: string): MountReport {
-  return {
-    degraded: report.degraded.filter(issue => issue.fileset === fileset),
-    unmountable: report.unmountable.filter(issue => issue.fileset === fileset),
-  }
-}
-
-function adminMountNote(report: MountReport): string {
-  if (report.unmountable.length > 0) return ` ${t('admin.mount.note.unmountable')}`
-  if (report.degraded.length > 0) return ` ${t('admin.mount.note.degraded')}`
-  return ''
-}
-
-function resolveAdminMountFileset(
-  user: string,
-  target: string,
-  config: LightClawConfig,
-): string {
-  if (target.startsWith('gpfs://')) {
-    const match = /^(gpfs:\/\/[^/]+\/[^/]+)/.exec(target)
-    if (!match?.[1]) throw new Error(`Invalid GPFS fileset: ${target}`)
-    return match[1]
-  }
-  const normalized = normalizeRlaunchMountPath(target)
-  const mount = loadUserRlaunchMounts(user).find(entry => entry.path === normalized)
-  if (!mount) throw new Error(`Mount not found for ${user}: ${normalized}`)
-  return mountFilesetForPath(mount.path, config)
 }
 
 // ── ops nouns ────────────────────────────────────────────────────────────────

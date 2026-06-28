@@ -285,7 +285,10 @@ describe('buildLaunchArgs', () => {
     )
   })
 
-  it('provisions a requested ro mount with a privileged bind remount when puyuclaw has rw', async () => {
+  it('observes mounts read-only without issuing any kernel remount', async () => {
+    // The cluster materializes the mount at the service identity's real GPFS
+    // permission; LightClaw observes it and never remounts (the worker pod has
+    // no mount capability). A mounted path (ro or rw) records no issue.
     const runtime = new RlaunchRuntime({
       ...baseCfg,
       extraMounts: [{
@@ -295,35 +298,67 @@ describe('buildLaunchArgs', () => {
         mode: 'ro',
         requestedMode: 'ro',
         fileset: 'gpfs://gpfs1/team',
-        adminApproved: false,
       }],
     }, new WorkerReadinessTracker('alice'))
     const calls: ExecInput[] = []
-    let remounted = false
     const internals = runtime as unknown as {
       workerName: string
       runBrainctlExec(input: ExecInput): Promise<ExecResult>
       applyMountAuthorizations(): Promise<void>
+      consumeMountReport(): { unmountable: Array<{ fileset: string; path: string }> }
     }
     internals.workerName = 'ws-test-ro'
     internals.runBrainctlExec = async input => {
       calls.push(input)
       if (input.command === 'cat /proc/mounts') {
         return {
-          stdout: `kataShared /datasets/team virtiofs ${remounted ? 'ro' : 'rw'},relatime 0 0\n`,
+          stdout: 'kataShared /datasets/team virtiofs ro,relatime 0 0\n',
           stderr: '',
           exitCode: 0,
         }
       }
-      remounted = true
       return { stdout: '', stderr: '', exitCode: 0 }
     }
 
     await internals.applyMountAuthorizations()
-    const remount = calls.find(input => input.command.includes('mount --bind'))
-    assert.equal(remount?.privileged, true)
-    assert.match(remount?.command ?? '', /mount -o remount,ro,bind/)
-    assert.equal(remounted, true)
+    // No bind / remount exec is ever issued.
+    assert.equal(calls.some(input => input.command.includes('mount --bind')), false)
+    assert.equal(calls.some(input => input.command.includes('remount')), false)
+    // A mounted path is not reported unmountable.
+    assert.deepEqual(internals.consumeMountReport(), { unmountable: [] })
+  })
+
+  it('records a path the cluster did not mount as unmountable without throwing', async () => {
+    const runtime = new RlaunchRuntime({
+      ...baseCfg,
+      extraMounts: [{
+        hostPath: '/host/dataset',
+        workerPath: '/datasets/team',
+        gpfsMount: 'gpfs://gpfs1/team:/datasets/team',
+        mode: 'ro',
+        requestedMode: 'ro',
+        fileset: 'gpfs://gpfs1/team',
+      }],
+    }, new WorkerReadinessTracker('alice'))
+    const internals = runtime as unknown as {
+      workerName: string
+      runBrainctlExec(input: ExecInput): Promise<ExecResult>
+      applyMountAuthorizations(): Promise<void>
+      consumeMountReport(): { unmountable: Array<{ fileset: string; path: string }> }
+    }
+    internals.workerName = 'ws-test-missing'
+    internals.runBrainctlExec = async input => {
+      if (input.command === 'cat /proc/mounts') {
+        // The path is absent from /proc/mounts → observed 'none'.
+        return { stdout: 'kataShared /workspace virtiofs rw,relatime 0 0\n', stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+
+    await internals.applyMountAuthorizations()
+    assert.deepEqual(internals.consumeMountReport(), {
+      unmountable: [{ fileset: 'gpfs://gpfs1/team', path: '/datasets/team' }],
+    })
   })
 })
 

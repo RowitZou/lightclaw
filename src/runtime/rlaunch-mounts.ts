@@ -8,7 +8,7 @@ import {
   buildGpfsMountStringFromRules,
   type RlaunchGpfsMountConfig,
 } from './gpfs-mount-rules.js'
-import { filesetKeyFromGpfsMount, isMountRwApproved } from './mount-authz.js'
+import { filesetKeyFromGpfsMount } from './mount-authz.js'
 
 export type RlaunchMountMode = 'ro' | 'rw'
 export type RlaunchMountScope = 'shared' | 'worker-only'
@@ -126,14 +126,11 @@ export function resolveUserRlaunchRuntimeMounts(
   return loadUserRlaunchMounts(canonicalUser).map(mount => {
     const runtimeMount = userMountToRuntimeMount(mount, rlaunchConfig)
     const fileset = filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
-    const adminApproved = mount.mode === 'rw' && isMountRwApproved(canonicalUser, fileset)
-    const effectiveMode: RlaunchMountMode = adminApproved ? 'rw' : 'ro'
     return {
       ...runtimeMount,
-      requestedMode: effectiveMode,
-      mode: effectiveMode,
+      requestedMode: mount.mode,
+      mode: mount.mode,
       fileset,
-      adminApproved,
       ...(mount.scope === 'worker-only' ? { daemonVisible: false } : {}),
     }
   })

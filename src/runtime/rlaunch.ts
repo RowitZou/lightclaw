@@ -22,10 +22,8 @@ import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/moun
 import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
-  buildReadOnlyRemountCommand,
   filesetKeyFromGpfsMount,
   observePuyuclawMode,
-  resolveGrantedMode,
   type MountReport,
 } from './mount-authz.js'
 import {
@@ -176,10 +174,10 @@ export class RlaunchRuntime implements Runtime {
   private provisionDriveFor: string | null = null
   private mountAuthReadyFor: string | null = null
   private inflightMountAuth: Promise<void> | null = null
-  /** Mounts from the last applyMountAuthorizations pass that did not land as
-   *  requested (storage absent, or rw approved but storage only ro). Read once
-   *  by a mount-change rebuild via consumeMountReport(). */
-  private lastMountReport: MountReport = { degraded: [], unmountable: [] }
+  /** Mounts from the last applyMountAuthorizations pass that the cluster did not
+   *  provide for the service identity at all. Read once by a mount-change
+   *  rebuild via consumeMountReport(). */
+  private lastMountReport: MountReport = { unmountable: [] }
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -902,10 +900,10 @@ export class RlaunchRuntime implements Runtime {
 
   /** Read and clear the mount issues recorded by the last authorization pass.
    *  Called by a mount-change rebuild (see mount-ops.ts) so the user / admin
-   *  can be told which paths landed degraded or could not be mounted. */
+   *  can be told which paths the cluster could not mount. */
   consumeMountReport(): MountReport {
     const report = this.lastMountReport
-    this.lastMountReport = { degraded: [], unmountable: [] }
+    this.lastMountReport = { unmountable: [] }
     return report
   }
 
@@ -919,51 +917,28 @@ export class RlaunchRuntime implements Runtime {
     return this.consumeMountReport()
   }
 
+  /** Observe-only: the cluster's storage webhook materializes each path at the
+   *  service identity's real GPFS permission (ro / rw); LightClaw never requests
+   *  or kernel-enforces the mode, it only observes it. A path the cluster did
+   *  not mount at all (observed 'none') is surfaced as an unmountable issue so a
+   *  bad path is reported rather than silently absent; it never throws and never
+   *  bricks the worker. */
   private async applyMountAuthorizations(): Promise<void> {
     const mounts = this.cfg.extraMounts ?? []
-    const degraded: MountReport['degraded'] = []
     const unmountable: MountReport['unmountable'] = []
-    for (const mount of mounts) {
-      const before = await this.readProcMounts()
-      const observed = observePuyuclawMode(before, mount.workerPath)
-      const requested = mount.requestedMode ?? mount.mode
-      const grant = resolveGrantedMode(requested, observed, mount.adminApproved === true)
-      const issue = {
-        fileset: mount.fileset ?? filesetKeyFromGpfsMount(mount.gpfsMount),
-        path: mount.workerPath,
-      }
-      if (grant.status === 'unmountable') {
-        // Storage never mounted this path — leave the worker up without it.
-        unmountable.push(issue)
-        continue
-      }
-      if (grant.status === 'degraded-ro') {
-        // Approved rw, but storage only grants ro: it is already mounted ro,
-        // so there is nothing to enforce — just record the downgrade.
-        degraded.push(issue)
-        continue
-      }
-      if (grant.mode === 'ro' && observed === 'rw') {
-        // Wanted ro but storage mounted rw: this MUST be enforced or it is a
-        // privilege escalation, so a failure here is a hard error.
-        const result = await this.runBrainctlExec({
-          command: buildReadOnlyRemountCommand(mount.workerPath),
-          timeoutMs: 30_000,
-          privileged: true,
-        })
-        if (result.exitCode !== 0) {
-          throw new Error(
-            `failed to enforce read-only runtime mount ${mount.workerPath}: ` +
-            `${result.stderr.trim() || result.stdout.trim()}`,
-          )
-        }
-        const after = observePuyuclawMode(await this.readProcMounts(), mount.workerPath)
-        if (after !== 'ro') {
-          throw new Error(`read-only remount did not take effect for ${mount.workerPath}`)
+    if (mounts.length > 0) {
+      const procMounts = await this.readProcMounts()
+      for (const mount of mounts) {
+        const observed = observePuyuclawMode(procMounts, mount.workerPath)
+        if (observed === 'none') {
+          unmountable.push({
+            fileset: mount.fileset ?? filesetKeyFromGpfsMount(mount.gpfsMount),
+            path: mount.workerPath,
+          })
         }
       }
     }
-    this.lastMountReport = { degraded, unmountable }
+    this.lastMountReport = { unmountable }
     this.mountAuthReadyFor = this.workerName
   }
 

@@ -115,9 +115,11 @@ describe('/system command', () => {
   it('routes `mount rm <path>` to the mount remove path', async () => {
     const dataPath = path.join(gpfsRoot, 'datasets')
     mkdirSync(dataPath, { recursive: true })
-    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { degraded: [], unmountable: [] } }) }
+    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { unmountable: [] } }) }
     await runSystemCommand(`mount add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
+    // A writable real dir is observed read-write by the daemon (same identity as
+    // the worker), so the mount lands at mode 'rw'.
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
     const removed = await runSystemCommand(
       `mount rm ${dataPath}`,

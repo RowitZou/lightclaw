@@ -14,7 +14,6 @@ import {
   rlaunchMountFingerprint,
   setUserRlaunchMount,
 } from './rlaunch-mounts.js'
-import { approveMountRw } from './mount-authz.js'
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -80,22 +79,21 @@ describe('rlaunch dynamic mounts store', () => {
     assert.equal(mount, `gpfs://gpfs2-projects/dataset:${hostPath}`)
   })
 
-  it('resolves runtime mounts and produces stable fingerprints', () => {
+  it('resolves runtime mounts from the saved mode and produces stable fingerprints', () => {
     const a = path.join(gpfsRoot, 'a')
     const b = path.join(gpfsRoot, 'b')
+    // The saved mode is the cluster's observed mode, set at mount-add time.
+    // resolveUserRlaunchRuntimeMounts now passes it through verbatim — there is
+    // no rw-approval gate anymore.
     setUserRlaunchMount('alice', b, 'rw')
     setUserRlaunchMount('alice', a, 'ro')
 
-    let mounts = resolveUserRlaunchRuntimeMounts('alice', {
+    const mounts = resolveUserRlaunchRuntimeMounts('alice', {
       gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
     })
     assert.deepEqual(mounts.map(mount => mount.workerPath), [a, b])
-    assert.deepEqual(mounts.map(mount => mount.mode), ['ro', 'ro'])
-    approveMountRw('alice', 'gpfs://gpfs1/b')
-    mounts = resolveUserRlaunchRuntimeMounts('alice', {
-      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
-    })
     assert.deepEqual(mounts.map(mount => mount.mode), ['ro', 'rw'])
+    assert.deepEqual(mounts.map(mount => mount.requestedMode), ['ro', 'rw'])
     assert.equal(rlaunchMountFingerprint(mounts), rlaunchMountFingerprint([...mounts].reverse()))
   })
 

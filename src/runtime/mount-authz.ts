@@ -1,29 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { rlaunchMountApprovalsPath } from '../identity/paths.js'
-import { shellQuote } from './process.js'
-
 export type ObservedMountMode = 'none' | 'ro' | 'rw'
-export type RequestedMountMode = 'ro' | 'rw'
 
-export type MountRwApproval = {
-  fileset: string
-  mode: 'rw'
-}
+/** One path the cluster did not mount for the service identity (no access at
+ *  all), surfaced to the user so a bad path is reported rather than silently
+ *  absent. */
+export type MountIssue = { fileset: string; path: string }
 
-export type PendingMountRwApproval = {
-  fileset: string
-  path: string
-  requestedAt: string
-}
+/** Per-rebuild summary of mounts the cluster could not provide. */
+export type MountReport = { unmountable: MountIssue[] }
 
-type MountApprovalFile = {
-  version?: number
-  approved?: unknown
-  pending?: unknown
-}
-
+/** Read the worker's `/proc/mounts` view of a path. The daemon and the worker
+ *  share one cluster identity (puyuclaw), so the mount the cluster materializes
+ *  is read-only / read-write per that identity's GPFS permission — LightClaw
+ *  observes it, it never requests or enforces it. */
 export function observePuyuclawMode(procMounts: string, workerPath: string): ObservedMountMode {
   const normalized = path.posix.normalize(workerPath)
   for (const line of procMounts.split('\n')) {
@@ -36,55 +26,6 @@ export function observePuyuclawMode(procMounts: string, workerPath: string): Obs
   return 'none'
 }
 
-/** One mount's authorization outcome. Soft conditions (storage didn't mount
- *  the path at all, or only granted read-only where read-write was approved)
- *  are reported, not thrown — they degrade gracefully instead of failing the
- *  whole worker. Only a genuine privilege-escalation risk (wanting ro but the
- *  kernel remount can't enforce it) stays a hard failure, handled at the call
- *  site. */
-export type MountGrant =
-  | { status: 'ok'; mode: RequestedMountMode }
-  | { status: 'degraded-ro'; mode: 'ro' }
-  | { status: 'unmountable' }
-
-/** One path that could not be granted as requested, for user/admin reporting. */
-export type MountIssue = { fileset: string; path: string }
-
-/** Per-rebuild summary of mounts that did not land as requested. */
-export type MountReport = { degraded: MountIssue[]; unmountable: MountIssue[] }
-
-export function resolveGrantedMode(
-  requestedMode: RequestedMountMode,
-  puyuclawMode: ObservedMountMode,
-  adminApproved: boolean,
-): MountGrant {
-  if (puyuclawMode === 'none') {
-    // Storage never mounted this path into the worker (wrong path, or the
-    // service identity has no access at all). Nothing to serve and nothing
-    // to enforce — caller skips it and keeps the worker up.
-    return { status: 'unmountable' }
-  }
-  if (requestedMode === 'ro') return { status: 'ok', mode: 'ro' }
-  if (!adminApproved) {
-    // Unreachable: the config layer forces effectiveMode to ro for unapproved
-    // rw, so requestedMode is never 'rw' without approval here. Kept as a loud
-    // assertion against a future config-build regression.
-    throw new Error('read-write runtime mount requires admin approval')
-  }
-  if (puyuclawMode !== 'rw') {
-    // Approved for read-write, but the storage only grants the service identity
-    // read-only. Serve read-only; the approval persists, so a later re-mount
-    // once the user gains write access upgrades without re-approval.
-    return { status: 'degraded-ro', mode: 'ro' }
-  }
-  return { status: 'ok', mode: 'rw' }
-}
-
-export function buildReadOnlyRemountCommand(workerPath: string): string {
-  const quoted = shellQuote(path.posix.normalize(workerPath))
-  return `mount --bind ${quoted} ${quoted} && mount -o remount,ro,bind ${quoted}`
-}
-
 export function filesetKeyFromGpfsMount(gpfsMount: string): string {
   const source = gpfsMount.slice(0, gpfsMount.lastIndexOf(':'))
   const match = /^(gpfs:\/\/[^/]+\/[^/]+)/.exec(source)
@@ -92,105 +33,6 @@ export function filesetKeyFromGpfsMount(gpfsMount: string): string {
   return match[1]
 }
 
-export function loadMountRwApprovals(canonicalUser: string): {
-  approved: MountRwApproval[]
-  pending: PendingMountRwApproval[]
-} {
-  const target = rlaunchMountApprovalsPath(canonicalUser)
-  if (!existsSync(target)) return { approved: [], pending: [] }
-  let parsed: MountApprovalFile
-  try {
-    parsed = JSON.parse(readFileSync(target, 'utf8')) as MountApprovalFile
-  } catch {
-    return { approved: [], pending: [] }
-  }
-  const approved = Array.isArray(parsed.approved)
-    ? parsed.approved.flatMap(entry => {
-        const record = asRecord(entry)
-        return typeof record?.fileset === 'string'
-          ? [{ fileset: record.fileset, mode: 'rw' as const }]
-          : []
-      })
-    : []
-  const pending = Array.isArray(parsed.pending)
-    ? parsed.pending.flatMap(entry => {
-        const record = asRecord(entry)
-        return typeof record?.fileset === 'string' && typeof record.path === 'string'
-          ? [{
-              fileset: record.fileset,
-              path: record.path,
-              requestedAt: typeof record.requestedAt === 'string'
-                ? record.requestedAt
-                : new Date(0).toISOString(),
-            }]
-          : []
-      })
-    : []
-  return {
-    approved: dedupeApproved(approved),
-    pending: dedupePending(pending),
-  }
-}
-
-export function isMountRwApproved(canonicalUser: string, fileset: string): boolean {
-  return loadMountRwApprovals(canonicalUser).approved.some(entry => entry.fileset === fileset)
-}
-
-export function requestMountRwApproval(canonicalUser: string, fileset: string, mountPath: string): void {
-  const state = loadMountRwApprovals(canonicalUser)
-  if (state.approved.some(entry => entry.fileset === fileset)) return
-  saveApprovalState(canonicalUser, {
-    approved: state.approved,
-    pending: dedupePending([
-      ...state.pending,
-      { fileset, path: mountPath, requestedAt: new Date().toISOString() },
-    ]),
-  })
-}
-
-export function approveMountRw(canonicalUser: string, fileset: string): void {
-  const state = loadMountRwApprovals(canonicalUser)
-  saveApprovalState(canonicalUser, {
-    approved: dedupeApproved([...state.approved, { fileset, mode: 'rw' }]),
-    pending: state.pending.filter(entry => entry.fileset !== fileset),
-  })
-}
-
-export function revokeMountRw(canonicalUser: string, fileset: string): void {
-  const state = loadMountRwApprovals(canonicalUser)
-  saveApprovalState(canonicalUser, {
-    approved: state.approved.filter(entry => entry.fileset !== fileset),
-    pending: state.pending.filter(entry => entry.fileset !== fileset),
-  })
-}
-
-function saveApprovalState(
-  canonicalUser: string,
-  state: { approved: MountRwApproval[]; pending: PendingMountRwApproval[] },
-): void {
-  const target = rlaunchMountApprovalsPath(canonicalUser)
-  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
-  writeFileSync(target, `${JSON.stringify({ version: 1, ...state }, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-  })
-}
-
 function decodeProcMountField(value: string): string {
   return value.replace(/\\040/g, ' ').replace(/\\011/g, '\t').replace(/\\134/g, '\\')
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : null
-}
-
-function dedupeApproved(entries: MountRwApproval[]): MountRwApproval[] {
-  return [...new Set(entries.map(entry => entry.fileset))]
-    .sort()
-    .map(fileset => ({ fileset, mode: 'rw' }))
-}
-
-function dedupePending(entries: PendingMountRwApproval[]): PendingMountRwApproval[] {
-  const byFileset = new Map(entries.map(entry => [entry.fileset, entry]))
-  return [...byFileset.values()].sort((a, b) => a.fileset.localeCompare(b.fileset))
 }

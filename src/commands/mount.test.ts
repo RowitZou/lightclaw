@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -8,7 +8,7 @@ import type { LightClawConfig } from '../config.js'
 import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
-import { approveMountRw, loadMountRwApprovals } from '../runtime/mount-authz.js'
+import type { MountReport } from '../runtime/mount-authz.js'
 import { runMountCommand } from './mount.js'
 
 // Usage fallbacks now return null (the /system mount card renders them); these
@@ -18,6 +18,14 @@ const runMount = async (
   ctx: Parameters<typeof runMountCommand>[1],
   deps?: Parameters<typeof runMountCommand>[2],
 ): Promise<string> => (await runMountCommand(args, ctx, deps)) ?? ''
+
+const emptyReport: MountReport = { unmountable: [] }
+
+// The mode a mount lands at is the cluster's observed ro/rw for the service
+// identity, which daemon-side we predict via access(W_OK) on the real dir. A
+// dir created normally is writable → 'rw'; a 0o555 dir is read-only → 'ro'.
+// Skip the ro assertion when the test runs as root (W_OK always succeeds).
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -54,7 +62,7 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
+        return { worker: `worker-${restartCount}`, report: emptyReport }
       },
     }
 
@@ -63,21 +71,17 @@ describe('/mount command', () => {
       /You have no mounted paths yet/,
     )
 
+    // A writable dir is observed read-write.
     const added = await runMount(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
-    assert.match(added, /mode: ro/)
+    assert.match(added, /mode: rw/)
     assert.match(added, /Applied to the Agent; no restart required/)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
-    const unchanged = await runMount(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    // Re-adding the same path with the same observed mode is a no-op.
+    const unchanged = await runMount(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(unchanged, /already exists/)
     assert.equal(restartCount, 1)
-
-    approveMountRw('alice', 'gpfs://gpfs1/datasets')
-    const updated = await runMount(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(updated, /Updated mount:/)
-    assert.match(updated, /Applied to the Agent; no restart required/)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
     const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(
@@ -91,6 +95,25 @@ describe('/mount command', () => {
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
+  it('observes a read-only directory as a read-only mount', async (t) => {
+    if (isRoot) {
+      t.skip('running as root: access(W_OK) always succeeds, cannot observe ro')
+      return
+    }
+    const roPath = path.join(gpfsRoot, 'readonly-data')
+    mkdirSync(roPath, { recursive: true })
+    chmodSync(roPath, 0o555)
+    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: emptyReport }) }
+
+    const added = await runMount(`add ${roPath}`, { config: makeConfig(), userId: 'alice' }, deps)
+    assert.match(added, /Mounted:/)
+    assert.match(added, /mode: ro/)
+    assert.match(added, /Mounted read-only for the Agent/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: roPath, mode: 'ro' }])
+    // Restore so afterEach rmSync can clean up.
+    chmodSync(roPath, 0o755)
+  })
+
   it('adds and removes multiple mounts with a single restart', async () => {
     const dataA = path.join(gpfsRoot, 'datasets-a')
     const dataB = path.join(gpfsRoot, 'datasets-b')
@@ -102,14 +125,12 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
+        return { worker: `worker-${restartCount}`, report: emptyReport }
       },
     }
 
-    approveMountRw('alice', 'gpfs://gpfs1/datasets-a')
-    approveMountRw('alice', 'gpfs://gpfs1/datasets-b')
-
-    const added = await runMount(`add ${dataA} ${dataB} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
+    // All writable → observed rw.
+    const added = await runMount(`add ${dataA} ${dataB}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
     assert.match(added, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(added, new RegExp(escapeRegExp(`- ${dataB}`)))
@@ -121,18 +142,20 @@ describe('/mount command', () => {
       { path: dataB, mode: 'rw' },
     ])
 
-    const updated = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(updated, /Mounted:/)
-    assert.match(updated, /Updated mounts:/)
-    assert.match(updated, /Applied to the Agent; no restart required/)
+    // dataC is new (rw); dataA / dataB unchanged → no add/update for them, but
+    // dataC is added so a restart fires.
+    const addedC = await runMount(`add ${dataC}`, { config: makeConfig(), userId: 'alice' }, deps)
+    assert.match(addedC, /Mounted:/)
+    assert.match(addedC, /Applied to the Agent; no restart required/)
     assert.equal(restartCount, 2)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
-      { path: dataA, mode: 'ro' },
+      { path: dataA, mode: 'rw' },
       { path: dataB, mode: 'rw' },
-      { path: dataC, mode: 'ro' },
+      { path: dataC, mode: 'rw' },
     ])
 
-    const unchanged = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    // Re-adding existing paths with the same observed mode is a no-op.
+    const unchanged = await runMount(`add ${dataA} ${dataC}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(unchanged, /Mounts already exist/)
     assert.match(unchanged, /No restart needed/)
     assert.equal(restartCount, 2)
@@ -143,7 +166,7 @@ describe('/mount command', () => {
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataB}`)))
     assert.match(removed, /Applied to the Agent; no restart required/)
     assert.equal(restartCount, 3)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'ro' }])
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'rw' }])
   })
 
   it('accepts mounts under secondary gpfs mapping rules', async () => {
@@ -154,7 +177,7 @@ describe('/mount command', () => {
     const deps = {
       restartRlaunch: async () => {
         restartCount += 1
-        return { worker: `worker-${restartCount}`, report: { degraded: [], unmountable: [] } }
+        return { worker: `worker-${restartCount}`, report: emptyReport }
       },
     }
 
@@ -165,41 +188,18 @@ describe('/mount command', () => {
     )
     assert.match(added, /Mounted:/)
     assert.match(added, /Applied to the Agent; no restart required/)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'rw' }])
   })
 
-  it('queues unapproved rw requests and mounts them read-only until approval', async () => {
-    const dataPath = path.join(gpfsRoot, 'approval-data')
-    mkdirSync(dataPath, { recursive: true })
-    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { degraded: [], unmountable: [] } }) }
-
-    const pending = await runMount(
-      `add ${dataPath} --rw`,
-      { config: makeConfig(), userId: 'alice' },
-      deps,
-    )
-    assert.match(pending, /needs admin approval/)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
-    assert.equal(loadMountRwApprovals('alice').pending[0]?.fileset, 'gpfs://gpfs1/approval-data')
-
-    approveMountRw('alice', 'gpfs://gpfs1/approval-data')
-    const approved = await runMount(
-      `add ${dataPath} --rw`,
-      { config: makeConfig(), userId: 'alice' },
-      deps,
-    )
-    assert.match(approved, /Updated mount/)
-    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
-  })
-
-  it('auto-detects a daemon-inaccessible path as a worker-only mount', async () => {
+  it('auto-detects a daemon-inaccessible path as a read-only worker-only mount', async () => {
     const workerOnlyPath = '/remote-team/not-mounted-on-daemon/dataset'
     const added = await runMount(
       `add ${workerOnlyPath}`,
       { config: makeConfig(), userId: 'alice' },
-      { restartRlaunch: async () => ({ worker: 'worker-worker-only', report: { degraded: [], unmountable: [] } }) },
+      { restartRlaunch: async () => ({ worker: 'worker-worker-only', report: emptyReport }) },
     )
     assert.match(added, /Mounted:/)
+    assert.match(added, /mode: ro/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{
       path: workerOnlyPath,
       mode: 'ro',
@@ -222,13 +222,14 @@ describe('/mount command', () => {
       await runMount(`add ${workspaceRoot}`, { config: makeConfig(), userId: 'alice' }),
       /Overlapping runtime mount entries/,
     )
+    // Mode is never user-selected now, so any flag is unknown.
     assert.match(
       await runMount(`add ${dataPath} --nope`, { config: makeConfig(), userId: 'alice' }),
       /unknown flag: --nope/,
     )
     assert.match(
-      await runMount(`add ${dataPath} --ro --rw`, { config: makeConfig(), userId: 'alice' }),
-      /mount mode is ambiguous/,
+      await runMount(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }),
+      /unknown flag: --ro/,
     )
     assert.match(
       await runMount('remove relative/path another-relative', { config: makeConfig(), userId: 'alice' }),
