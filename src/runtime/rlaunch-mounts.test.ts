@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -10,6 +10,8 @@ import {
   findWorkspaceMountConflict,
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
+  probeDaemonMountAccess,
+  refreshUserRlaunchMountAccess,
   removeUserRlaunchMount,
   resolveUserRlaunchRuntimeMounts,
   rlaunchMountFingerprint,
@@ -167,5 +169,57 @@ describe('findWorkspaceMountConflict', () => {
     const inside = path.join(ws, 'nested')
     const hit = findWorkspaceMountConflict(ws, [mount(other), mount(inside)], settings(gpfsRoot))
     assert.equal(hit?.path, inside)
+  })
+})
+
+describe('probeDaemonMountAccess', () => {
+  it('reports worker-only for a path the daemon cannot stat', () => {
+    assert.deepEqual(probeDaemonMountAccess('/no/such/path/xyz'), { scope: 'worker-only', mode: 'ro' })
+  })
+
+  it('reports shared rw for a daemon-writable directory', () => {
+    const d = path.join(gpfsRoot, 'probe-rw')
+    mkdirSync(d, { recursive: true })
+    assert.deepEqual(probeDaemonMountAccess(d), { scope: 'shared', mode: 'rw' })
+  })
+})
+
+describe('refreshUserRlaunchMountAccess', () => {
+  it('flips a worker-only mount to shared/rw once the daemon can see and write it', () => {
+    const data = path.join(gpfsRoot, 'now-visible')
+    mkdirSync(data, { recursive: true })
+    setUserRlaunchMount('alice', data, 'ro', 'worker-only')
+    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 1)
+    // scope dropped (no longer worker-only), mode upgraded to rw
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
+  })
+
+  it('downgrades a shared rw mount to ro when the daemon loses write', { skip: process.getuid?.() === 0 }, () => {
+    const data = path.join(gpfsRoot, 'lost-write')
+    mkdirSync(data, { recursive: true })
+    setUserRlaunchMount('alice', data, 'rw')
+    chmodSync(data, 0o500)
+    try {
+      assert.equal(refreshUserRlaunchMountAccess('alice').changed, 1)
+      assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'ro' }])
+    } finally {
+      chmodSync(data, 0o700)
+    }
+  })
+
+  it('is a no-op when nothing changed', () => {
+    const data = path.join(gpfsRoot, 'stable')
+    mkdirSync(data, { recursive: true })
+    setUserRlaunchMount('alice', data, 'rw')
+    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 0)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
+  })
+
+  it('keeps a still-invisible path worker-only without churn', () => {
+    setUserRlaunchMount('alice', '/remote-team/dataset', 'ro', 'worker-only')
+    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 0)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [
+      { path: '/remote-team/dataset', mode: 'ro', scope: 'worker-only' },
+    ])
   })
 })

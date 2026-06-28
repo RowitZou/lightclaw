@@ -25,6 +25,7 @@ import { NetworkBridge } from './runtime/network-bridge.js'
 import { brainppDockerImageProbe } from './runtime/image-readiness.js'
 import { resolveDockerImage } from './runtime/pool.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
+import { refreshUserRlaunchMountAccess } from './runtime/rlaunch-mounts.js'
 import {
   getImageReadiness,
   getNetworkBridge,
@@ -166,15 +167,54 @@ function startImagePrefetchIfNeeded(config: LightClawConfig): void {
   })
 }
 
+/** Re-probe every paired user's saved rlaunch mounts against the daemon's
+ *  current filesystem view, rewriting any whose scope (worker-only ↔ shared) or
+ *  mode (ro ↔ rw) drifted since `mount add`. Best-effort and per-user isolated:
+ *  one user's unreadable store never blocks another's refresh or the preheat. */
+async function refreshAllRlaunchMountAccess(): Promise<void> {
+  let users: string[]
+  try {
+    users = await listActiveCanonicalUsers()
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[rlaunch-mount-refresh] failed to list users: ${detail}\n`)
+    return
+  }
+  let corrected = 0
+  for (const userId of users) {
+    try {
+      if (refreshUserRlaunchMountAccess(userId).changed > 0) corrected += 1
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[rlaunch-mount-refresh] ${userId}: ${detail}\n`)
+    }
+  }
+  if (corrected > 0) {
+    process.stderr.write(
+      `[rlaunch-mount-refresh] re-probed ${users.length} user(s); corrected mounts for ${corrected}\n`,
+    )
+  }
+}
+
 function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
   if (config.runtime.backend !== 'cluster') return
   const pool = getRuntimePool()
-  if (config.runtime.clusterSettings.preheatOnStartup) {
-    void runRlaunchStartupPreheat(pool, config).catch(error => {
-      const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[rlaunch-preheat] aborted: ${detail}\n`)
-    })
-  }
+  // A restart is exactly when puyuclaw's storage permissions may have changed,
+  // so re-probe every saved mount against the daemon's current view (worker-only
+  // ↔ shared, ro ↔ rw) and rewrite the store before preheat acquires workers —
+  // a corrected entry changes the mount fingerprint so the worker rebuilds onto
+  // the right (often faster) path instead of staying stale until a manual re-add.
+  void (async () => {
+    await refreshAllRlaunchMountAccess()
+    if (config.runtime.clusterSettings.preheatOnStartup) {
+      try {
+        await runRlaunchStartupPreheat(pool, config)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`[rlaunch-preheat] aborted: ${detail}\n`)
+      }
+    }
+  })()
   workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.clusterSettings.healthCheckIntervalMs)
   workerHealthChecker.start()
 }

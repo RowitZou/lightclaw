@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { rlaunchMountsPath } from '../identity/paths.js'
@@ -204,6 +204,63 @@ export function findWorkspaceMountConflict(
     const offending = error.workerA === WORKSPACE_WORKER ? error.workerB : error.workerA
     return runtimeMounts.find(({ rt }) => rt.workerPath === offending)?.mount ?? null
   }
+}
+
+/**
+ * The daemon's CURRENT view of a mount path, used to refresh a saved mount
+ * against present reality. `scope` = whether the daemon (= puyuclaw = the worker
+ * uid) can see the path at all (`shared` → host fast path; `worker-only` → it
+ * can't, so reads/writes go through the exec-relay cp path); `mode` = whether
+ * the daemon can write it (observe-only: daemon access == worker mount mode).
+ * Both are point-in-time facts about the environment, not user intent — a path
+ * that was worker-only / ro at `mount add` time can become shared / rw after the
+ * operator provisions puyuclaw and restarts the daemon. Sync (statSync/accessSync)
+ * so it is callable from the startup scan without async plumbing.
+ */
+export function probeDaemonMountAccess(mountPath: string): { scope: RlaunchMountScope; mode: RlaunchMountMode } {
+  try {
+    const stat = statSync(mountPath)
+    if (!stat.isDirectory()) return { scope: 'worker-only', mode: 'ro' }
+    accessSync(mountPath, fsConstants.R_OK)
+    try {
+      accessSync(mountPath, fsConstants.W_OK)
+      return { scope: 'shared', mode: 'rw' }
+    } catch {
+      return { scope: 'shared', mode: 'ro' }
+    }
+  } catch {
+    return { scope: 'worker-only', mode: 'ro' }
+  }
+}
+
+/**
+ * Re-probe every saved mount of a user against the daemon's current view and
+ * rewrite the store when scope (worker-only ↔ shared) or mode (ro ↔ rw) changed.
+ * Called once per daemon startup (a restart is exactly when puyuclaw's storage
+ * permissions may have changed). A changed entry flips `daemonVisible` / `mode`
+ * in the runtime mount table, so `rlaunchMountFingerprint` differs and the next
+ * worker acquire rebuilds with the corrected (often faster / correctly-gated)
+ * path. Genuinely worker-only paths (daemon still can't stat them) and unchanged
+ * mounts produce no churn. Returns how many entries changed.
+ */
+export function refreshUserRlaunchMountAccess(canonicalUser: string): { changed: number } {
+  const mounts = loadUserRlaunchMounts(canonicalUser)
+  if (mounts.length === 0) return { changed: 0 }
+  let changed = 0
+  const next = mounts.map(mount => {
+    const probed = probeDaemonMountAccess(mount.path)
+    const wasWorkerOnly = mount.scope === 'worker-only'
+    const nowWorkerOnly = probed.scope === 'worker-only'
+    if (mount.mode === probed.mode && wasWorkerOnly === nowWorkerOnly) return mount
+    changed += 1
+    return {
+      path: mount.path,
+      mode: probed.mode,
+      ...(nowWorkerOnly ? { scope: 'worker-only' as const } : {}),
+    }
+  })
+  if (changed > 0) saveUserRlaunchMounts(canonicalUser, next)
+  return { changed }
 }
 
 export function buildGpfsMountString(
