@@ -689,11 +689,11 @@ export const LOCALES = {
     'card.system.key.note': '密钥值保存后不再显示；建议用一次性 / 可吊销的令牌（它会进入聊天记录）。',
     'card.system.mount.showHeading': '已挂载的路径',
     'card.system.mount.empty': '还没有挂载任何路径',
-    'card.system.mount.sub.add.cmd': 'add <路径> [--worker-only] [--ro|--rw]',
+    'card.system.mount.sub.add.cmd': 'add <路径> [--ro|--rw]',
     'card.system.mount.sub.add.desc': '挂载一个路径供 Agent 访问',
     'card.system.mount.sub.rm.cmd': 'rm <路径>',
     'card.system.mount.sub.rm.desc': '取消挂载某个路径',
-    'card.system.mount.note': '默认只读；加 --rw 申请读写（需管理员批准）。--worker-only 用于 LightClaw 无法直接访问、只让 Agent 使用的路径。',
+    'card.system.mount.note': '默认只读；加 --rw 申请读写（需管理员批准）。',
     'card.system.data.sub.export.cmd': 'export',
     'card.system.data.sub.export.desc': '导出你的数据（记忆 / 技能 / 设置等）',
     'card.system.data.sub.import.cmd': 'import',
@@ -729,7 +729,7 @@ export const LOCALES = {
     'mount.usage':
       '用法：\n' +
       '  /system mount\n' +
-      '  /system mount add <绝对路径...> [--worker-only] [--ro|--rw]\n' +
+      '  /system mount add <绝对路径...> [--ro|--rw]\n' +
       '  /system mount rm <绝对路径...>\n\n' +
       '挂载每个用户独立。\n' +
       '默认只读（--ro）；加 --rw 允许写入。',
@@ -739,11 +739,7 @@ export const LOCALES = {
     'mount.overlap': '挂载条目重叠，不允许：{a} <-> {b}',
     'mount.list.empty': '你还没有挂载任何路径。',
     'mount.list.header': '已挂载的路径：',
-    'mount.list.row': '- {path}（{perm}，{scope}）',
-    'mount.scope.workerOnly': '仅 Agent 可用',
-    'mount.scope.shared': 'LightClaw 和 Agent 都可用',
-    'mount.scope.workerOnlyShort': '仅 Agent',
-    'mount.scope.sharedShort': '通用',
+    'mount.list.row': '- {path}（{perm}）',
     'mount.perm.rw': '读写',
     'mount.perm.ro': '只读',
     'mount.access.rw': '读写',
@@ -770,7 +766,7 @@ export const LOCALES = {
     'mount.notFoundMultiHeader': '未找到以下挂载：',
     'mount.pathRequired': '至少需要一个挂载路径。',
     'mount.modeAmbiguous': '挂载模式冲突：同时给了 --ro 和 --rw。',
-    'mount.unknownFlag': '未知参数：{flag}（应为 --worker-only、--ro 或 --rw）。',
+    'mount.unknownFlag': '未知参数：{flag}（应为 --ro 或 --rw）。',
     'mount.notAccessible': '无法访问该路径：{path}（{detail}）',
     'mount.notDirectory': '该路径必须是目录：{path}',
     'mount.lacksAccess': '对该路径缺少 {access} 权限：{path}（{detail}）',
@@ -1696,11 +1692,11 @@ export const LOCALES = {
     'card.system.key.note': 'A key value is never shown again once saved; prefer a single-use / revocable token (it lands in chat history).',
     'card.system.mount.showHeading': 'Mounted paths',
     'card.system.mount.empty': 'No paths mounted yet',
-    'card.system.mount.sub.add.cmd': 'add <path> [--worker-only] [--ro|--rw]',
+    'card.system.mount.sub.add.cmd': 'add <path> [--ro|--rw]',
     'card.system.mount.sub.add.desc': 'mount a path for the agent to access',
     'card.system.mount.sub.rm.cmd': 'rm <path>',
     'card.system.mount.sub.rm.desc': 'unmount a path',
-    'card.system.mount.note': "Read-only by default; add --rw to request read-write (admin approval). Use --worker-only for paths LightClaw can't access directly, available to the Agent only.",
+    'card.system.mount.note': 'Read-only by default; add --rw to request read-write (admin approval).',
     'card.system.data.sub.export.cmd': 'export',
     'card.system.data.sub.export.desc': 'export your data (memory / skills / settings, etc.)',
     'card.system.data.sub.import.cmd': 'import',
@@ -1737,7 +1733,7 @@ export const LOCALES = {
     'mount.usage':
       'Usage:\n' +
       '  /system mount\n' +
-      '  /system mount add <absolute-path...> [--worker-only] [--ro|--rw]\n' +
+      '  /system mount add <absolute-path...> [--ro|--rw]\n' +
       '  /system mount rm <absolute-path...>\n\n' +
       'Each user has their own mounts.\n' +
       'Default is read-only (--ro); add --rw to allow writes.',
@@ -1747,11 +1743,7 @@ export const LOCALES = {
     'mount.overlap': 'Overlapping runtime mount entries are not allowed: {a} <-> {b}',
     'mount.list.empty': 'You have no mounted paths yet.',
     'mount.list.header': 'Mounted paths:',
-    'mount.list.row': '- {path} ({perm}, {scope})',
-    'mount.scope.workerOnly': 'available to the Agent only',
-    'mount.scope.shared': 'available to LightClaw and the Agent',
-    'mount.scope.workerOnlyShort': 'agent-only',
-    'mount.scope.sharedShort': 'shared',
+    'mount.list.row': '- {path} ({perm})',
     'mount.perm.rw': 'read-write',
     'mount.perm.ro': 'read-only',
     'mount.access.rw': 'read/write',
@@ -1778,7 +1770,7 @@ export const LOCALES = {
     'mount.notFoundMultiHeader': 'Mounts not found:',
     'mount.pathRequired': 'At least one mount path is required.',
     'mount.modeAmbiguous': 'mount mode is ambiguous: both --ro and --rw given.',
-    'mount.unknownFlag': 'unknown flag: {flag} (expected --worker-only, --ro, or --rw).',
+    'mount.unknownFlag': 'unknown flag: {flag} (expected --ro or --rw).',
     'mount.notAccessible': 'Path is not accessible: {path} ({detail})',
     'mount.notDirectory': 'Path must be a directory: {path}',
     'mount.lacksAccess': 'Path lacks {access} access: {path} ({detail})',

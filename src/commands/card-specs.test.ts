@@ -280,8 +280,8 @@ describe('card-specs batch 7: system key / mount / data', () => {
       { path: '/shared/bar', mode: 'rw' },
     ])
     const show = section(spec, t('card.system.mount.showHeading'))
-    assert.ok(show?.markdown?.includes(`/shared/foo（${t('mount.perm.ro')}，${t('mount.scope.sharedShort')}）`))
-    assert.ok(show!.markdown!.includes(`/shared/bar（${t('mount.perm.rw')}，${t('mount.scope.sharedShort')}）`))
+    assert.ok(show?.markdown?.includes(`/shared/foo（${t('mount.perm.ro')}）`))
+    assert.ok(show!.markdown!.includes(`/shared/bar（${t('mount.perm.rw')}）`))
     assert.ok(allText(spec).includes('/system mount add'))
   })
 

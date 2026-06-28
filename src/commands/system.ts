@@ -111,7 +111,6 @@ export async function runSystemCommand(
           ? loadUserRlaunchMounts(ctx.userId).map(m => ({
               path: m.path,
               mode: m.mode,
-              ...(m.scope === 'worker-only' ? { scope: m.scope } : {}),
             }))
           : []
         const spec = systemMountCardSpec(rows)

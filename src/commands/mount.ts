@@ -64,15 +64,25 @@ export async function runMountCommand(
     if (typeof parsed === 'string') {
       return `${parsed}\n`
     }
-    const { mountPaths, mode, scope } = parsed
+    const { mountPaths, mode } = parsed
     const effectiveModeByPath = new Map<string, RlaunchMountMode>()
+    const scopeByPath = new Map<string, RlaunchMountScope>()
     const pendingFilesetByPath = new Map<string, string>()
     const pendingPaths: string[] = []
     for (const mountPath of mountPaths) {
+      // Auto-detect: a path the daemon can reach is served on the host fast
+      // path; one it cannot is mounted into the worker only and served via
+      // relay. The user never picks this.
+      const probe = await probeMountScope(ctxWithUser, mountPath)
+      if ('error' in probe) {
+        return probe.error
+      }
+      const scope = probe.scope
+      scopeByPath.set(mountPath, scope)
       let effectiveMode = mode
       if (mode === 'rw') {
         const runtimeMount = userMountToRuntimeMount(
-          { path: mountPath, mode: 'rw' },
+          { path: mountPath, mode: 'rw', ...(scope === 'worker-only' ? { scope } : {}) },
           ctx.config.runtime.clusterSettings,
         )
         const fileset = filesetKeyFromGpfsMount(runtimeMount.gpfsMount)
@@ -83,10 +93,6 @@ export async function runMountCommand(
         }
       }
       effectiveModeByPath.set(mountPath, effectiveMode)
-      const validation = await validateMountPath(ctxWithUser, mountPath, effectiveMode, scope)
-      if (validation) {
-        return validation
-      }
     }
     const pushedFilesets = new Set<string>()
     for (const [mountPath, fileset] of pendingFilesetByPath) {
@@ -105,7 +111,7 @@ export async function runMountCommand(
     for (const mountPath of mountPaths) {
       nextByPath.set(mountPath, {
         mode: effectiveModeByPath.get(mountPath) ?? mode,
-        scope,
+        scope: scopeByPath.get(mountPath) ?? 'shared',
       })
     }
     const next = mountsFromMap(nextByPath)
@@ -117,14 +123,16 @@ export async function runMountCommand(
     const updated = mountPaths.filter(mountPath => {
       const previous = currentByPath.get(mountPath)
       return previous !== undefined && (
-        previous.mode !== effectiveModeByPath.get(mountPath) || previous.scope !== scope
+        previous.mode !== effectiveModeByPath.get(mountPath)
+        || previous.scope !== (scopeByPath.get(mountPath) ?? 'shared')
       )
     })
     const unchanged = mountPaths.filter(
       mountPath => {
         const previous = currentByPath.get(mountPath)
         if (previous === undefined) return false
-        return previous.mode === effectiveModeByPath.get(mountPath) && previous.scope === scope
+        return previous.mode === effectiveModeByPath.get(mountPath)
+          && previous.scope === (scopeByPath.get(mountPath) ?? 'shared')
       },
     )
     if (added.length === 0 && updated.length === 0) {
@@ -150,7 +158,6 @@ export async function runMountCommand(
           : t('mount.addedSingle', { path: mountPaths[0] }),
         t('mount.modeLine', { mode: effectiveModeByPath.get(mountPaths[0]) ?? mode }),
         t('mount.workerPathLine', { path: mountPaths[0] }),
-        t(scope === 'worker-only' ? 'mount.scope.workerOnly' : 'mount.scope.shared'),
         ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
         ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
         restart,
@@ -168,7 +175,6 @@ export async function runMountCommand(
           : t('mount.mode.mixed'),
       }),
       t('mount.workerPathsSame'),
-      t(scope === 'worker-only' ? 'mount.scope.workerOnly' : 'mount.scope.shared'),
       ...(mode === 'ro' ? [t('mount.ro.auto')] : []),
       ...(pendingPaths.length > 0 ? [t('mount.rw.pendingApproval', { paths: pendingPaths.join(', ') })] : []),
       restart,
@@ -229,7 +235,6 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
       t('mount.list.row', {
         path: mount.path,
         perm: formatLightclawPermission(mount.mode),
-        scope: mount.scope === 'worker-only' ? t('mount.scope.workerOnlyShort') : t('mount.scope.sharedShort'),
       }),
     ),
     '',
@@ -243,10 +248,9 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
  *  absolute paths plus the resolved mode. */
 function parseMountAddInput(
   rest: readonly string[],
-): { mountPaths: string[]; mode: RlaunchMountMode; scope: RlaunchMountScope } | string {
+): { mountPaths: string[]; mode: RlaunchMountMode } | string {
   const positional: string[] = []
   let mode: RlaunchMountMode | undefined
-  let scope: RlaunchMountScope = 'shared'
   for (const token of rest) {
     if (token === '--ro' || token === '--rw') {
       const next: RlaunchMountMode = token === '--rw' ? 'rw' : 'ro'
@@ -254,8 +258,6 @@ function parseMountAddInput(
         return t('mount.modeAmbiguous')
       }
       mode = next
-    } else if (token === '--worker-only') {
-      scope = 'worker-only'
     } else if (token.startsWith('--')) {
       return t('mount.unknownFlag', { flag: token })
     } else {
@@ -269,7 +271,6 @@ function parseMountAddInput(
     return {
       mountPaths: dedupePaths(positional.map(normalizeRlaunchMountPath)),
       mode: mode ?? 'ro',
-      scope,
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
@@ -291,42 +292,37 @@ function formatLightclawPermission(mode: RlaunchMountMode): string {
   return mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')
 }
 
-async function validateMountPath(
+/** Auto-detect a mount's scope from daemon visibility. A path the daemon can
+ *  stat + read is served shared (host fast path); one it cannot reach is mounted
+ *  into the worker only and served via relay — the user never picks this. Write
+ *  access is not probed: the rw approval model already requires the service
+ *  identity to hold write on the fileset, so a shared rw mount's daemon-side
+ *  writes are covered by that grant. Returns a `{ error }` only when the path is
+ *  a non-directory the daemon can see, or its gpfs-mount shape cannot be built
+ *  on this deployment. */
+async function probeMountScope(
   ctx: MountCommandContext & { userId: string },
   mountPath: string,
-  mode: RlaunchMountMode,
-  scope: RlaunchMountScope,
-): Promise<string | null> {
+): Promise<{ scope: RlaunchMountScope } | { error: string }> {
+  let scope: RlaunchMountScope = 'shared'
   try {
-    userMountToRuntimeMount({
-      path: mountPath,
-      mode,
-      ...(scope === 'worker-only' ? { scope } : {}),
-    }, ctx.config.runtime.clusterSettings)
-  } catch (error) {
-    return `${error instanceof Error ? error.message : String(error)}\n`
+    const stat = statSync(mountPath)
+    if (!stat.isDirectory()) {
+      return { error: `${t('mount.notDirectory', { path: mountPath })}\n` }
+    }
+    await access(mountPath, fsConstants.R_OK)
+  } catch {
+    scope = 'worker-only'
   }
-  if (scope === 'worker-only') return null
-  let stat
   try {
-    stat = statSync(mountPath)
+    userMountToRuntimeMount(
+      { path: mountPath, mode: 'ro', ...(scope === 'worker-only' ? { scope } : {}) },
+      ctx.config.runtime.clusterSettings,
+    )
   } catch (error) {
-    return `${t('mount.notAccessible', { path: mountPath, detail: error instanceof Error ? error.message : String(error) })}\n`
+    return { error: `${error instanceof Error ? error.message : String(error)}\n` }
   }
-  if (!stat.isDirectory()) {
-    return `${t('mount.notDirectory', { path: mountPath })}\n`
-  }
-  const required = fsConstants.R_OK | (mode === 'rw' ? fsConstants.W_OK : 0)
-  try {
-    await access(mountPath, required)
-  } catch (error) {
-    return `${t('mount.lacksAccess', {
-      access: mode === 'rw' ? t('mount.access.rw') : t('mount.access.ro'),
-      path: mountPath,
-      detail: error instanceof Error ? error.message : String(error),
-    })}\n`
-  }
-  return null
+  return { scope }
 }
 
 function validateMountTable(

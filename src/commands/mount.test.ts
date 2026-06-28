@@ -82,7 +82,7 @@ describe('/mount command', () => {
     const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(
       listed,
-      new RegExp(escapeRegExp(`${dataPath} (read-write, shared)`)),
+      new RegExp(escapeRegExp(`${dataPath} (read-write)`)),
     )
 
     const removed = await runMount(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
@@ -192,10 +192,10 @@ describe('/mount command', () => {
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
   })
 
-  it('persists a daemon-inaccessible worker-only mount without host access checks', async () => {
+  it('auto-detects a daemon-inaccessible path as a worker-only mount', async () => {
     const workerOnlyPath = '/remote-team/not-mounted-on-daemon/dataset'
     const added = await runMount(
-      `add ${workerOnlyPath} --worker-only`,
+      `add ${workerOnlyPath}`,
       { config: makeConfig(), userId: 'alice' },
       { restartRlaunch: async () => ({ worker: 'worker-worker-only', report: { degraded: [], unmountable: [] } }) },
     )
@@ -207,7 +207,7 @@ describe('/mount command', () => {
     }])
   })
 
-  it('rejects non-rlaunch backends, outside-prefix paths, and workspace-overlapping mounts', async () => {
+  it('rejects non-rlaunch backends, workspace-overlapping mounts, and bad flags', async () => {
     const dataPath = path.join(gpfsRoot, 'datasets')
     mkdirSync(dataPath, { recursive: true })
 
@@ -217,10 +217,6 @@ describe('/mount command', () => {
         userId: 'alice',
       }),
       /only available/,
-    )
-    assert.match(
-      await runMount('add /tmp/outside', { config: makeConfig(), userId: 'alice' }),
-      /gpfsMounts|not accessible/,
     )
     assert.match(
       await runMount(`add ${workspaceRoot}`, { config: makeConfig(), userId: 'alice' }),
