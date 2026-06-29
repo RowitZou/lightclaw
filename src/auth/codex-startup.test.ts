@@ -183,7 +183,7 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
     assert.doesNotMatch(stderr.output, /routing\./)
   })
 
-  it('throws "No models configured" when every model was OAuth and auth fails', async () => {
+  it('does not block startup when every model is OAuth and auth fails', async () => {
     registerAuthProvider(fakeProvider({
       getCredsError: new AuthError({
         code: 'refresh_failed',
@@ -199,10 +199,14 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
       defaultModel: 'gpt-5-codex',
     })
     const stderr = new FakeStderr()
-    await assert.rejects(
-      () => ensureOAuthModelsUsable(config, stderr),
-      /No models configured\..*Define endpoints \+ models.*All 2 configured model\(s\) require Codex OAuth.*broken/s,
-    )
+    await ensureOAuthModelsUsable(config, stderr)
+    assert.ok(config.models['gpt-5-codex'])
+    assert.ok(config.models['gpt-5.4'])
+    assert.equal(config.defaultModel, 'gpt-5-codex')
+    assert.match(stderr.output, /Codex OAuth credentials unavailable/)
+    assert.match(stderr.output, /broken/)
+    assert.match(stderr.output, /Active non-Codex fallback models: none/)
+    assert.match(stderr.output, /daemon will boot/)
   })
 
   it('throws when codex provider is not registered', async () => {
@@ -263,5 +267,25 @@ describe('codex/startup: degradeOAuthModels (pure)', () => {
       to: 'sonnet',
     })
     assert.equal(config.defaultModel, 'sonnet')
+  })
+
+  it('keeps codex-only configs intact when there is no non-OAuth fallback', () => {
+    const config = makeConfig({
+      models: {
+        'gpt-5-codex': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
+        'gpt-5.4': { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.4' },
+      },
+      defaultModel: 'gpt-5-codex',
+    })
+    const out = _internal.degradeOAuthModels(
+      config,
+      ['gpt-5-codex', 'gpt-5.4'],
+      'r',
+    )
+    assert.equal(out.fallbackModel, undefined)
+    assert.equal(out.defaultModelChanged, undefined)
+    assert.ok(config.models['gpt-5-codex'])
+    assert.ok(config.models['gpt-5.4'])
+    assert.equal(config.defaultModel, 'gpt-5-codex')
   })
 })

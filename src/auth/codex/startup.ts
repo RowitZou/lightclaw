@@ -23,14 +23,12 @@ import type { LightClawConfig, ModelEntry } from '../../config.js'
 //   config. defaultModel that pointed at a disabled model gets rewritten to
 //   the first remaining model (Object.keys insertion order — admin's intended
 //   priority from config.json).
-// - If every model was openai-auth and credentials failed, throw with
-//   the same message shape as `getConfig()`'s "No models configured"
-//   so the caller surfaces it identically.
+// - If every model was openai-auth and credentials failed, keep the daemon
+//   booting and surface the credential failure later when one of those models
+//   is actually used. Startup should not require live upstream auth.
 // - The degrade only mutates the live config object; <home>/config.json
 //   is never written. Restart after fixing codex restores all models;
 //   `/admin endpoint add --type codex` followed by a fresh REPL boot does too.
-
-const NO_MODELS_HINT = 'Define endpoints + models in <lightclawHome>/config.json.'
 
 /**
  * Find every display name whose schema is `codex` (OAuth Responses).
@@ -97,7 +95,7 @@ async function ensureCodexUsable(): Promise<void> {
 type DegradeOutcome = {
   disabledModels: string[]
   remainingModels: string[]
-  fallbackModel: string
+  fallbackModel: string | undefined
   defaultModelChanged: { from: string; to: string } | undefined
   reason: string
 }
@@ -111,13 +109,13 @@ function degradeOAuthModels(
     name => !oauthModels.includes(name),
   )
   if (remaining.length === 0) {
-    // Mirrors getConfig()'s "No models configured" sentinel — same
-    // shape so callers above can surface a single error message.
-    throw new Error(
-      `No models configured. ${NO_MODELS_HINT} ` +
-        `(All ${oauthModels.length} configured model(s) require Codex OAuth, ` +
-        `which is unavailable: ${reason})`,
-    )
+    return {
+      disabledModels: oauthModels,
+      remainingModels: [],
+      fallbackModel: undefined,
+      defaultModelChanged: undefined,
+      reason,
+    }
   }
 
   const fallback = remaining[0]!
@@ -147,7 +145,14 @@ function formatStderrWarning(outcome: DegradeOutcome): string {
   lines.push(
     `[startup] Disabled models (need Codex login): ${outcome.disabledModels.join(', ')}`,
   )
-  lines.push(`[startup] Active models: ${outcome.remainingModels.join(', ')}`)
+  if (outcome.remainingModels.length > 0) {
+    lines.push(`[startup] Active models: ${outcome.remainingModels.join(', ')}`)
+  } else {
+    lines.push(
+      '[startup] Active non-Codex fallback models: none; daemon will boot, ' +
+      'but Codex-backed model calls will fail until OAuth works.',
+    )
+  }
   if (outcome.defaultModelChanged) {
     lines.push(
       `[startup] defaultModel rewritten: ${outcome.defaultModelChanged.from} -> ${outcome.defaultModelChanged.to}`,
@@ -192,7 +197,7 @@ export async function ensureOAuthModelsUsable(
     // hitting the credential error every turn. Cleared on `/admin endpoint add --type codex`.
     setCredentialDegrade({
       disabledModels: outcome.disabledModels,
-      fallbackModel: outcome.fallbackModel,
+      ...(outcome.fallbackModel ? { fallbackModel: outcome.fallbackModel } : {}),
     })
     stderr.write(formatStderrWarning(outcome))
   }

@@ -26,7 +26,7 @@ let fallbackModel: string | undefined
 
 export function setCredentialDegrade(input: {
   disabledModels: readonly string[]
-  fallbackModel: string
+  fallbackModel?: string
 }): void {
   disabledModels = new Set(input.disabledModels)
   fallbackModel = input.fallbackModel
