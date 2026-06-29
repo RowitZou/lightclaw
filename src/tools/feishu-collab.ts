@@ -1934,9 +1934,14 @@ function feishuConfirmToolName(operation: FeishuWriteOperation): string {
 }
 
 function isOneShotFeishuOperation(operation: FeishuWriteOperation): boolean {
-  return operation === 'delete' ||
-    operation === 'replace-doc' ||
-    operation === 'delete-sheet'
+  // Only trash-deletion stays forced-once: it removes the whole resource and is
+  // the one Feishu write with no in-place recovery. `replace-doc` (whole-doc
+  // overwrite) and `delete-sheet` (whole-sheet delete) were re-classified down
+  // to ordinary grantable writes on 2026-06-30 — they now route through
+  // evaluatePermission like append/create/move, so a loose mode (yolo) no
+  // longer forces a card and users can grant "以后都允许". Mirrors the
+  // FeishuMove down-classification (2026-05-19).
+  return operation === 'delete'
 }
 
 export function feishuToolErrorMessage(error: unknown): string {

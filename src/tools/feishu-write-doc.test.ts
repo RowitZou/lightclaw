@@ -223,7 +223,7 @@ describe('FeishuWriteDoc tool', () => {
     })
   })
 
-  it('uses one-shot replace confirmation for replace_markdown', async () => {
+  it('renders a replace confirmation card for replace_markdown', async () => {
     let askInput: PermissionAskInput | undefined
     const result = await withFeishuSession({
       approver: {

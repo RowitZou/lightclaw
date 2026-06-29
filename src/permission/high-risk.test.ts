@@ -249,7 +249,11 @@ describe('isHighRiskAsk (top-level driver)', () => {
     )
   })
 
-  it('TRUE for FeishuReplaceDocConfirm virtual approval asks', () => {
+  it('FALSE for FeishuReplaceDocConfirm — whole-doc replace is recoverable from version history (2026-06-30)', () => {
+    // Down-classified from one-shot/high-risk to a grantable write: replace_markdown
+    // overwrites content in place and is recoverable from the doc's version
+    // history, unlike a trash deletion. yolo no longer forces a card and users
+    // can grant "以后都允许". Mirrors the FeishuMove down-classification.
     assert.equal(
       isHighRiskAsk(ask({
         toolName: 'FeishuReplaceDocConfirm',
@@ -260,22 +264,23 @@ describe('isHighRiskAsk (top-level driver)', () => {
           preview: 'Replace doc.',
         },
         inputPreview: 'Replace doc.',
+        suggestedRules: [{ toolName: 'FeishuReplaceDocConfirm' }],
       })),
-      true,
+      false,
     )
   })
 
-  it('TRUE for FeishuSheetDestructiveConfirm — whole-sheet deletion has wide blast radius', () => {
+  it('FALSE for FeishuSheetDestructiveConfirm — whole-sheet delete is recoverable from version history (2026-06-30)', () => {
     const toolName = 'FeishuSheetDestructiveConfirm'
     assert.equal(
       isHighRiskAsk(ask({
         toolName,
         riskLevel: 'write',
-        input: { operation: 'op', resource: { token: 't' }, preview: toolName },
+        input: { operation: 'delete-sheet', resource: { token: 't' }, preview: toolName },
         inputPreview: toolName,
         suggestedRules: [{ toolName }],
       })),
-      true,
+      false,
     )
   })
 

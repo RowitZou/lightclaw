@@ -104,23 +104,48 @@ describe('requireFeishuWriteConfirmation — background-fire approver wiring', (
     )
   })
 
-  it('still requires an approver for a one-shot destructive op even under bypassPermissions', async () => {
-    // One-shot destructive ops (replace-doc / delete / delete-sheet) never
-    // short-circuit on mode; they always render a confirmation card, so a
-    // detached fire with no approver genuinely cannot perform them.
+  it('still requires an approver for the one-shot destructive delete even under bypassPermissions', async () => {
+    // `delete` (trash deletion) is the only remaining one-shot op: it never
+    // short-circuits on mode and always renders a confirmation card, so a
+    // detached fire with no approver genuinely cannot perform it.
     await assert.rejects(
       withSession({
         mode: 'bypassPermissions',
         approver: null,
         fn: () =>
           requireFeishuWriteConfirmation({
-            operation: 'replace-doc',
-            preview: 'whole-doc replace',
+            operation: 'delete',
+            preview: 'trash doc',
             resource: { document_id: 'docX' },
           }),
       }),
       /Feishu write confirmation is unavailable in this session\./,
     )
+  })
+
+  it('allows replace-doc and delete-sheet under bypassPermissions with NO approver (down-classified 2026-06-30)', async () => {
+    // Both left the one-shot set: whole-doc overwrite and whole-sheet delete are
+    // recoverable from version history, so they route through evaluatePermission
+    // like ordinary writes. Under yolo that auto-allows with no card, so a
+    // detached background fire can perform them without a live approver.
+    for (const operation of ['replace-doc', 'delete-sheet'] as const) {
+      await withSession({
+        mode: 'bypassPermissions',
+        approver: null,
+        fn: () =>
+          requireFeishuWriteConfirmation({
+            operation,
+            preview: `op=${operation}`,
+            resource: { document_id: 'docX' },
+          }),
+      })
+    }
+    const records = await readAuditRecords()
+    assert.deepEqual(
+      records.map(r => r.operation),
+      ['replace-doc', 'delete-sheet'],
+    )
+    assert.ok(records.every(r => r.status === 'confirmed'))
   })
 
   it('routes through the approver card when one IS present and the verdict is ask', async () => {

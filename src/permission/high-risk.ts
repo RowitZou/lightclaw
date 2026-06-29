@@ -159,14 +159,16 @@ export function containsHighRiskRule(rules: PermissionRuleValue[]): boolean {
  * fallback. Used by approver UIs to gate the persistence option.
  */
 export function isHighRiskAsk(ask: PermissionAskInput): boolean {
-  // Resource-level destructive Feishu writes stay one-shot: whole file/doc
-  // deletion, whole-document replace, and whole-sheet deletion have a wider
-  // blast radius than append/create/upload/content-edit/block-edit writes, so
-  // the UI must hide the "always allow" path for these virtual approval tools.
+  // Whole-resource trash deletion is the one Feishu write that stays high-risk:
+  // it removes the entire file/doc/sheet with no in-place recovery, so the UI
+  // hides the "always allow" path for it. `FeishuReplaceDocConfirm` (whole-doc
+  // overwrite) and `FeishuSheetDestructiveConfirm` (whole-sheet delete) were
+  // re-classified down to grantable writes on 2026-06-30 (they also left the
+  // forced-once set in isOneShotFeishuOperation), mirroring the FeishuMove
+  // down-classification — both edit content in place and are recoverable from
+  // doc/sheet version history, unlike a trash deletion.
   if (
     ask.toolName === 'FeishuDeleteConfirm' ||
-    ask.toolName === 'FeishuReplaceDocConfirm' ||
-    ask.toolName === 'FeishuSheetDestructiveConfirm' ||
     ask.toolName === 'BrainppClusterDeleteConfirm'
   ) {
     return true
