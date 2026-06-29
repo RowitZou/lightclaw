@@ -1773,11 +1773,16 @@ export async function requireFeishuWriteConfirmation(input: {
   // (append-doc / sheet) record confirmed audit inline as before.
   deferConfirmedAudit?: boolean
 }): Promise<void> {
-  const approver = getPermissionApprover()
-  if (!approver) {
-    throw new Error('Feishu write confirmation is unavailable in this session.')
-  }
-
+  // NOTE: the approver is resolved lazily right before the interactive ask
+  // below — NOT here. A null approver only blocks operations that genuinely
+  // need a confirmation card; an `allow`/`deny` verdict (e.g. bypassPermissions,
+  // or a persisted allow rule) resolves without one. Throwing up-front instead
+  // broke every Feishu write from a detached background fire / resumed worker
+  // whose SessionContext carried no channel approver, even under
+  // bypassPermissions where no card would ever render (World Cup doc dogfood,
+  // 2026-06-29: feishuSecretary re-fire threw "confirmation is unavailable"
+  // although the user's mode was bypassPermissions and the same write had
+  // succeeded minutes earlier on the live-channel fire).
   const virtualToolName = feishuConfirmToolName(input.operation)
   const askBody = { operation: input.operation, resource: input.resource, preview: input.preview }
   const mode = getPermissionMode()
@@ -1845,6 +1850,17 @@ export async function requireFeishuWriteConfirmation(input: {
   // for the 24h expiry. tryAutoDenyForInterjection still works regardless
   // (it walks the sessionId-keyed queue directly), so interjection cancel
   // was always wired; only the explicit abort path was missing.
+  //
+  // We reach here only when an interactive confirmation is genuinely required
+  // (a one-shot destructive op, or a non-one-shot op whose verdict was `ask`).
+  // That needs a live channel approver; a detached background fire / resumed
+  // worker without one cannot render a card, so surface the unavailability here
+  // rather than failing every write at the top of the function.
+  const approver = getPermissionApprover()
+  if (!approver) {
+    throw new Error('Feishu write confirmation is unavailable in this session.')
+  }
+
   const decision = await approver.ask({
     toolName: virtualToolName,
     riskLevel: 'write',
