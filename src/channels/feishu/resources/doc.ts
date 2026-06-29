@@ -956,7 +956,10 @@ async function convertMarkdownToBlocks(input: {
     allBlocks.push(...normalized.orderedBlocks)
     allRootIds.push(...normalized.rootIds)
   }
-  return { blocks: allBlocks, firstLevelBlockIds: allRootIds }
+  // Split any first-level block whose subtree exceeds the per-request descendant
+  // limit BEFORE it reaches insertBlocksWithDescendant, so a single oversized
+  // table / container can no longer abort the whole write.
+  return splitOversizedFirstLevelBlocks(allBlocks, allRootIds, FEISHU_DOC_DESCENDANT_BATCH_SIZE)
 }
 
 async function convertMarkdownWithFallback(
@@ -1228,6 +1231,278 @@ async function insertBlocksInBatches(input: {
     }
   }
   return { code: 0, data: { children } }
+}
+
+/**
+ * Feishu's `documentBlockDescendant.create` caps at 1000 blocks per request AND
+ * a first-level block plus its entire descendant subtree must land in ONE
+ * request (children_id references resolve within the request). `insertBlocksIn-
+ * Batches` already groups MANY small first-level blocks across requests, but a
+ * SINGLE first-level block whose own subtree exceeds the limit cannot be split
+ * at the request boundary — pre-fix it threw and the whole write was abandoned
+ * (World Cup feishu-doc dogfood, 2026-06-29: a >1000-descendant schedule table).
+ *
+ * This pass rewrites the converted forest so every first-level block's subtree
+ * is ≤ budget, by splitting the offending block into sibling blocks that each
+ * fit:
+ *   - a table (block_type 31) splits by ROWS into multiple tables, repeating the
+ *     header row in every chunk (cloned with fresh ids);
+ *   - any other container splits its direct children across cloned sibling
+ *     shells, recursing into a child that is itself oversized.
+ * The resulting siblings flow through the existing `insertBlocksInBatches`
+ * grouping like any other first-level blocks. Markdown-converted tables never
+ * carry merged cells (merge is a separate explicit op), so row-splitting cannot
+ * tear a merge.
+ */
+export function splitOversizedFirstLevelBlocks(
+  blocks: Array<Record<string, unknown>>,
+  firstLevelIds: string[],
+  budget: number,
+): { blocks: Array<Record<string, unknown>>; firstLevelBlockIds: string[] } {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const block of blocks) {
+    if (typeof block.block_id === 'string') {
+      byId.set(block.block_id, block)
+    }
+  }
+  const oversized = firstLevelIds.some(id => collectDescendants(byId, id).length > budget)
+  if (!oversized) {
+    return { blocks, firstLevelBlockIds: firstLevelIds }
+  }
+
+  const idGen = makeFreshIdGen(new Set(byId.keys()))
+  const outFirstLevel: string[] = []
+  const outBlocks: Array<Record<string, unknown>> = []
+  const emitted = new Set<string>()
+  const emit = (block: Record<string, unknown>) => {
+    const id = typeof block.block_id === 'string' ? block.block_id : undefined
+    if (id) {
+      if (emitted.has(id)) return
+      emitted.add(id)
+    }
+    outBlocks.push(block)
+  }
+
+  for (const rootId of firstLevelIds) {
+    const subtree = collectDescendants(byId, rootId)
+    if (subtree.length <= budget) {
+      outFirstLevel.push(rootId)
+      subtree.forEach(emit)
+      continue
+    }
+    for (const piece of splitOneBlock(rootId, byId, budget, idGen)) {
+      outFirstLevel.push(piece.rootId)
+      piece.blocks.forEach(emit)
+    }
+  }
+  // Safety net: any block not reachable from a first-level root (shouldn't
+  // happen post-normalization) is preserved unchanged rather than dropped.
+  for (const block of blocks) {
+    const id = typeof block.block_id === 'string' ? block.block_id : undefined
+    if (!id || !emitted.has(id)) {
+      emit(block)
+    }
+  }
+  return { blocks: outBlocks, firstLevelBlockIds: outFirstLevel }
+}
+
+type BlockPiece = { rootId: string; blocks: Array<Record<string, unknown>> }
+
+function makeFreshIdGen(used: Set<string>): () => string {
+  let counter = 0
+  return () => {
+    let id = `split-${counter++}`
+    while (used.has(id)) {
+      id = `split-${counter++}`
+    }
+    used.add(id)
+    return id
+  }
+}
+
+function splitOneBlock(
+  rootId: string,
+  byId: Map<string, Record<string, unknown>>,
+  budget: number,
+  idGen: () => string,
+): BlockPiece[] {
+  const root = byId.get(rootId)
+  if (!root) {
+    return [{ rootId, blocks: [] }]
+  }
+  if (root.block_type === 31 && root.table && typeof root.table === 'object') {
+    const split = splitTableByRows(root, byId, budget, idGen)
+    if (split) return split
+  }
+  const childIds = normalizeChildIds(root.children)
+  if (childIds.length > 0) {
+    return splitContainerByChildren(root, childIds, byId, budget, idGen)
+  }
+  // A childless block is itself a single block (size 1) and can never be
+  // oversized; if we somehow get here, emit it unchanged.
+  return [{ rootId, blocks: collectDescendants(byId, rootId) }]
+}
+
+function splitTableByRows(
+  table: Record<string, unknown>,
+  byId: Map<string, Record<string, unknown>>,
+  budget: number,
+  idGen: () => string,
+): BlockPiece[] | null {
+  const tableData = table.table as Record<string, unknown>
+  const property = tableData.property && typeof tableData.property === 'object'
+    ? tableData.property as Record<string, unknown>
+    : {}
+  const rowSize = readPositiveNumber(property.row_size) ?? 0
+  const columnSize = readPositiveNumber(property.column_size) ?? 0
+  const cellIds = normalizeChildIds(table.children)
+  // Bail to the generic path on any unexpected shape (no header row to repeat,
+  // missing cells); the caller falls through to container splitting.
+  if (rowSize < 2 || columnSize < 1 || cellIds.length < rowSize * columnSize) {
+    return null
+  }
+  const cellSubtree = (cellId: string) => collectDescendants(byId, cellId)
+  const rowCost = (row: number) => {
+    let count = 0
+    for (let col = 0; col < columnSize; col++) {
+      count += cellSubtree(cellIds[row * columnSize + col]!).length
+    }
+    return count
+  }
+  const headerCellIds = Array.from({ length: columnSize }, (_, col) => cellIds[col]!)
+  const headerCost = headerCellIds.reduce((sum, id) => sum + cellSubtree(id).length, 0)
+  // budget − table block − repeated header = room for this chunk's data rows.
+  const dataRowBudget = Math.max(1, budget - 1 - headerCost)
+
+  const groups: number[][] = []
+  let current: number[] = []
+  let currentCost = 0
+  for (let row = 1; row < rowSize; row++) {
+    const cost = rowCost(row)
+    if (current.length > 0 && currentCost + cost > dataRowBudget) {
+      groups.push(current)
+      current = []
+      currentCost = 0
+    }
+    current.push(row)
+    currentCost += cost
+  }
+  if (current.length > 0) {
+    groups.push(current)
+  }
+
+  const pieces: BlockPiece[] = []
+  groups.forEach((rows, groupIndex) => {
+    const newTableId = idGen()
+    const blocks: Array<Record<string, unknown>> = []
+    const childCellIds: string[] = []
+    // The first chunk reuses the original header cells; later chunks clone them
+    // with fresh ids so the header repeats without id collisions.
+    for (const headerId of headerCellIds) {
+      if (groupIndex === 0) {
+        childCellIds.push(headerId)
+        blocks.push(...cellSubtree(headerId))
+      } else {
+        const cloned = deepCloneSubtree(headerId, byId, idGen)
+        childCellIds.push(cloned.newRootId)
+        blocks.push(...cloned.blocks)
+      }
+    }
+    // Data cells keep their original ids (each used in exactly one chunk).
+    for (const row of rows) {
+      for (let col = 0; col < columnSize; col++) {
+        const cellId = cellIds[row * columnSize + col]!
+        childCellIds.push(cellId)
+        blocks.push(...cellSubtree(cellId))
+      }
+    }
+    const newTable: Record<string, unknown> = {
+      block_id: newTableId,
+      block_type: 31,
+      table: { property: { row_size: 1 + rows.length, column_size: columnSize } },
+      children: childCellIds,
+    }
+    pieces.push({ rootId: newTableId, blocks: [newTable, ...blocks] })
+  })
+  return pieces
+}
+
+function splitContainerByChildren(
+  container: Record<string, unknown>,
+  childIds: string[],
+  byId: Map<string, Record<string, unknown>>,
+  budget: number,
+  idGen: () => string,
+): BlockPiece[] {
+  // Each child becomes a "unit" ≤ budget−1 (leaving room for the shell). A child
+  // that is itself oversized recurses through splitOneBlock first.
+  const units: BlockPiece[] = []
+  for (const childId of childIds) {
+    const subtree = collectDescendants(byId, childId)
+    if (subtree.length <= budget - 1) {
+      units.push({ rootId: childId, blocks: subtree })
+    } else {
+      units.push(...splitOneBlock(childId, byId, budget - 1, idGen))
+    }
+  }
+
+  const pieces: BlockPiece[] = []
+  let group: BlockPiece[] = []
+  let groupCost = 0
+  let isFirst = true
+  const flush = () => {
+    if (group.length === 0) return
+    const shell: Record<string, unknown> = { ...container }
+    delete shell.parent_id
+    if (!isFirst) {
+      shell.block_id = idGen()
+    }
+    shell.children = group.map(unit => unit.rootId)
+    const blocks: Array<Record<string, unknown>> = [shell]
+    for (const unit of group) {
+      blocks.push(...unit.blocks)
+    }
+    pieces.push({ rootId: shell.block_id as string, blocks })
+    isFirst = false
+    group = []
+    groupCost = 0
+  }
+  for (const unit of units) {
+    if (group.length > 0 && groupCost + unit.blocks.length + 1 > budget) {
+      flush()
+    }
+    group.push(unit)
+    groupCost += unit.blocks.length
+  }
+  flush()
+  return pieces
+}
+
+function deepCloneSubtree(
+  rootId: string,
+  byId: Map<string, Record<string, unknown>>,
+  idGen: () => string,
+): { newRootId: string; blocks: Array<Record<string, unknown>> } {
+  const order = collectDescendants(byId, rootId)
+  const idMap = new Map<string, string>()
+  for (const block of order) {
+    if (typeof block.block_id === 'string') {
+      idMap.set(block.block_id, idGen())
+    }
+  }
+  const blocks = order.map(block => {
+    const clone = { ...block }
+    delete clone.parent_id
+    if (typeof block.block_id === 'string') {
+      clone.block_id = idMap.get(block.block_id)
+    }
+    const kids = normalizeChildIds(block.children)
+    if (kids.length > 0) {
+      clone.children = kids.map(kid => idMap.get(kid) ?? kid)
+    }
+    return clone
+  })
+  return { newRootId: idMap.get(rootId) ?? rootId, blocks }
 }
 
 function collectDescendants(
