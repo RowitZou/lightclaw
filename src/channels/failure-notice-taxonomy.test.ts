@@ -131,3 +131,61 @@ describe('failure notice taxonomy (D12 contract)', () => {
     }
   })
 })
+
+// Owner-routed model-down notices (2026-06-30): the card names the failing
+// model, a BYO model keeps the owner-actionable hint, and a PUBLIC (admin-
+// owned) model swaps in "switch model or consult admin". These exercise the
+// `{model, isPublic}` arg of formatNoticeFromFailure — on the pre-change code
+// (which had no third arg and no such i18n keys) these assertions fail.
+describe('failure notice: owner-routed model-down', () => {
+  const billing = 'insufficient_quota: You exceeded your current quota.'
+
+  it('names the failing model on a model-down card', () => {
+    const notice = formatNoticeFromFailure(billing, false, {
+      model: 'gpt-5.5-boyue',
+      isPublic: false,
+    })
+    assert.ok(
+      notice.text.includes(t('channel.failure.modelLine', { model: 'gpt-5.5-boyue' })),
+      `model line should name the model; got:\n${notice.text}`,
+    )
+  })
+
+  it('BYO model-down keeps the owner-actionable hint (not the public one)', () => {
+    const notice = formatNoticeFromFailure(billing, false, { model: 'my-model', isPublic: false })
+    assert.ok(notice.text.includes(t('channel.failure.billingHint')), 'BYO keeps billing hint')
+    assert.equal(
+      notice.text.includes(t('channel.failure.publicModelUserHint')),
+      false,
+      'BYO must not get the public switch-or-admin hint',
+    )
+  })
+
+  it('public model-down swaps in the switch-or-consult-admin hint', () => {
+    const notice = formatNoticeFromFailure(billing, false, { model: 'shared-opus', isPublic: true })
+    assert.ok(
+      notice.text.includes(t('channel.failure.publicModelUserHint')),
+      'public model-down uses the public hint',
+    )
+    assert.equal(
+      notice.text.includes(t('channel.failure.billingHint')),
+      false,
+      'public model-down must not show the owner-fix hint',
+    )
+  })
+
+  it('non-model-down fatal ignores the public routing even when isPublic', () => {
+    // A framework/protocol error is not a model-availability problem: it keeps
+    // its own (contact-admin) hint, never the public model-switch hint.
+    const notice = formatNoticeFromFailure('invalid_request_error: messages.0', false, {
+      model: 'shared-opus',
+      isPublic: true,
+    })
+    assert.equal(
+      notice.text.includes(t('channel.failure.publicModelUserHint')),
+      false,
+      'validation error is not model-down → no public hint',
+    )
+    assert.ok(notice.text.includes(t('channel.failure.contactAdminHint')))
+  })
+})

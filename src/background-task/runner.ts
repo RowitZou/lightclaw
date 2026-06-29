@@ -4,7 +4,6 @@ import path from 'node:path'
 import { getConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
-import { applyCredentialDegrade } from '../model-resolution.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
@@ -80,7 +79,7 @@ export async function runBackgroundTaskFire(input: {
         attempt: 1,
       }
     }
-    const model = applyCredentialDegrade(config.defaultModel, config)
+    const model = config.defaultModel
     const permissionMode = prefs.permissionMode ?? config.permissionMode
     const permissionCeiling = await getUserPermissionCeiling(input.task.ownerCanonicalUser)
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))

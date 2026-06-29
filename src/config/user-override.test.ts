@@ -7,12 +7,6 @@ import { tmpdir } from 'node:os'
 import { setLightclawHomeOverride } from '../paths.js'
 import { userConfigPath, userSecretsPath } from '../identity/paths.js'
 import { userCodexAuthPath } from '../auth/codex/user-store.js'
-import {
-  clearCredentialDegrade,
-  isModelCredentialDisabled,
-  setCredentialDegrade,
-} from '../auth/codex/degrade-state.js'
-import { applyCredentialDegrade } from '../model-resolution.js'
 import { identityPreferencesPath } from '../identity/preferences.js'
 import type { LightClawConfig, ModelEntry } from '../config.js'
 import {
@@ -498,39 +492,31 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     assert.ok(!onDisk.includes('fake-refresh-token'), 'refresh token must NEVER be written to config.json')
   })
 
-  it('(e) invariant #2: user BYO codex model survives regardless of admin global codex degrade state', () => {
-    // Simulate the admin-global codex being degraded/absent at startup: the
-    // credential-degrade verdict disables an ADMIN oauth model by name. The
-    // user's BYO codex model is name-distinct, so it must NOT be swept.
-    setCredentialDegrade({ disabledModels: ['admin-codex'], fallbackModel: 'm' })
-    try {
-      // base has an admin codex model that startup would have disabled.
-      const base = makeBase({
-        defaultModel: 'm',
-        models: {
-          ...MODELS,
-          'admin-codex': { endpoint: 'a', schema: 'codex', upstreamModel: 'gpt-admin' },
-        },
-      })
-      writeFakeUserCodex('alice', 'personal')
-      writeUserConfigJson('alice', {
-        endpoints: { 'my-codex': { authRef: 'codex:personal' } },
-        models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
-        defaultModel: 'gpt-codex',
-      })
-      const resolved = resolveUserConfig('alice', base)
-      // The user's BYO codex model is present and selectable.
-      assert.ok(resolved.models['gpt-codex'], 'user BYO codex model must survive admin codex degrade')
-      assert.equal(resolved.models['gpt-codex'].schema, 'codex')
-      // The user's BYO codex model is NOT in the degrade-disabled set.
-      assert.equal(isModelCredentialDisabled('gpt-codex'), false)
-      // Selecting it does not get swapped away by applyCredentialDegrade.
-      assert.equal(applyCredentialDegrade('gpt-codex', resolved), 'gpt-codex')
-      // The admin codex model IS still disabled (degrade scoped to admin names).
-      assert.equal(isModelCredentialDisabled('admin-codex'), true)
-    } finally {
-      clearCredentialDegrade()
-    }
+  it('(e) invariant #2: user BYO codex model survives in the union merge', () => {
+    // The user's BYO codex model is name-distinct from any admin model, so the
+    // union merge keeps it selectable. There is no startup credential-degrade
+    // that could sweep or substitute it — a model that fails to authenticate
+    // surfaces at call time, it is never silently disabled.
+    const base = makeBase({
+      defaultModel: 'm',
+      models: {
+        ...MODELS,
+        'admin-codex': { endpoint: 'a', schema: 'codex', upstreamModel: 'gpt-admin' },
+      },
+    })
+    writeFakeUserCodex('alice', 'personal')
+    writeUserConfigJson('alice', {
+      endpoints: { 'my-codex': { authRef: 'codex:personal' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'codex', upstreamModel: 'gpt-5.5' } },
+      defaultModel: 'gpt-codex',
+    })
+    const resolved = resolveUserConfig('alice', base)
+    // The user's BYO codex model is present and selectable.
+    assert.ok(resolved.models['gpt-codex'], 'user BYO codex model must survive')
+    assert.equal(resolved.models['gpt-codex'].schema, 'codex')
+    // The admin codex model also survives the union (admin base ∪ user BYO).
+    assert.ok(resolved.models['admin-codex'], 'admin codex model present in union')
+    assert.equal(resolved.defaultModel, 'gpt-codex')
   })
 
   function writeSecret(user: string, name: string, value: string): void {

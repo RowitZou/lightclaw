@@ -42,7 +42,12 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
-import { applyCredentialDegrade, resolveRoleModel } from '../model-resolution.js'
+import { resolveRoleModel } from '../model-resolution.js'
+import {
+  clearModelDownOnSuccess,
+  recordAdminModelDown,
+  recordUserModelDown,
+} from './model-down-state.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getMainRole } from '../agents/registry.js'
@@ -1638,8 +1643,13 @@ export class ChannelRunner {
             // abort. Skip the notice (transcript marker already records the
             // /stop attribution via formatQueryFailure).
             if (!ABORT_FAILURE_PATTERN.test(detail)) {
-              const notice = formatNoticeFromFailure(detail, isTransient)
-              await this.sendNotice(effectiveMessage, notice.kind, notice.text)
+              await this.surfaceQueryFailure({
+                detail,
+                isTransient,
+                sessionId,
+                model: resolveRoleModel(getMainRole(), appConfig),
+                message: effectiveMessage,
+              })
             }
             return
           }
@@ -1689,6 +1699,10 @@ export class ChannelRunner {
         // place; that was the regression we are reverting. The CLI exit path
         // (cli.ts SIGINT/SIGTERM/finally) still drains before process shutdown.
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
+        // A successful turn re-arms model-down notices: clear this session's
+        // down mark for the model AND the admin alert (the model can talk
+        // again). See model-down-state.ts.
+        clearModelDownOnSuccess(sessionId, resolveRoleModel(getMainRole(), appConfig))
         // If onAssistantTurn streamed body text mid-query, the user already
         // saw it — sending result.assistantText here would just duplicate.
         // Only fall back to a final single-shot reply when nothing was
@@ -2182,8 +2196,8 @@ export class ChannelRunner {
       channel: 'feishu',
       // Resolved per-user config (defaultModel already merged via the chain,
       // may be '' in the graceful no-model state — read slashes still display
-      // fine). applyCredentialDegrade is a no-op on an empty model.
-      model: applyCredentialDegrade(resolveRoleModel(getMainRole(), config), config),
+      // fine).
+      model: resolveRoleModel(getMainRole(), config),
       config,
       sessionsDir: userSessionsRoot(userId),
       memoryDir: getMemoryDir(userId),
@@ -2413,6 +2427,74 @@ export class ChannelRunner {
    * silently drops the response) — but a non-DM origin only ever gets the
    * sanitized dmPushFailed line in-chat, never the pairing-code payload.
    */
+  /**
+   * Surface a fatal query failure as a user notice, with owner-routed
+   * model-down handling (no silent model substitution — fail loud):
+   *  - non-model-down fatal (framework / protocol / tool): one card, unchanged.
+   *  - model-down fatal: edge-triggered per (session, model) — full card on the
+   *    healthy→down edge, a short "still unavailable" line on repeats. A PUBLIC
+   *    (admin-owned) model also alerts the admin once per outage; a BYO model
+   *    stays with the owner (the user) only.
+   */
+  private async surfaceQueryFailure(input: {
+    detail: string
+    isTransient: boolean
+    sessionId: string
+    model: string
+    message: NormalizedChannelMessage
+  }): Promise<void> {
+    const { detail, isTransient, sessionId, model, message } = input
+    const classification = isTransient ? null : classifyChannelFailure(detail)
+    const modelDown = !!classification && !!model && isModelDownCode(classification.code)
+    if (!modelDown) {
+      const notice = formatNoticeFromFailure(detail, isTransient)
+      await this.sendNotice(message, notice.kind, notice.text)
+      return
+    }
+    // A model is "public" when it is in the admin global base registry; a name
+    // only in the user's BYO override is theirs to fix.
+    const isPublic = !!getConfig().models?.[model]
+    const phase = recordUserModelDown(sessionId, model)
+    if (phase === 'repeat') {
+      await this.sendNotice(message, 'warning', t('channel.failure.repeatBrief', { model }))
+    } else {
+      const notice = formatNoticeFromFailure(detail, false, { model, isPublic })
+      await this.sendNotice(message, notice.kind, notice.text)
+    }
+    if (isPublic && recordAdminModelDown(model)) {
+      await this.pushAdminModelAlert(model, classification!.category, message)
+    }
+  }
+
+  /** Push a one-shot "shared model unavailable" alert to the admin's DM
+   *  (edge-triggered by the caller via recordAdminModelDown). Best-effort:
+   *  a missing admin binding / push failure logs to stderr and is swallowed. */
+  private async pushAdminModelAlert(
+    model: string,
+    category: string,
+    message: NormalizedChannelMessage,
+  ): Promise<void> {
+    try {
+      const adminName = await getAdmin().catch(() => null)
+      if (!adminName) return
+      const identity = await getIdentity(adminName).catch(() => null)
+      const adminOpenId = identity?.channels.feishu[0]
+      if (!adminOpenId || !this.strategy.sendNoticeToOpenId) return
+      const content = `${t('admin.modelAlert.title')}\n\n${t('admin.modelAlert.body', { model, category })}`
+      await this.strategy.sendNoticeToOpenId({
+        message,
+        applicantOpenId: adminOpenId,
+        kind: 'warning',
+        content,
+      })
+    } catch (error) {
+      const errDetail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: admin model-down alert push failed for ${model}: ${errDetail}\n`,
+      )
+    }
+  }
+
   private async sendApplicantNotice(
     message: NormalizedChannelMessage,
     applicantOpenId: string,
@@ -2912,6 +2994,11 @@ function formatQueryFailure(detail: string, isTransient: boolean): string {
 export function formatNoticeFromFailure(
   detail: string,
   isTransient: boolean,
+  /** When the failure is a model-availability failure, `model` names the
+   *  failing model (rendered as a `模型：X` line) and `isPublic` says whether
+   *  it is an admin-owned shared model — for which the user gets a "switch or
+   *  consult admin" hint instead of the owner-actionable one. */
+  opts?: { model?: string; isPublic?: boolean },
 ): { text: string; kind: SystemNoticeKind } {
   if (isTransient) {
     return {
@@ -2924,30 +3011,63 @@ export function formatNoticeFromFailure(
       kind: 'info',
     }
   }
-  const { category, hint, kind } = classifyFailure(detail)
+  const { category, hint, kind, code } = classifyFailure(detail)
+  // A PUBLIC model that is down is not the user's to fix — replace the
+  // owner-actionable hint with "switch model or consult admin".
+  const effectiveHint =
+    isModelDownCode(code) && opts?.isPublic
+      ? t('channel.failure.publicModelUserHint')
+      : hint
   const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
-  return {
-    text: [
-      t('channel.failure.title'),
-      '',
-      t('channel.failure.reason', { category }),
-      hint,
-      '',
-      '```',
-      head,
-      '```',
-    ].join('\n'),
-    kind,
+  const lines = [
+    t('channel.failure.title'),
+    '',
+    t('channel.failure.reason', { category }),
+  ]
+  if (opts?.model) {
+    lines.push(t('channel.failure.modelLine', { model: opts.model }))
   }
+  lines.push(effectiveHint, '', '```', head, '```')
+  return { text: lines.join('\n'), kind }
 }
 
 // Single source of truth: branches in retry-taxonomy order, consuming the same
 // transient-error.ts judgments the retry decision uses (D10/D12). Each class
 // carries its category label, its hint tier, and its notice color.
+// Stable classification code (locale-independent), so callers can branch on
+// failure class without matching translated category text.
+export type FailureCode =
+  | 'credentials'
+  | 'billing'
+  | 'modelEndpoint'
+  | 'auth'
+  | 'rate'
+  | 'tool'
+  | 'validation'
+  | 'bad400'
+  | 'generic'
+
+// The classes that mean "the configured model itself is currently
+// unavailable" (the owner must fix credentials / billing / endpoint). These
+// drive the owner-routed alert + edge-triggered dedup; framework / protocol
+// errors (validation / bad400 / generic / tool) are NOT model-down.
+const MODEL_DOWN_CODES: ReadonlySet<FailureCode> = new Set<FailureCode>([
+  'credentials',
+  'billing',
+  'modelEndpoint',
+  'auth',
+])
+
+/** True when the failure means the configured model is unavailable. */
+export function isModelDownCode(code: FailureCode): boolean {
+  return MODEL_DOWN_CODES.has(code)
+}
+
 function classifyFailure(detail: string): {
   category: string
   hint: string
   kind: SystemNoticeKind
+  code: FailureCode
 } {
   // Provider-actionable, fatal — orange, no "contact admin" (D13: the owner
   // may hold the keys / billing once BYO-credential lands).
@@ -2956,6 +3076,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.credentials'),
       hint: t('channel.failure.credentialHint'),
       kind: 'warning',
+      code: 'credentials',
     }
   }
   if (isBillingError(detail)) {
@@ -2963,6 +3084,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.billing'),
       hint: t('channel.failure.billingHint'),
       kind: 'warning',
+      code: 'billing',
     }
   }
   if (isModelOrEndpointError(detail)) {
@@ -2970,6 +3092,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.modelEndpoint'),
       hint: t('channel.failure.modelEndpointHint'),
       kind: 'warning',
+      code: 'modelEndpoint',
     }
   }
   // Self-healing throttle — blue (defensive: rate-limits are normally
@@ -2980,6 +3103,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.rate'),
       hint: t('channel.failure.rateHint'),
       kind: 'info',
+      code: 'rate',
     }
   }
   // auth (401/403) that is not a credential error — orange, actionable.
@@ -2988,6 +3112,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.auth'),
       hint: t('channel.failure.authHint'),
       kind: 'warning',
+      code: 'auth',
     }
   }
   // Tool failures can be retryable (transient / permission) — blue, keep the
@@ -2997,6 +3122,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.tool'),
       hint: t('channel.failure.hint'),
       kind: 'info',
+      code: 'tool',
     }
   }
   // Deterministic internal errors — red, "contact admin" (D13: framework /
@@ -3006,6 +3132,7 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.validation'),
       hint: t('channel.failure.contactAdminHint'),
       kind: 'error',
+      code: 'validation',
     }
   }
   if (/StatusCode: 400|InvokeModel/i.test(detail)) {
@@ -3013,13 +3140,26 @@ function classifyFailure(detail: string): {
       category: t('channel.failure.cat.bad400'),
       hint: t('channel.failure.contactAdminHint'),
       kind: 'error',
+      code: 'bad400',
     }
   }
   return {
     category: t('channel.failure.cat.generic'),
     hint: t('channel.failure.contactAdminHint'),
     kind: 'error',
+    code: 'generic',
   }
+}
+
+/** Public classification entry for callers that need the failure class
+ *  (owner-routing / dedup) without rendering a notice. */
+export function classifyChannelFailure(detail: string): {
+  category: string
+  hint: string
+  kind: SystemNoticeKind
+  code: FailureCode
+} {
+  return classifyFailure(detail)
 }
 
 export async function formatChannelUserText(

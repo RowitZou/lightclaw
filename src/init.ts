@@ -2,7 +2,6 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { registerCodexAuthProvider } from './auth/codex/index.js'
-import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
 import { getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import { getBackgroundExecWatcher } from './background-exec/watcher.js'
 import { getTaskRunWatchdog } from './taskrun/watchdog.js'
@@ -92,19 +91,13 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   // user-visible message (banner, slash output, error notices) is rendered
   // in the configured locale. Stderr logging is unaffected.
   setLang(resolvedConfig.lang)
-  // Auth providers must be registered before the OAuth model usability
-  // check below: ensureOAuthModelsUsable looks up `getAuthProvider('codex')`.
-  // Moved up from its previous spot below initializeAgents() because the
-  // usability check may degrade `config.models` / `defaultModel`
-  // before createResolvedSessionContext reads them into the session meta.
+  // Register the Codex auth provider so codex-schema models can resolve
+  // credentials (read stored token + auto-refresh) at call time. There is
+  // intentionally NO startup credential probe / model-degrade: a model that
+  // cannot authenticate fails loudly at use time via getProviderFor + the
+  // runtime failure classifier, routed to the model's owner — the daemon
+  // never silently disables or substitutes a model the operator configured.
   registerCodexAuthProvider(resolvedConfig)
-  // If any registered model uses schema = 'codex', ensure Codex
-  // credentials work (read stored token + auto-refresh; fall back to
-  // import from ~/.codex/auth.json only when the LightClaw store is
-  // empty). On failure, disable the OAuth models in-memory and rewrite
-  // defaultModel away from them. Throws same-shape as
-  // 'No models configured' if every model was OAuth and login failed.
-  await ensureOAuthModelsUsable(resolvedConfig)
   // NetworkBridge must come up BEFORE pool/preheat — when network.mode=host,
   // pool.ts auto-injects http_proxy pointing at this bridge's address into
   // every container, so a not-yet-listening bridge would mean the first

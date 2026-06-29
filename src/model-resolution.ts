@@ -1,46 +1,18 @@
 import type { LightClawConfig } from './config.js'
 import type { Role } from './agents/types.js'
-import {
-  credentialDegradeFallback,
-  isModelCredentialDisabled,
-} from './auth/codex/degrade-state.js'
 
 export type ToolModuleName = 'compact' | 'imageRead' | 'webSearch'
 
-/**
- * Redirect a model that the startup credential degrade disabled to the usable
- * fallback. No-op when credentials are healthy (the disabled set is empty), so
- * the normal path is unchanged. During a credential outage it keeps a session
- * (or `/config model` preference) pinned to an unreachable model working on the
- * fallback instead of bricking on every turn. If the fallback is itself
- * disabled or absent, the original model is returned and the resulting auth
- * error surfaces with its actionable notice (see transient-error.ts).
- */
-export function applyCredentialDegrade(
-  model: string,
-  config: LightClawConfig,
-): string {
-  if (!isModelCredentialDisabled(model)) {
-    return model
-  }
-  const fallback = credentialDegradeFallback()
-  if (fallback && !isModelCredentialDisabled(fallback) && config.models?.[fallback]) {
-    return fallback
-  }
-  if (
-    !isModelCredentialDisabled(config.defaultModel) &&
-    config.models?.[config.defaultModel]
-  ) {
-    return config.defaultModel
-  }
-  return model
-}
+// Model selection is the operator's / user's explicit choice — there is NO
+// silent substitution. A model that is configured but currently unreachable
+// (dead OAuth, exhausted balance, bad endpoint) is returned as-is and fails
+// loudly at provider-call time, where the runtime failure classifier surfaces
+// an actionable notice to the model's owner. Do NOT reintroduce a
+// credential-degrade reroute here: swapping a session's pinned model for a
+// different one mid-outage changes output quality/behavior without the user's
+// knowledge and hides the real (owner-actionable) problem.
 
 export function resolveRoleModel(role: Role, config: LightClawConfig): string {
-  return applyCredentialDegrade(resolveRoleModelRaw(role, config), config)
-}
-
-function resolveRoleModelRaw(role: Role, config: LightClawConfig): string {
   if (role.agentType === 'main') {
     return config.defaultModel
   }
@@ -58,8 +30,5 @@ export function resolveToolModuleModel(
   // `imageRead` draws from the `image` lane; `compact` + `webSearch` draw from
   // the `system` lane. Empty-string lane value = unset → defaultModel.
   const bucket = moduleName === 'imageRead' ? config.lane.image : config.lane.system
-  return applyCredentialDegrade(
-    bucket && bucket.trim() ? bucket : config.defaultModel,
-    config,
-  )
+  return bucket && bucket.trim() ? bucket : config.defaultModel
 }
