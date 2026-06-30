@@ -641,6 +641,29 @@ export function adminProxyCardSpec(current: string | undefined): CommandListCard
   }
 }
 
+export function adminVersionCardSpec(version: string, build: string): CommandListCardSpec {
+  return {
+    title: t('card.cmdHelp.title', { cmd: '/admin version' }),
+    sections: [
+      {
+        heading: t('card.admin.version.showHeading'),
+        markdown: t('card.admin.version.current', { version, build }),
+      },
+      {
+        heading: t('card.subcommands'),
+        rows: [
+          [t('card.admin.version.sub.update.cmd'), t('card.admin.version.sub.update.desc')],
+          [t('card.admin.version.sub.dryRun.cmd'), t('card.admin.version.sub.dryRun.desc')],
+        ],
+      },
+      {
+        heading: t('card.examples'),
+        codeExamples: ['/admin version update', '/admin version update --dry-run'],
+      },
+    ],
+  }
+}
+
 // ── /system key (collection + note) ──────────────────────────────────────────
 
 export interface KeyShowRow {

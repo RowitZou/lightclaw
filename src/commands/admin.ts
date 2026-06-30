@@ -32,6 +32,7 @@ import {
   adminProxyCardSpec,
   adminSandboxCardSpec,
   adminUserCardSpec,
+  adminVersionCardSpec,
   formatCommandListSpecAsText,
   type BackendShowRow,
   type EndpointShowRow,
@@ -311,18 +312,7 @@ async function runAdminVersion(parts: string[], ctx: AdminCommandContext): Promi
   }
   // Bare / show / status → the version card. Instant local info (VERSION +
   // git build id); checking for an available update is `update --dry-run`.
-  const spec: CommandListCardSpec = {
-    title: t('card.cmdHelp.title', { cmd: '/admin version' }),
-    sections: [
-      { markdown: t('admin.version.current', { version: VERSION, build: getBuildId() }) },
-      {
-        rows: [
-          ['/admin version update', t('admin.version.updateRow')],
-          ['/admin version update --dry-run', t('admin.version.dryRunRow')],
-        ],
-      },
-    ],
-  }
+  const spec = adminVersionCardSpec(VERSION, getBuildId())
   ctx.setCommandListCard?.(spec)
   return formatCommandListSpecAsText(spec)
 }

@@ -49,6 +49,8 @@ pnpm dev                  # tsx src/cli.ts —— 免构建，迭代最快
 
 > 想把数据放到共享存储（集群部署、避免开发机销毁丢数据），启动前 `export LIGHTCLAW_HOME=<path>`。
 
+> 长期部署用 `./run.sh` 启动（而非 `pnpm start`）——一个极薄的 supervisor，崩溃自动重启，并让 admin 在聊天里自更新：`/admin version update` 拉取最新代码、重新构建、校验后原地重启（不丢任何在途消息）。详见 [`/admin version`](#使用)。
+
 ---
 
 ## 配置
@@ -75,7 +77,7 @@ lightclaw --home <dir>    # 临时切 home    lightclaw --config <file>  # 外�
 | `/system` `(飞书)` | 你的运行时资源：`key`（密钥）/ `mount`（gpfs 路径）/ `data`（导入·导出） |
 | `/feedback` | 给 admin 留反馈 |
 | `/stop` `(飞书)` | 中断当前会话的 turn |
-| `/admin` `(admin)` | 部署运维：`cost` / `user` / `pairing` / `ceiling` / `sandbox` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
+| `/admin` `(admin)` | 部署运维：`cost` / `user` / `pairing` / `ceiling` / `sandbox` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` / `version`（版本/构建号 + `version update` 自更新重启） |
 
 **权限**：四档从严到宽 `read` / `ask` / `auto` / `yolo`，危险操作弹卡确认。`/config mode` 不能超过 admin 给的上限（`/admin ceiling set <user> <mode>`）。即便 `yolo` 也能用 `permissions.json` 的 `ask` 列表锁死指定操作（如 `"ask": ["Bash(rm:*)"]`）。
 

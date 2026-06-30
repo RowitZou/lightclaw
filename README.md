@@ -49,6 +49,8 @@ First launch creates a single admin identity bound to the current terminal user,
 
 > To keep data on shared storage (cluster deploys, surviving a wiped dev box), `export LIGHTCLAW_HOME=<path>` before launching.
 
+> For a long-lived deploy, launch with `./run.sh` instead of `pnpm start` — a thin supervisor that restarts the daemon on a crash and lets the admin self-update from chat: `/admin version update` pulls the latest code, rebuilds, verifies, and restarts in place (no in-flight messages lost). See [`/admin version`](#usage).
+
 ---
 
 ## Configuration
@@ -75,7 +77,7 @@ The terminal does not run the agent — talk to the agent over Feishu. Everythin
 | `/system` `(feishu)` | Your runtime resources: `key` (secrets) / `mount` (gpfs paths) / `data` (export·import) |
 | `/feedback` | Leave feedback for the admin |
 | `/stop` `(feishu)` | Abort the current session's in-flight turn |
-| `/admin` `(admin)` | Deployment ops: `cost` / `user` / `pairing` / `ceiling` / `sandbox` / `mount` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` |
+| `/admin` `(admin)` | Deployment ops: `cost` / `user` / `pairing` / `ceiling` / `sandbox` / `mount` / `feishu-drive` / `endpoint` / `backend` / `lane` / `proxy` / `version` (build info + `version update` self-update & restart) |
 
 **Permissions**: four modes from strict to loose — `read` / `ask` / `auto` / `yolo`, with approval cards for risky operations. `/config mode` cannot exceed the ceiling the admin grants (`/admin ceiling set <user> <mode>`). Even under `yolo` you can lock specific operations with the `ask` list in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`).
 

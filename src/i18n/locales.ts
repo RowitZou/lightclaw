@@ -158,6 +158,12 @@ export const LOCALES = {
     'card.admin.proxy.sub.clear.desc': '清除公共代理，恢复直连',
     'card.admin.proxy.note':
       '公共代理对所有用户的模型服务生效。单独配置了代理的模型服务以其自身配置为准；未配置的回退至公共代理；公共代理亦未设置时直接连接。',
+    'card.admin.version.showHeading': '当前版本',
+    'card.admin.version.current': 'LightClaw v{version}（构建 {build}）',
+    'card.admin.version.sub.update.cmd': 'update',
+    'card.admin.version.sub.update.desc': '拉取最新代码、构建并重启',
+    'card.admin.version.sub.dryRun.cmd': 'update --dry-run',
+    'card.admin.version.sub.dryRun.desc': '仅预览可更新到的版本，不动手',
     'admin.user.usage': '用法：/admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': '用法：/admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': '用法：/admin feishu-drive [status | rm <canonical> --y]',
@@ -182,10 +188,7 @@ export const LOCALES = {
     'admin.proxy.invalid': '错误：代理地址无效（{detail}）；未写入。',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
-    // ---- /admin version (show build) + update (self-update + restart) ----
-    'admin.version.current': '当前版本：LightClaw v{version}（构建 {build}）',
-    'admin.version.updateRow': '拉取最新代码、构建并重启',
-    'admin.version.dryRunRow': '仅预览可更新到的版本，不动手',
+    // ---- /admin version update (self-update + supervised restart) ----
     'admin.update.dirty': '已取消：部署检出有未提交改动，拉取会覆盖它们。请先清理工作树再更新。',
     'admin.update.upToDate': '已是最新（{sha}），无需更新。',
     'admin.update.diverged': '已取消：本地分支已分叉（领先 {ahead} / 落后 {behind} 个提交），无法快进。请手动处理后再更新。',
@@ -1162,6 +1165,12 @@ export const LOCALES = {
     'card.admin.proxy.sub.clear.desc': 'clear the public proxy, back to direct',
     'card.admin.proxy.note':
       'The public proxy applies to every user\'s model services. A model service configured with its own proxy uses that configuration; one without falls back to the public proxy; if the public proxy is also unset, it connects directly.',
+    'card.admin.version.showHeading': 'Current version',
+    'card.admin.version.current': 'LightClaw v{version} (build {build})',
+    'card.admin.version.sub.update.cmd': 'update',
+    'card.admin.version.sub.update.desc': 'Pull latest code, build, and restart',
+    'card.admin.version.sub.dryRun.cmd': 'update --dry-run',
+    'card.admin.version.sub.dryRun.desc': 'Preview the available update without applying',
     'admin.user.usage': 'Usage: /admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': 'Usage: /admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': 'Usage: /admin feishu-drive [status | rm <canonical> --y]',
@@ -1186,10 +1195,7 @@ export const LOCALES = {
     'admin.proxy.invalid': 'Error: invalid proxy URL ({detail}); not written.',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
-    // ---- /admin version (show build) + update (self-update + restart) ----
-    'admin.version.current': 'Current: LightClaw v{version} (build {build})',
-    'admin.version.updateRow': 'Pull latest code, build, and restart',
-    'admin.version.dryRunRow': 'Preview the available update without applying',
+    // ---- /admin version update (self-update + supervised restart) ----
     'admin.update.dirty': 'Aborted: the deployment checkout has uncommitted changes; a pull would clobber them. Clean the working tree first, then update.',
     'admin.update.upToDate': 'Already up to date ({sha}); nothing to update.',
     'admin.update.diverged': 'Aborted: the local branch has diverged (ahead {ahead} / behind {behind}); not a fast-forward. Resolve by hand, then update.',
