@@ -125,6 +125,80 @@ test("worker self-wait aborts the fire's registered controller, not its ALS sess
   )
 })
 
+test('main wait with a wake is rejected and routed to scheduled Dispatch (main never self-suspends)', async () => {
+  // 2026-06-30 dogfood (tr_c1f0…): main has no run of its own, but it tried to
+  // suspend a whole objective by naming the root in `wait` + a 24h timer wake +
+  // checkpoint. main is an unattended manager — it dispatches, ends the turn,
+  // and is woken when a result returns; it does not self-suspend. The misuse
+  // must be rejected with a route to scheduled Dispatch, NOT armed on the root
+  // (which would freeze the task card), and NOT silently dropped into a dead
+  // requester-hold (the old bug). The root must stay running.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Suspend whole objective' })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call(
+      {
+        action: 'wait',
+        runId: root.id,
+        wake: { kind: 'timer', afterMinutes: 1440 },
+        checkpoint: 'Waiting for the user to enable auto mode and reply to continue.',
+      },
+      toolContext(),
+    ),
+  )
+
+  assert.equal(result.isError, true)
+  assert.match(result.output, /Dispatch/)
+  assert.match(result.output, /schedule/)
+  const meta = await getTaskRun(root.id, 'alice')
+  assert.equal(meta?.status, 'running')
+  assert.equal(meta?.waitReason, undefined)
+})
+
+test('worker self-suspend with a wake on its own run arms the wake + checkpoint (no silent drop)', async () => {
+  // The dispatcher-worker self-suspend path: a worker parks its OWN run on a
+  // declared wake. Pre-fix, passing the own runId alongside the wake fell into
+  // the requester-hold branch — which rejected it ("not a direct child") OR, for
+  // a named-but-running run, dropped the wake + checkpoint. The wake + checkpoint
+  // must be armed and persisted.
+  const run = await startedRun({ callerRole: 'main', parentRunId: null })
+
+  const result = await runAsWorker(run.id, () =>
+    taskUpdateTool.call(
+      {
+        action: 'wait',
+        runId: run.id,
+        wake: { kind: 'timer', afterMinutes: 30 },
+        checkpoint: 'Parked until the upstream job finishes.',
+      },
+      toolContext(),
+    ),
+  )
+
+  assert.equal(result.isError, undefined)
+  const meta = await getTaskRun(run.id, 'alice')
+  assert.equal(meta?.status, 'waiting')
+  assert.equal(meta?.waitReason, 'timer')
+  assert.equal(meta?.wake?.kind, 'timer')
+  assert.equal(meta?.checkpoint, 'Parked until the upstream job finishes.')
+})
+
+test('orchestrator wait on a running child WITHOUT a wake still holds it (requester-hold unchanged)', async () => {
+  // The wake-less "hold a running child" case must keep its requester-hold
+  // semantics — the fix only diverts wait calls that carry a wake.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Hold a child' })
+  const child = await startedRun({ callerRole: 'main', parentRunId: root.id })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'wait', runId: child.id }, toolContext()),
+  )
+
+  assert.equal(result.isError, undefined)
+  const meta = await getTaskRun(child.id, 'alice')
+  assert.equal(meta?.status, 'waiting')
+  assert.equal(meta?.waitReason, 'requester-hold')
+})
+
 test('worker accepts its own delivered child but not siblings or undelivered runs', async () => {
   const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
   const child = await startedRun({ callerRole: 'coder', parentRunId: workerRun.id })

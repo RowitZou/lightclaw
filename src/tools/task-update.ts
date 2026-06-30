@@ -304,7 +304,13 @@ export const taskUpdateTool = buildTool({
     }
 
     if (input.action === 'wait') {
-      if (input.runId) {
+      // requester-hold is ONLY the wake-less "hold a running child" case (an
+      // orchestrator may pause a runaway child in its tree this way). A wait
+      // that declares a `wake` is an armed self-suspend, handled by the branch
+      // below. Gating requester-hold on `!input.wake` keeps a wake+checkpoint
+      // self-suspend from being silently swallowed into a dead, never-revived
+      // hold (2026-06-30 dogfood: a wake on a runId landed here and lost both).
+      if (input.runId && !input.wake) {
         const target = await resolveBackingRun(owner, input.runId)
         if (!target) return { output: `TaskRun not found: ${input.runId}`, isError: true }
         if (target.status !== 'running' || !target.currentSessionId) {
@@ -335,8 +341,25 @@ export const taskUpdateTool = buildTool({
           : { output: `TaskRun ${target.id} could not be set waiting.`, isError: true }
       }
 
+      // Armed self-suspend: a dispatcher-worker parks its OWN run until the
+      // declared wake fires, honoring the checkpoint. main (orchestrator) has no
+      // run of its own and follows the unattended-manager model — it dispatches,
+      // ends the turn, and is woken when a result is pushed back; it does not
+      // self-suspend. A "retry / come back in N minutes" intent from main belongs
+      // in a scheduled Dispatch (schedule: after / oneshot), not a wait. Reject
+      // it here rather than let it name the root and freeze the task card.
+      if (isOrchestrator) {
+        return {
+          output:
+            'main does not self-suspend to wait — it manages and is woken when a result returns. To retry or resume this objective later, schedule it with Dispatch({ schedule: { after: { afterMinutes } } }) (or a oneshot at an ISO time); to pause a running child, call wait with that child\'s runId and no wake.',
+          isError: true,
+        }
+      }
       const own = getCurrentTaskRunId()
-      if (!own) return { output: 'No current TaskRun to set waiting.', isError: true }
+      if (!own) return { output: 'wait requires a current TaskRun to suspend.', isError: true }
+      if (input.runId && input.runId !== own) {
+        return { output: `TaskRun ${input.runId} is not your current run — a worker can only wait on its own run.`, isError: true }
+      }
       const checkpoint = input.checkpoint?.trim()
       if (!checkpoint) return { output: 'wait requires `checkpoint` so the run can be picked back up safely.', isError: true }
       if (!input.wake) return { output: 'wait requires `wake` (child-join or timer).', isError: true }
