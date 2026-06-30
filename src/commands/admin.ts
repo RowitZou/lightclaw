@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createCodexAuthProvider, loadCodexCliTokens } from '../auth/codex/provider.js'
 import { deriveDeviceLoginStored } from '../auth/codex/device-login.js'
 import { beginCodexDeviceLogin } from '../channels/feishu/codex-device-login.js'
+import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { writeTokenFile } from '../auth/storage.js'
 import {
   getConfig,
@@ -478,10 +479,16 @@ async function addAdminEndpoint(
     // Web/device login into the GLOBAL codex store (<home>/auth/codex.json). The
     // admin's own Feishu DM gets the link + code; the endpoint config
     // (auth:'codex-oauth') is written via onPersisted once login completes.
+    // The login HTTP must route like the codex wire path: own → public → direct.
+    // Without this, a `--login` with no `--proxy` connects directly to
+    // auth.openai.com and times out wherever the daemon needs a proxy. The
+    // endpoint config below still stores only the explicit `--proxy` so the
+    // public-proxy fallback stays dynamic at wire time.
+    const loginProxy = resolveEffectiveProxy(parsed.proxy, config.publicProxy)
     const begin = await beginCodexDeviceLogin({
       canonicalUser: ctx.userId ?? '',
       alias,
-      ...(parsed.proxy ? { proxy: parsed.proxy } : {}),
+      ...(loginProxy ? { proxy: loginProxy } : {}),
       persist: tokens => {
         const stored = deriveDeviceLoginStored(tokens)
         writeTokenFile('codex', stored)

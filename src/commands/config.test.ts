@@ -1241,6 +1241,39 @@ describe('/config detail cards show effective defaults (reasoning / maxTokens / 
     const add = await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', { config: cfg, userId: 'vd5' })
     assert.match(add, /proxy=direct/)
   })
+
+  it('codex --login WITHOUT --proxy resolves the deployment public proxy for the device-login HTTP (regression)', async () => {
+    // 2026-06-30 dogfood: `--type codex --login` with no --proxy connected
+    // DIRECTLY to auth.openai.com and timed out, because the login path threaded
+    // only the (absent) explicit --proxy instead of resolving own → public →
+    // direct like every other codex wire call.
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({ publicProxy: 'http://10.9.9.9:1090' }), 'utf8')
+    let captured: string | undefined = 'UNSET'
+    const out = await runConfigCommand('endpoint add codex-ep --type codex --login', {
+      config: modelConfig(),
+      userId: 'vdcdx',
+      beginCodexDeviceLogin: async a => {
+        captured = a.proxy
+        return { ok: true as const }
+      },
+    })
+    assert.equal(captured, 'http://10.9.9.9:1090') // public-proxy fallback applied (was undefined pre-fix)
+    assert.doesNotMatch(out, /error|失败|Error/i)
+  })
+
+  it('codex --login WITH an explicit --proxy uses it over the public proxy', async () => {
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({ publicProxy: 'http://10.9.9.9:1090' }), 'utf8')
+    let captured: string | undefined = 'UNSET'
+    await runConfigCommand('endpoint add codex-ep --type codex --login --proxy http://127.0.0.1:1080', {
+      config: modelConfig(),
+      userId: 'vdcdx2',
+      beginCodexDeviceLogin: async a => {
+        captured = a.proxy
+        return { ok: true as const }
+      },
+    })
+    assert.equal(captured, 'http://127.0.0.1:1080') // explicit wins
+  })
 })
 
 describe('/config backend add — probe resolves against admin base, not session snapshot', () => {

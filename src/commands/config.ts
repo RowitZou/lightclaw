@@ -97,6 +97,10 @@ type ConfigCommandContext = {
   // Absent on minimal callers (tests, non-rlaunch backends) — setWorkspace /
   // resetWorkspace then fall back to the "needs restart" note.
   restartRlaunch?: () => Promise<MountRebuildResult>
+  // Test seam: override the codex device-login entry so a `--type codex --login`
+  // add can be exercised (and the resolved login proxy asserted) without real
+  // OpenAI network calls / a Feishu binding. Production callers leave it unset.
+  beginCodexDeviceLogin?: typeof beginCodexDeviceLogin
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
@@ -504,10 +508,18 @@ async function addEndpoint(
     // "started" notice; the endpoint config is written only once login succeeds
     // (matching the import path's "persist after it works" ordering).
     const codexName = 'default'
-    const begin = await beginCodexDeviceLogin({
+    // The login HTTP calls (auth.openai.com) must route exactly like the codex
+    // wire path will: an endpoint added without `--proxy` falls back to the
+    // deployment public proxy. Resolve the effective proxy here (own → public →
+    // direct), else a `--login` with no `--proxy` connects directly and times
+    // out wherever the daemon can't reach OpenAI without a proxy. The endpoint
+    // config below still stores only the EXPLICIT `--proxy`, so the public-proxy
+    // fallback stays dynamic at wire time (mirrors the import path).
+    const loginProxy = resolveEffectiveProxy(parsed.proxy, getConfig().publicProxy)
+    const begin = await (ctx.beginCodexDeviceLogin ?? beginCodexDeviceLogin)({
       canonicalUser: userId,
       alias,
-      ...(parsed.proxy ? { proxy: parsed.proxy } : {}),
+      ...(loginProxy ? { proxy: loginProxy } : {}),
       persist: tokens => persistDeviceLoginResult({ canonicalUser: userId, name: codexName, tokens }),
       onPersisted: () => {
         const endpoint: Record<string, unknown> = { authRef: `codex:${codexName}` }
