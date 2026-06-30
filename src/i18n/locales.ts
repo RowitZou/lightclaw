@@ -829,7 +829,7 @@ export const LOCALES = {
     'card.endpoint.param.baseUrl': '`--base-url <url>` — 自定义服务地址（可选）；使用 set 命令时填 `-` 可清除',
     'card.endpoint.param.proxy': '`--proxy <url>` — 通过代理访问该服务（可选）；使用 set 命令时填 `-` 可清除',
     'card.endpoint.param.authPath': '`--auth-path <绝对路径>` — Codex 凭证文件的绝对路径（如 `/path/to/auth.json`）；仅 `--type codex` 时使用',
-    'card.endpoint.note.codexAuth': 'Codex 凭证文件由 `codex login` 生成，默认在生成它的机器上的 `<HOME>/.codex/auth.json`（`<HOME>` 为该机器的用户主目录）。导入必须提供绝对路径（如 `/path/to/auth.json`），不接受 `~`。',
+    'card.endpoint.note.codexAuth': '`codex login` 不在 LightClaw / 飞书里执行——它是官方 OpenAI Codex CLI 的登录命令，需你先在自己的电脑上安装并运行（`npm i -g @openai/codex && codex login`，会打开浏览器完成 OAuth），生成凭证文件 `<HOME>/.codex/auth.json`（`<HOME>` 为那台电脑的用户主目录）。随后把该文件放到 LightClaw 所在机器上可读取的位置，导入时提供它的绝对路径（如 `/path/to/auth.json`），不接受 `~`。',
     // backend sub-commands (config face)
     'card.config.backend.sub.add.cmd': 'add <名称> [参数]',
     'card.config.backend.sub.add.desc': '把一个模型加进可用列表',
@@ -1814,7 +1814,7 @@ export const LOCALES = {
     'card.endpoint.param.baseUrl': '`--base-url <url>` — custom service URL (optional); pass `-` with set to clear',
     'card.endpoint.param.proxy': '`--proxy <url>` — reach this service through a proxy (optional); pass `-` with set to clear',
     'card.endpoint.param.authPath': '`--auth-path <absolute-path>` — absolute path to the Codex credential file (e.g. `/path/to/auth.json`); only with `--type codex`',
-    'card.endpoint.note.codexAuth': 'The Codex credential file is created by `codex login`, default `<HOME>/.codex/auth.json` on the machine that created it (`<HOME>` is that machine\'s home directory). Import requires an absolute path (e.g. `/path/to/auth.json`); `~` is not accepted.',
+    'card.endpoint.note.codexAuth': '`codex login` does NOT run inside LightClaw / Feishu — it is the official OpenAI Codex CLI login command that you run on your own machine first (`npm i -g @openai/codex && codex login`, which opens a browser for OAuth), producing the credential file `<HOME>/.codex/auth.json` (`<HOME>` is that machine\'s home directory). Then place that file somewhere readable on the machine running LightClaw and import it by its absolute path (e.g. `/path/to/auth.json`); `~` is not accepted.',
     'card.config.backend.sub.add.cmd': 'add <name> [params]',
     'card.config.backend.sub.add.desc': 'add a model to the usable list',
     'card.config.backend.sub.set.cmd': 'set <name> [params]',
