@@ -37,7 +37,7 @@ export type StoredCodexTokens = {
   account_id: string
   imported_at?: string
   last_refresh?: string
-  source: 'codex-cli-import' | 'lightclaw-refresh'
+  source: 'codex-cli-import' | 'lightclaw-refresh' | 'codex-device-login'
 }
 
 /** Shape of the OpenAI Codex CLI's `~/.codex/auth.json` as of mid-2026.
@@ -141,7 +141,10 @@ function readStored(): StoredCodexTokens | null {
     account_id: typeof r.account_id === 'string' ? r.account_id : '',
     ...(r.imported_at ? { imported_at: r.imported_at } : {}),
     ...(r.last_refresh ? { last_refresh: r.last_refresh } : {}),
-    source: r.source === 'lightclaw-refresh' ? 'lightclaw-refresh' : 'codex-cli-import',
+    source:
+      r.source === 'lightclaw-refresh' || r.source === 'codex-device-login'
+        ? r.source
+        : 'codex-cli-import',
   }
 }
 

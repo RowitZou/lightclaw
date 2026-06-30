@@ -24,7 +24,8 @@ import {
   type HttpFn,
   type StoredCodexTokens,
 } from './provider.js'
-import { extractAccountIdFromTokens } from './jwt.js'
+import { decodeExpiresAtMs, extractAccountIdFromTokens } from './jwt.js'
+import type { ExchangedTokens } from './device-login.js'
 
 /**
  * Per-user BYO Codex (ChatGPT OAuth) credential store (PR5 checkpoint 2). A
@@ -115,6 +116,51 @@ export function importUserCodexAuth(input: {
     ...stored,
     source: 'codex-cli-import',
   })
+  return toSummary(name, stored)
+}
+
+/**
+ * Persist the result of a successful device-login exchange into the per-user
+ * BYO Codex store — the web-login counterpart to `importUserCodexAuth`. The
+ * `/oauth/token` exchange response carries NO explicit `expires_at` /
+ * `account_id` (same as the CLI `auth.json`), so both are derived from the
+ * access_token JWT here, exactly like the import path's
+ * `loadCodexCliTokens`. Refresh / resolve afterward go through the identical
+ * `getUserCodexCredentials` path — device-login only changes how the FIRST
+ * token is obtained, never where it is stored or how it is refreshed.
+ */
+export function persistDeviceLoginResult(input: {
+  canonicalUser: string
+  name?: string
+  tokens: ExchangedTokens
+}): UserCodexAuthSummary {
+  const name = normalizeCodexAuthName(input.name)
+  const expiresAtMs = decodeExpiresAtMs(input.tokens.accessToken)
+  if (expiresAtMs === null) {
+    throw new AuthError({
+      code: 'tokens_invalid_shape',
+      provider: `codex:${name}`,
+      message:
+        `Codex device login for "${name}" returned an access_token whose expiry ` +
+        `could not be decoded. Re-run the login.`,
+    })
+  }
+  const accountId = extractAccountIdFromTokens({
+    id_token: input.tokens.idToken,
+    access_token: input.tokens.accessToken,
+  })
+  const stored: StoredCodexTokens = {
+    tokens: {
+      access_token: input.tokens.accessToken,
+      refresh_token: input.tokens.refreshToken,
+      expires_at: expiresAtMs,
+      ...(input.tokens.idToken ? { id_token: input.tokens.idToken } : {}),
+    },
+    account_id: accountId,
+    imported_at: new Date().toISOString(),
+    source: 'codex-device-login',
+  }
+  writeUserCodexAuth(input.canonicalUser, name, stored)
   return toSummary(name, stored)
 }
 

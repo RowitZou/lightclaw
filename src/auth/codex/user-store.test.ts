@@ -19,6 +19,7 @@ import {
   importUserCodexAuth,
   listUserCodexAuth,
   parseCodexAuthRef,
+  persistDeviceLoginResult,
   readUserCodexAuth,
   userCodexAuthDir,
   userCodexAuthPath,
@@ -96,6 +97,42 @@ describe('user codex store (PR5 checkpoint 2)', () => {
     assert.equal(stored!.tokens.refresh_token, 'refresh-xyz')
     assert.equal(stored!.account_id, 'acct-123')
     assert.ok(existsSync(userCodexAuthPath('alice', 'personal')))
+  })
+
+  it('persistDeviceLoginResult lands the same store shape as import (expiry + account_id from JWT, device-login source)', () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600
+    const access = fakeJwt(exp, { 'https://api.openai.com/auth': { account_id: 'acct-dev' } })
+    const summary = persistDeviceLoginResult({
+      canonicalUser: 'alice',
+      name: 'personal',
+      tokens: { idToken: 'id.jwt.sig', accessToken: access, refreshToken: 'refresh-dev' },
+    })
+    // account_id decoded from the JWT (the exchange response carries none).
+    assert.equal(summary.accountId, 'acct-dev')
+    // expires_at derived from the JWT exp claim, same as the import path.
+    assert.equal(summary.expiresAt, decodeExpiresAtMs(access))
+    assert.equal(summary.source, 'codex-device-login')
+
+    // Persisted into the per-user store, readable by the SAME read path as import.
+    const stored = readUserCodexAuth('alice', 'personal')
+    assert.ok(stored)
+    assert.equal(stored!.tokens.access_token, access)
+    assert.equal(stored!.tokens.refresh_token, 'refresh-dev')
+    assert.equal(stored!.tokens.id_token, 'id.jwt.sig')
+    assert.equal(stored!.tokens.expires_at, decodeExpiresAtMs(access))
+    assert.equal(stored!.account_id, 'acct-dev')
+    assert.equal(stored!.source, 'codex-device-login')
+    assert.ok(existsSync(userCodexAuthPath('alice', 'personal')))
+  })
+
+  it('persistDeviceLoginResult rejects an access_token whose expiry cannot be decoded', () => {
+    assert.throws(() =>
+      persistDeviceLoginResult({
+        canonicalUser: 'alice',
+        name: 'personal',
+        tokens: { accessToken: 'not-a-jwt', refreshToken: 'r' },
+      }),
+    )
   })
 
   it('list reflects imported entries; remove deletes only the named entry', () => {
