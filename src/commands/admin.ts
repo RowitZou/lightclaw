@@ -15,6 +15,7 @@ import {
 } from '../config-io.js'
 import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
+import { runUpdate } from '../self-update.js'
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
 import { canonicalizeFlagTokens } from './flag-normalize.js'
@@ -91,6 +92,7 @@ const ADMIN_NOUNS: ReadonlyArray<readonly [string, string]> = [
   ['/admin endpoint', 'admin.list.endpoint'],
   ['/admin lane', 'admin.list.lane'],
   ['/admin proxy', 'admin.list.proxy'],
+  ['/admin update', 'admin.list.update'],
 ]
 
 function adminNounRows(): Array<readonly [string, string]> {
@@ -168,6 +170,10 @@ export async function runAdminCommand(
       return runAdminLane(restParts, ctx.config, ctx)
     case 'proxy':
       return runAdminProxy(restParts, ctx.config, ctx)
+
+    // ── self-update (pull + build + supervised restart) ──
+    case 'update':
+      return runUpdate({ dryRun: restParts.includes('--dry-run'), byUser: ctx.userId })
 
     default:
       ctx.setCommandListCard?.(adminListSpec())

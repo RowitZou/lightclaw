@@ -106,6 +106,7 @@ export const LOCALES = {
     'admin.list.endpoint': '配置公共模型服务的地址与密钥',
     'admin.list.lane': '为不同用途分别指定公共模型',
     'admin.list.proxy': '设置用于模型服务的公共代理',
+    'admin.list.update': '拉取最新代码、重新构建并重启守护进程',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': '公共配置：对所有用户生效（与你自己的 /config 同名命令相互独立）。',
     'card.admin.user.sub.rm.cmd': 'rm <用户名> [--purge] --y',
@@ -180,6 +181,18 @@ export const LOCALES = {
     'admin.proxy.cleared': '已清除公共代理。未单独配置代理的模型服务恢复直接连接。',
     'admin.proxy.invalid': '错误：代理地址无效（{detail}）；未写入。',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
+
+    // ---- /admin update (self-update + supervised restart) ----
+    'admin.update.dirty': '已取消：部署检出有未提交改动，拉取会覆盖它们。请先清理工作树再更新。',
+    'admin.update.upToDate': '已是最新（{sha}），无需更新。',
+    'admin.update.diverged': '已取消：本地分支已分叉（领先 {ahead} / 落后 {behind} 个提交），无法快进。请手动处理后再更新。',
+    'admin.update.dryRun': '预览：可从 {from} 更新到 {to}（落后 {behind} 个提交）。执行 `/admin update` 即可拉取、构建并重启。',
+    'admin.update.gitFailed': '错误：git 操作失败（{detail}）；未做任何改动。',
+    'admin.update.installFailed': '错误：pnpm install 失败（{detail}）；已拉取代码但未重启，守护进程仍在旧版本上。',
+    'admin.update.buildFailed': '错误：pnpm build 失败（{detail}）；未重启，守护进程仍在旧版本上。',
+    'admin.update.verifyFailed': '错误：新构建产物冒烟校验失败（{detail}）；未重启，守护进程仍在旧版本上。',
+    'admin.update.restarting': '✅ 构建成功（{from} → {to}），正在重启……重启完成后会私聊回报。',
+    'admin.update.restartDone': '✅ 已重启到 LightClaw v{version}（{from} → {to}）。',
 
     // ---- identity marker + dispatch chain errors ----
     'status.identitiesAdmin': ' *admin',
@@ -1094,6 +1107,7 @@ export const LOCALES = {
     'admin.list.endpoint': 'Configure a public model service (URL + key)',
     'admin.list.lane': 'Assign public models for different uses',
     'admin.list.proxy': 'Set the public proxy for model services',
+    'admin.list.update': 'Pull latest code, rebuild, and restart the daemon',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': 'Public config: applies to all users (independent of your own /config commands of the same name).',
     'card.admin.user.sub.rm.cmd': 'rm <user> [--purge] --y',
@@ -1168,6 +1182,18 @@ export const LOCALES = {
     'admin.proxy.cleared': 'Public proxy cleared. Model services without their own proxy connect directly again.',
     'admin.proxy.invalid': 'Error: invalid proxy URL ({detail}); not written.',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
+
+    // ---- /admin update (self-update + supervised restart) ----
+    'admin.update.dirty': 'Aborted: the deployment checkout has uncommitted changes; a pull would clobber them. Clean the working tree first, then update.',
+    'admin.update.upToDate': 'Already up to date ({sha}); nothing to update.',
+    'admin.update.diverged': 'Aborted: the local branch has diverged (ahead {ahead} / behind {behind}); not a fast-forward. Resolve by hand, then update.',
+    'admin.update.dryRun': 'Preview: {from} → {to} ({behind} commits behind). Run `/admin update` to pull, build, and restart.',
+    'admin.update.gitFailed': 'Error: a git step failed ({detail}); nothing changed.',
+    'admin.update.installFailed': 'Error: pnpm install failed ({detail}); pulled but did not restart — the daemon is still on the old build.',
+    'admin.update.buildFailed': 'Error: pnpm build failed ({detail}); did not restart — the daemon is still on the old build.',
+    'admin.update.verifyFailed': 'Error: the freshly built bundle failed its smoke check ({detail}); did not restart — the daemon is still on the old build.',
+    'admin.update.restarting': '✅ Build succeeded ({from} → {to}); restarting… I will DM you when it is back.',
+    'admin.update.restartDone': '✅ Restarted onto LightClaw v{version} ({from} → {to}).',
 
     // ---- identity marker + dispatch chain errors ----
     'status.identitiesAdmin': ' *admin',

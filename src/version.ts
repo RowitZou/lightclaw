@@ -23,7 +23,11 @@ export const VERSION: string = pkg.version
 // process start, a faithful proxy only when the deploy rebuilds before
 // restart; a restart without rebuild would show the new HEAD over stale dist.
 let buildIdCache: string | undefined
-const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+// The checkout the daemon was launched from. Anchored to the bundle location
+// via import.meta.url (NOT cwd), so `git -C repoRoot ...` and `pnpm` run in the
+// right tree whether started as `tsx src/cli.ts` or bundled `dist/cli.js`.
+// Exported for the self-update module, which pulls + builds this same checkout.
+export const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 function git(args: string[]): string {
   return execFileSync('git', ['-C', repoRoot, ...args], {

@@ -28,6 +28,11 @@ import {
   LightClawAlreadyRunningError,
 } from './process-lock.js'
 import { startRepl } from './repl.js'
+import {
+  UPDATE_RESTART_EXIT_CODE,
+  setUpdateRestartHandler,
+} from './restart-coordinator.js'
+import { announceRestartIfPending } from './self-update.js'
 import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
 import { VERSION, getBuildId } from './version.js'
@@ -47,7 +52,7 @@ let shuttingDown = false
 // skipped — same outcome as pre-fix behavior.
 let configForShutdown: LightClawConfig | undefined
 
-async function gracefulShutdown(signal: string): Promise<void> {
+async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (shuttingDown) {
     return
   }
@@ -80,7 +85,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Flush the stderr tee so the shutdown drain lines land in the log file
   // before process.exit cuts the event loop.
   await flushLogTee().catch(() => {})
-  process.exit(0)
+  process.exit(exitCode)
 }
 
 process.on('SIGINT', () => {
@@ -88,6 +93,13 @@ process.on('SIGINT', () => {
 })
 process.on('SIGTERM', () => {
   void gracefulShutdown('SIGTERM')
+})
+
+// `/admin update` rebuilds then asks for a restart through here: the same
+// graceful drain, but exit UPDATE_RESTART_EXIT_CODE so the supervisor relaunches
+// onto the new dist instead of treating it as a clean stop.
+setUpdateRestartHandler(() => {
+  void gracefulShutdown('update-restart', UPDATE_RESTART_EXIT_CODE)
 })
 
 function parseArgs(argv: string[]): CliArgs {
@@ -229,6 +241,16 @@ async function main(): Promise<void> {
     await initializeHooks(config)
     await initializeMcp(config)
     const channelHandles = await startEnabledChannels()
+    // If the previous shutdown was a `/admin update` restart, DM the admin a
+    // confirmation that we came back on the new build. Needs the channel sender
+    // (registered by startEnabledChannels), so it runs here. Fire-and-forget.
+    void announceRestartIfPending().catch(error => {
+      process.stderr.write(
+        `[self-update] restart announce failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    })
     // Resume any turns a previous daemon crash interrupted mid-flight. Fire-
     // and-forget: each resume re-enters the agent loop and can take a while,
     // and the daemon must stay responsive to new inbounds meanwhile.
