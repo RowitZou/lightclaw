@@ -106,7 +106,7 @@ export const LOCALES = {
     'admin.list.endpoint': '配置公共模型服务的地址与密钥',
     'admin.list.lane': '为不同用途分别指定公共模型',
     'admin.list.proxy': '设置用于模型服务的公共代理',
-    'admin.list.update': '拉取最新代码、重新构建并重启守护进程',
+    'admin.list.version': '查看版本与构建号，或拉取更新并重启',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': '公共配置：对所有用户生效（与你自己的 /config 同名命令相互独立）。',
     'card.admin.user.sub.rm.cmd': 'rm <用户名> [--purge] --y',
@@ -182,7 +182,10 @@ export const LOCALES = {
     'admin.proxy.invalid': '错误：代理地址无效（{detail}）；未写入。',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
-    // ---- /admin update (self-update + supervised restart) ----
+    // ---- /admin version (show build) + update (self-update + restart) ----
+    'admin.version.current': '当前版本：LightClaw v{version}（构建 {build}）',
+    'admin.version.updateRow': '拉取最新代码、构建并重启',
+    'admin.version.dryRunRow': '仅预览可更新到的版本，不动手',
     'admin.update.dirty': '已取消：部署检出有未提交改动，拉取会覆盖它们。请先清理工作树再更新。',
     'admin.update.upToDate': '已是最新（{sha}），无需更新。',
     'admin.update.diverged': '已取消：本地分支已分叉（领先 {ahead} / 落后 {behind} 个提交），无法快进。请手动处理后再更新。',
@@ -1107,7 +1110,7 @@ export const LOCALES = {
     'admin.list.endpoint': 'Configure a public model service (URL + key)',
     'admin.list.lane': 'Assign public models for different uses',
     'admin.list.proxy': 'Set the public proxy for model services',
-    'admin.list.update': 'Pull latest code, rebuild, and restart the daemon',
+    'admin.list.version': 'Show version & build, or pull an update and restart',
     // ---- L2 card: /admin nouns (batches 4-6) ----
     'card.admin.scopeNote': 'Public config: applies to all users (independent of your own /config commands of the same name).',
     'card.admin.user.sub.rm.cmd': 'rm <user> [--purge] --y',
@@ -1183,7 +1186,10 @@ export const LOCALES = {
     'admin.proxy.invalid': 'Error: invalid proxy URL ({detail}); not written.',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
-    // ---- /admin update (self-update + supervised restart) ----
+    // ---- /admin version (show build) + update (self-update + restart) ----
+    'admin.version.current': 'Current: LightClaw v{version} (build {build})',
+    'admin.version.updateRow': 'Pull latest code, build, and restart',
+    'admin.version.dryRunRow': 'Preview the available update without applying',
     'admin.update.dirty': 'Aborted: the deployment checkout has uncommitted changes; a pull would clobber them. Clean the working tree first, then update.',
     'admin.update.upToDate': 'Already up to date ({sha}); nothing to update.',
     'admin.update.diverged': 'Aborted: the local branch has diverged (ahead {ahead} / behind {behind}); not a fast-forward. Resolve by hand, then update.',

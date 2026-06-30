@@ -1,7 +1,7 @@
 // Self-restart coordination between the `/admin update` handler and cli.ts.
 //
 // The daemon has no in-process re-exec: a clean restart means "exit, and let
-// the external supervisor (scripts/supervisor.sh in the deployment tmux, or a
+// the external supervisor (run.sh in the deployment tmux, or a
 // systemd Restart=always unit) relaunch us". cli.ts owns the graceful-shutdown
 // machinery (drain background work, release runtimes, flush logs) and is the
 // only place that may call process.exit, so the update handler cannot restart

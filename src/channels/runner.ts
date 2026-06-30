@@ -2272,7 +2272,13 @@ export class ChannelRunner {
       await this.strategy.sendCommandListNotice(message, 'info', res.commandListCard)
       return
     }
-    await this.sendNotice(message, 'info', res.output.trim() || t('common.ok'), res.bodyFormat)
+    // A handler may color its notice (warning/error); default stays info.
+    await this.sendNotice(
+      message,
+      res.severity ?? 'info',
+      res.output.trim() || t('common.ok'),
+      res.bodyFormat,
+    )
   }
 
   private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {

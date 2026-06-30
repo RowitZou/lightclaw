@@ -10,6 +10,11 @@ export type CommandVisibility = 'all' | 'admin' | 'user'
 
 export type SlashBodyFormat = 'lark_md' | 'plain_text'
 
+// Severity color for a slash's notice-card output. Mirrors the channel's
+// SystemNoticeKind (info=blue / warning=orange / error=red) without coupling
+// the command layer to the feishu module; the runner maps it 1:1 at delivery.
+export type SlashNoticeSeverity = 'info' | 'warning' | 'error'
+
 /** Structured spec for a command-help card.
  *
  *  L1 hub cards (/help, /config, /system, /admin) are pure `rows` sections,
@@ -66,6 +71,11 @@ export type ReplContext = {
   // (Feishu column_set) instead of a markdown body. The handler still writes a
   // plain-text fallback to `output` for the terminal. No-op in terminal mode.
   setCommandListCard?(spec: CommandListCardSpec): void
+  // Channel-only: color this slash's notice card. Default is 'info' (blue); a
+  // handler reporting a refusal opts into 'warning' (orange) or a failure into
+  // 'error' (red). Ignored when the handler renders a command-list card. No-op
+  // in terminal mode.
+  setNoticeSeverity?(severity: SlashNoticeSeverity): void
   // Channel-only: the fully-formed user-message content the channel runner
   // built for this turn — already merged with the `[senderName]` prefix,
   // the `<quoted-message>` / `<quoted-message-unavailable>` block, the

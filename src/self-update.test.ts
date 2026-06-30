@@ -76,7 +76,7 @@ describe('restart sentinel', () => {
 })
 
 test('UPDATE_RESTART_EXIT_CODE is the EX_TEMPFAIL convention the supervisor matches', () => {
-  // scripts/supervisor.sh hard-codes 75; drift here would silently turn an
+  // run.sh hard-codes 75; drift here would silently turn an
   // update restart into a "clean exit" (loop ends) or a crash-restart.
   assert.equal(UPDATE_RESTART_EXIT_CODE, 75)
 })

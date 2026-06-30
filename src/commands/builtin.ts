@@ -240,7 +240,8 @@ function buildBuiltinCommands(): ReplCommand[] {
       'When the admin wants to manage the deployment: inspect token cost, ' +
       'manage paired users / pairing requests, read user feedback, set ' +
       'permission ceilings, inspect or reset the sandbox, manage Feishu drive ' +
-      'folders, or configure deployment-wide model backends / endpoints / lanes / public proxy.',
+      'folders, configure deployment-wide model backends / endpoints / lanes / public proxy, ' +
+      'or check the running version / pull a code update and restart.',
     agentUsage: [
       '/admin cost                                   Token usage this month, by model and user',
       '/admin user [list|rm <name> [--purge] --y|unlink <channel:id>]',
@@ -253,12 +254,14 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/admin backend [list|add|set|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Public usable model list',
       '/admin lane [set <worker|system|image> <model>|reset <bucket>]',
       '/admin proxy [show|set <url>|clear]           Public proxy fallback for model services without their own',
+      '/admin version [update [--dry-run]]           Show version / build, or pull an update and restart',
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runAdminCommand(args, {
         config: ctx.config,
         userId: ctx.userId ?? getCurrentUserId(),
         setCommandListCard: ctx.setCommandListCard,
+        setNoticeSeverity: ctx.setNoticeSeverity,
       }))
     },
   },

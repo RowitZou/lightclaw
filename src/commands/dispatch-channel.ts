@@ -4,7 +4,12 @@ import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message, UserContentBlock } from '../types.js'
 import { createBuiltinReplRegistry } from './builtin.js'
-import type { CommandListCardSpec, ReplContext, SlashBodyFormat } from './registry.js'
+import type {
+  CommandListCardSpec,
+  ReplContext,
+  SlashBodyFormat,
+  SlashNoticeSeverity,
+} from './registry.js'
 
 export type ChannelSlashResult = {
   handled: boolean
@@ -20,6 +25,9 @@ export type ChannelSlashResult = {
   // (column_set) instead of the `output` string; `output` stays the terminal
   // fallback text.
   commandListCard?: CommandListCardSpec
+  // Severity color for the notice card wrapping `output` (info/warning/error).
+  // Undefined → the runner defaults to 'info'. Ignored when commandListCard set.
+  severity?: SlashNoticeSeverity
 }
 
 export async function dispatchChannelSlash(
@@ -71,6 +79,7 @@ export async function dispatchChannelSlash(
 
   let bodyFormat: SlashBodyFormat = 'plain_text'
   let commandListCard: CommandListCardSpec | undefined
+  let severity: SlashNoticeSeverity | undefined
 
   const ctx: ReplContext = {
     config: input.config,
@@ -90,6 +99,9 @@ export async function dispatchChannelSlash(
     setCommandListCard(spec: CommandListCardSpec) {
       commandListCard = spec
     },
+    setNoticeSeverity(next: SlashNoticeSeverity) {
+      severity = next
+    },
     channelUserMessageContent: input.channelUserMessageContent,
     attachmentPaths: input.attachmentPaths,
   }
@@ -100,5 +112,6 @@ export async function dispatchChannelSlash(
     output: output.join(''),
     bodyFormat,
     commandListCard,
+    severity,
   }
 }

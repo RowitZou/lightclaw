@@ -16,6 +16,7 @@ import {
 import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
 import { runUpdate } from '../self-update.js'
+import { getBuildId, VERSION } from '../version.js'
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
 import { canonicalizeFlagTokens } from './flag-normalize.js'
@@ -49,7 +50,7 @@ import { requireConfirm } from './confirm.js'
 import { clearProviderCache } from '../provider/index.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
-import type { CommandListCardSpec } from './registry.js'
+import type { CommandListCardSpec, SlashNoticeSeverity } from './registry.js'
 
 // ── /admin <noun> [verb] — admin-only system hub (PR5.9 B4) ──────────────────
 //
@@ -75,6 +76,9 @@ type AdminCommandContext = {
   // Channel-only: lets the bare `/admin` overview render as the structured
   // column_set command-list card. Absent on terminal / minimal callers.
   setCommandListCard?: (spec: CommandListCardSpec) => void
+  // Channel-only: color a notice card (warning/error). Used by `/admin version
+  // update` to surface refusals / build failures in the right tone.
+  setNoticeSeverity?: (severity: SlashNoticeSeverity) => void
 }
 
 // The `/admin` noun list (L1 card). One section (ops nouns then system-scope
@@ -92,7 +96,7 @@ const ADMIN_NOUNS: ReadonlyArray<readonly [string, string]> = [
   ['/admin endpoint', 'admin.list.endpoint'],
   ['/admin lane', 'admin.list.lane'],
   ['/admin proxy', 'admin.list.proxy'],
-  ['/admin update', 'admin.list.update'],
+  ['/admin version', 'admin.list.version'],
 ]
 
 function adminNounRows(): Array<readonly [string, string]> {
@@ -171,9 +175,9 @@ export async function runAdminCommand(
     case 'proxy':
       return runAdminProxy(restParts, ctx.config, ctx)
 
-    // ── self-update (pull + build + supervised restart) ──
-    case 'update':
-      return runUpdate({ dryRun: restParts.includes('--dry-run'), byUser: ctx.userId })
+    // ── version (show build) + self-update verb ──
+    case 'version':
+      return runAdminVersion(restParts, ctx)
 
     default:
       ctx.setCommandListCard?.(adminListSpec())
@@ -291,6 +295,36 @@ async function runAdminFeishuDrive(parts: string[], ctx: AdminCommandContext): P
     return runFeishuWorkspaceCommand(`delete ${parts.slice(1).join(' ')}`.trim())
   }
   return usageCard()
+}
+
+/** `/admin version [update [--dry-run]]`. Bare → show the running version +
+ *  build id (instant, local, no network). `update` → fast-forward the
+ *  deployment checkout, rebuild, verify, and restart via the supervisor (see
+ *  self-update.ts); `update --dry-run` previews the available delta without
+ *  touching anything. The update verb colors its notice per outcome. */
+async function runAdminVersion(parts: string[], ctx: AdminCommandContext): Promise<string> {
+  const verb = (parts[0] ?? '').toLowerCase()
+  if (verb === 'update') {
+    const res = await runUpdate({ dryRun: parts.includes('--dry-run'), byUser: ctx.userId })
+    ctx.setNoticeSeverity?.(res.severity)
+    return res.text
+  }
+  // Bare / show / status → the version card. Instant local info (VERSION +
+  // git build id); checking for an available update is `update --dry-run`.
+  const spec: CommandListCardSpec = {
+    title: t('card.cmdHelp.title', { cmd: '/admin version' }),
+    sections: [
+      { markdown: t('admin.version.current', { version: VERSION, build: getBuildId() }) },
+      {
+        rows: [
+          ['/admin version update', t('admin.version.updateRow')],
+          ['/admin version update --dry-run', t('admin.version.dryRunRow')],
+        ],
+      },
+    ],
+  }
+  ctx.setCommandListCard?.(spec)
+  return formatCommandListSpecAsText(spec)
 }
 
 // ── system-scope write-back (the highest-risk part) ──────────────────────────

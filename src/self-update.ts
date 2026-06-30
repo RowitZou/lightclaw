@@ -8,7 +8,7 @@
 //     process keeps its in-memory code until a verified build is in place.
 //   - Restart is an exit, not an in-process re-exec: we drop a restart-sentinel,
 //     trigger gracefulShutdown with UPDATE_RESTART_EXIT_CODE, and the external
-//     supervisor (scripts/supervisor.sh / systemd) relaunches `node dist/cli.js`
+//     supervisor (run.sh / systemd) relaunches `node dist/cli.js`
 //     onto the freshly-built dist. On next boot announceRestartIfPending() reads
 //     the sentinel and DMs the admin a "now running <newBuild>" confirmation —
 //     closing the loop the admin can't otherwise see (the bot just goes quiet
@@ -26,7 +26,7 @@ import { t } from './i18n/index.js'
 import { lightclawHome } from './paths.js'
 import { triggerUpdateRestart } from './restart-coordinator.js'
 import { getFeishuSender } from './channels/feishu/sender-registry.js'
-import { buildSystemNoticeCard } from './channels/feishu/system-notice.js'
+import { buildSystemNoticeCard, type SystemNoticeKind } from './channels/feishu/system-notice.js'
 import { runProcess } from './runtime/process.js'
 import { getBuildId, repoRoot, VERSION } from './version.js'
 
@@ -192,55 +192,75 @@ export type RunUpdateOptions = {
   byUser?: string
 }
 
-/** Execute `/admin update`. Returns a localized status string to surface to the
- *  admin. On the success path it ALSO schedules the restart (after a short flush
- *  delay) — the returned string is the "rebuilt, restarting…" notice. */
-export async function runUpdate(options: RunUpdateOptions = {}): Promise<string> {
+/** Outcome of `/admin update`: the localized notice text plus the severity that
+ *  colors its system-notice card — `error` (red) for failures, `warning`
+ *  (orange) for refusals the admin must resolve, `info` (blue) for success /
+ *  preview / already-current. */
+export type UpdateResult = { text: string; severity: SystemNoticeKind }
+
+/** Execute the `update` verb of `/admin version`. On the success path it ALSO
+ *  schedules the restart (after a short flush delay); the returned text is the
+ *  "rebuilt, restarting…" notice. */
+export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateResult> {
   const probe = await collectGitState()
   if ('error' in probe) {
-    return `${probe.error}\n`
+    return { text: `${probe.error}\n`, severity: 'error' }
   }
   const { state } = probe
 
   if (state.kind === 'dirty') {
-    return `${t('admin.update.dirty')}\n`
+    return { text: `${t('admin.update.dirty')}\n`, severity: 'warning' }
   }
   if (state.kind === 'up-to-date') {
-    return `${t('admin.update.upToDate', { sha: state.sha })}\n`
+    return { text: `${t('admin.update.upToDate', { sha: state.sha })}\n`, severity: 'info' }
   }
   if (state.kind === 'diverged') {
-    return `${t('admin.update.diverged', { ahead: state.ahead, behind: state.behind })}\n`
+    return {
+      text: `${t('admin.update.diverged', { ahead: state.ahead, behind: state.behind })}\n`,
+      severity: 'warning',
+    }
   }
 
   // updatable
   if (options.dryRun) {
-    return `${t('admin.update.dryRun', {
-      from: state.fromSha,
-      to: state.toSha,
-      behind: state.behind,
-    })}\n`
+    return {
+      text: `${t('admin.update.dryRun', { from: state.fromSha, to: state.toSha, behind: state.behind })}\n`,
+      severity: 'info',
+    }
   }
 
   // Fast-forward to the fetched upstream (no second network round-trip).
   const merged = await git(['merge', '--ff-only', '@{u}'])
   if (!merged.ok) {
-    return `${t('admin.update.gitFailed', { detail: tail(merged.err || 'fast-forward merge failed') })}\n`
+    return {
+      text: `${t('admin.update.gitFailed', { detail: tail(merged.err || 'fast-forward merge failed') })}\n`,
+      severity: 'error',
+    }
   }
 
   // Install to match the (possibly updated) lockfile, then build. A failure here
   // leaves the running daemon on its old in-memory code; we do NOT restart.
   const installed = await buildStep('pnpm', ['install', '--frozen-lockfile'])
   if (!installed.ok) {
-    return `${t('admin.update.installFailed', { detail: tail(installed.err || installed.out) })}\n`
+    return {
+      text: `${t('admin.update.installFailed', { detail: tail(installed.err || installed.out) })}\n`,
+      severity: 'error',
+    }
   }
   const built = await buildStep('pnpm', ['build'])
   if (!built.ok) {
-    return `${t('admin.update.buildFailed', { detail: tail(built.err || built.out) })}\n`
+    return {
+      text: `${t('admin.update.buildFailed', { detail: tail(built.err || built.out) })}\n`,
+      severity: 'error',
+    }
   }
   // Smoke-check the freshly built bundle before betting the restart on it.
   const verified = await buildStep('node', ['dist/cli.js', '--help'])
   if (!verified.ok) {
-    return `${t('admin.update.verifyFailed', { detail: tail(verified.err || verified.out) })}\n`
+    return {
+      text: `${t('admin.update.verifyFailed', { detail: tail(verified.err || verified.out) })}\n`,
+      severity: 'error',
+    }
   }
 
   const toBuildId = (await git(['rev-parse', '--short=12', 'HEAD'])).out || state.toSha
@@ -259,7 +279,10 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<string>
     triggerUpdateRestart()
   }, RESTART_FLUSH_DELAY_MS).unref?.()
 
-  return `${t('admin.update.restarting', { from: getBuildId(), to: toBuildId })}\n`
+  return {
+    text: `${t('admin.update.restarting', { from: getBuildId(), to: toBuildId })}\n`,
+    severity: 'info',
+  }
 }
 
 /** Called once at startup (after channels are up) with the sentinel consumed
