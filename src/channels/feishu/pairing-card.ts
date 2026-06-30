@@ -12,7 +12,7 @@ import { preheatAndWelcomeOnApproval } from '../../identity/post-approve.js'
 import {
   addLink,
   createUser,
-  getAdminFeishuOpenId,
+  getAdminFeishuOpenIds,
   isAdmin,
   lookupBySender,
   rebuildReverseIndex,
@@ -69,7 +69,11 @@ type ApplicationState =
       code: string
     }
   | { kind: 'cancelled' }
-  | { kind: 'resolved'; outcome: 'approved' | 'rejected'; code: string }
+  // `operator` is the admin canonical who resolved it; present when the
+  // resolution went through a live card click (absent for restart / slash
+  // resolutions where the in-memory state was never updated). Drives the
+  // "已由 {operator} 通过/拒绝" body other admins see on a stale-card click.
+  | { kind: 'resolved'; outcome: 'approved' | 'rejected'; code: string; operator?: string }
 
 // Aligned with pairing.ts PAIRING_TTL_MS so an in-memory token outlives the
 // pending.json entry by no more than its own age. After eviction a stale
@@ -78,6 +82,21 @@ type ApplicationState =
 // which is the correct UX since the underlying pending.json entry has
 // long since been cleaned up by cleanExpiredPending.
 const TOKEN_EVICTION_TTL_MS = 24 * 60 * 60 * 1000
+
+/** Body for the terminal card an admin sees when they click a review card whose
+ *  application was already resolved — most often a race where another admin
+ *  approved/rejected first under multi-admin fan-out. Names the resolving admin
+ *  when known; falls back to the neutral "already handled" line for resolutions
+ *  with no recorded operator (a slash approve, a daemon-restart stale click, or
+ *  a code consumed through another path). */
+function resolvedCardBody(state: ApplicationState): string {
+  if (state.kind === 'resolved' && state.operator) {
+    return state.outcome === 'approved'
+      ? t('channel.pairing.review.resolvedByApproved', { operator: state.operator })
+      : t('channel.pairing.review.resolvedByRejected', { operator: state.operator })
+  }
+  return t('channel.pairing.review.resolvedElsewhere')
+}
 
 export class PairingCardCoordinator {
   private readonly byToken = new Map<string, ApplicationState>()
@@ -314,7 +333,7 @@ export class PairingCardCoordinator {
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.waiting.title'),
-        body: t('channel.pairing.review.resolvedElsewhere'),
+        body: resolvedCardBody(current),
       }))
     }
 
@@ -368,20 +387,27 @@ export class PairingCardCoordinator {
         applicantUserId: current.applicantUserId,
         code: result.code,
       })
-      const adminOpenId = await getAdminFeishuOpenId()
-      if (adminOpenId) {
-        await this.sender
-          .sendInteractiveCardToOpenId(adminOpenId, buildReviewCard({
-            token,
-            applicantOpenId: current.applicantOpenId,
-            applicantName: current.applicantName,
-            code: result.code,
-          }))
-          .catch(error => {
-            const detail = error instanceof Error ? error.message : String(error)
-            process.stderr.write(`pairing-card: review push failed: ${detail}\n`)
-          })
-      }
+      // Fan out the review card to EVERY admin (skipping any without a Feishu
+      // binding). All cards carry the same `token`, so the in-memory state is
+      // shared: the first admin to approve/reject wins, and any other admin who
+      // clicks afterward hits the resolved-state branch and sees who handled it.
+      const adminOpenIds = await getAdminFeishuOpenIds()
+      const reviewCard = buildReviewCard({
+        token,
+        applicantOpenId: current.applicantOpenId,
+        applicantName: current.applicantName,
+        code: result.code,
+      })
+      await Promise.all(
+        adminOpenIds.map(adminOpenId =>
+          this.sender
+            .sendInteractiveCardToOpenId(adminOpenId, reviewCard)
+            .catch(error => {
+              const detail = error instanceof Error ? error.message : String(error)
+              process.stderr.write(`pairing-card: review push failed for ${adminOpenId}: ${detail}\n`)
+            }),
+        ),
+      )
       return rawCard(buildWaitingCard({
         code: result.code,
         applicantOpenId: current.applicantOpenId,
@@ -420,12 +446,15 @@ export class PairingCardCoordinator {
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.review.title'),
-        body: t('channel.pairing.review.resolvedElsewhere'),
+        body: resolvedCardBody(state),
       }))
     }
 
     const entry = await approveCode(state.code)
     if (!entry) {
+      // The code was already consumed through another path (a slash approve, or
+      // a race we lost). We did not approve it, so record no operator and show
+      // the neutral line.
       this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
       return rawCard(buildTerminalCard({
         template: 'grey',
@@ -466,7 +495,7 @@ export class PairingCardCoordinator {
       applicantThreadId: entry.lastApplicantThreadId,
       applicantMessageId: entry.lastApplicantMessageId,
     })
-    this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
+    this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code, operator: operatorCanonical })
     void this.sender.sendInteractiveCardToOpenId(
       state.applicantOpenId,
       buildHandoverCard({ operator: operatorCanonical }),
@@ -497,11 +526,12 @@ export class PairingCardCoordinator {
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.review.title'),
-        body: t('channel.pairing.review.resolvedElsewhere'),
+        body: resolvedCardBody(state),
       }))
     }
     const result = await rejectCode(state.code)
     if (!result.ok) {
+      // Already consumed through another path — no operator recorded here.
       this.setState(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
       return rawCard(buildTerminalCard({
         template: 'grey',
@@ -509,7 +539,7 @@ export class PairingCardCoordinator {
         body: t('channel.pairing.review.resolvedElsewhere'),
       }))
     }
-    this.setState(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
+    this.setState(token, { kind: 'resolved', outcome: 'rejected', code: state.code, operator: operatorCanonical })
     void this.sender.sendInteractiveCardToOpenId(
       state.applicantOpenId,
       buildRejectedCard({ minutes: 10 }),

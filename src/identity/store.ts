@@ -196,14 +196,42 @@ export function lookupBySender(link: SenderKey): string | null {
   return cachedReverseIndex?.get(link) ?? null
 }
 
-export async function getAdmin(): Promise<string | null> {
+export async function listAdmins(): Promise<string[]> {
   const admin = await readJson<AdminFile>(adminPath(), { admins: [] })
-  if (admin.admins.length > 1) {
-    throw new Error('LightClaw v1 supports exactly one admin.')
-  }
-  return admin.admins[0] ?? null
+  return admin.admins
 }
 
+/** The primary (bootstrap) admin — `admins[0]`. This is the single user that
+ *  `runtime.backend = "local"` serves: local is single-user regardless of how
+ *  many admins exist, so the LocalRuntime gate and the wizard's "is an admin
+ *  set" check key off this, NOT off the full admin list. Multi-admin only
+ *  takes effect on the sandboxed backends (docker / rlaunch). */
+export async function getAdmin(): Promise<string | null> {
+  const admins = await listAdmins()
+  return admins[0] ?? null
+}
+
+/** Feishu open_ids for ALL admins (skipping any without a Feishu binding).
+ *  Pairing / approval cards fan out across this list so any admin can approve;
+ *  first to act wins and the rest see the resolved-elsewhere card on click. */
+export async function getAdminFeishuOpenIds(): Promise<string[]> {
+  const admins = await listAdmins()
+  if (admins.length === 0) {
+    return []
+  }
+  const identities = await listIdentities()
+  const openIds: string[] = []
+  for (const name of admins) {
+    const openId = identities[name]?.channels.feishu[0]
+    if (openId) {
+      openIds.push(openId)
+    }
+  }
+  return openIds
+}
+
+/** The primary admin's Feishu open_id, or null. Kept for the few callers that
+ *  genuinely want a single representative target rather than a fan-out. */
 export async function getAdminFeishuOpenId(): Promise<string | null> {
   const adminName = await getAdmin()
   if (!adminName) {
@@ -220,6 +248,9 @@ export async function getFeishuOpenIdForUser(canonical: string): Promise<string 
   return bindings[0] ?? null
 }
 
+/** Bootstrap setter: makes `name` the sole admin. Used by the init wizard for
+ *  the very first admin; admin management afterwards goes through
+ *  `addAdmin` / `removeAdmin`. */
 export async function setAdmin(name: string): Promise<void> {
   if (!isValidIdentityName(name)) {
     throw new Error(`Invalid identity name: ${name}`)
@@ -227,8 +258,37 @@ export async function setAdmin(name: string): Promise<void> {
   await writeJsonSecure(adminPath(), { admins: [name] } satisfies AdminFile)
 }
 
+/** Append `name` to the admin list (idempotent). The caller is responsible for
+ *  having verified `name` is an existing paired identity. */
+export async function addAdmin(name: string): Promise<void> {
+  if (!isValidIdentityName(name)) {
+    throw new Error(`Invalid identity name: ${name}`)
+  }
+  const admins = await listAdmins()
+  if (admins.includes(name)) {
+    return
+  }
+  await writeJsonSecure(adminPath(), { admins: [...admins, name] } satisfies AdminFile)
+}
+
+export type RemoveAdminResult = { ok: true } | { ok: false; reason: 'not-admin' | 'last-admin' }
+
+/** Remove `name` from the admin list, refusing to remove the last admin so the
+ *  deployment never ends up with nobody who can manage it. */
+export async function removeAdmin(name: string): Promise<RemoveAdminResult> {
+  const admins = await listAdmins()
+  if (!admins.includes(name)) {
+    return { ok: false, reason: 'not-admin' }
+  }
+  if (admins.length <= 1) {
+    return { ok: false, reason: 'last-admin' }
+  }
+  await writeJsonSecure(adminPath(), { admins: admins.filter(a => a !== name) } satisfies AdminFile)
+  return { ok: true }
+}
+
 export async function isAdmin(name: string): Promise<boolean> {
-  return (await getAdmin()) === name
+  return (await listAdmins()).includes(name)
 }
 
 export function parseSenderKey(link: string): { channel: ChannelKind; peerId: string } {

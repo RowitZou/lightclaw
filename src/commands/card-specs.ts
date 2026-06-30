@@ -417,14 +417,19 @@ export function adminUserCardSpec(body: string): CommandListCardSpec {
         rows: [
           [t('card.admin.user.sub.rm.cmd'), t('card.admin.user.sub.rm.desc')],
           [t('card.admin.user.sub.unlink.cmd'), t('card.admin.user.sub.unlink.desc')],
+          [t('card.admin.user.sub.grantAdmin.cmd'), t('card.admin.user.sub.grantAdmin.desc')],
+          [t('card.admin.user.sub.revokeAdmin.cmd'), t('card.admin.user.sub.revokeAdmin.desc')],
         ],
       },
+      { markdown: t('card.admin.user.note.admin') },
       {
         heading: t('card.examples'),
         codeExamples: [
           '/admin user rm alice --y',
           '/admin user rm alice --purge --y',
           '/admin user unlink feishu:ou_xxx',
+          '/admin user grant-admin alice',
+          '/admin user revoke-admin alice',
         ],
       },
     ],

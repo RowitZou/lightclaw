@@ -46,6 +46,28 @@ export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Reco
   })
 }
 
+/** Pushed to a user's DM when an admin promotes them via `/admin user
+ *  grant-admin`. Info-tone (wathet) — a positive privilege grant, mirroring the
+ *  admin welcome card. */
+export function buildAdminGrantedCard(): Record<string, unknown> {
+  return buildSystemNoticeCard({
+    kind: 'info',
+    title: t('card.adminGranted.title'),
+    content: t('card.adminGranted.body'),
+  })
+}
+
+/** Pushed to a user's DM when an admin demotes them via `/admin user
+ *  revoke-admin`. Deliberately info-tone (not warning / red) with gentle
+ *  wording — a privilege change, not a reprimand. */
+export function buildAdminRevokedCard(): Record<string, unknown> {
+  return buildSystemNoticeCard({
+    kind: 'info',
+    title: t('card.adminRevoked.title'),
+    content: t('card.adminRevoked.body'),
+  })
+}
+
 export function buildStartupFailureCard(input: {
   reason: string
   elapsedSeconds: number

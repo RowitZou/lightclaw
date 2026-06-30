@@ -2,9 +2,11 @@ import chalk from 'chalk'
 
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
+  addAdmin,
   addLink,
   createUser,
   getAdmin,
+  getFeishuOpenIdForUser,
   getUserPermissionCeiling,
   isAdmin,
   isValidIdentityName,
@@ -12,10 +14,13 @@ import {
   lookupBySender,
   parseSenderKey,
   rebuildReverseIndex,
+  removeAdmin,
   removeLink,
   removeUser,
   setUserPermissionCeiling,
 } from '../identity/store.js'
+import { buildAdminGrantedCard, buildAdminRevokedCard } from '../channels/feishu/welcome-card.js'
+import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import { deriveCanonicalName } from '../identity/derive-canonical.js'
 import { preheatAndWelcomeOnApproval } from '../identity/post-approve.js'
@@ -238,13 +243,14 @@ function buildBuiltinCommands(): ReplCommand[] {
     visibleTo: 'admin',
     agentAdvisory:
       'When the admin wants to manage the deployment: inspect token cost, ' +
-      'manage paired users / pairing requests, read user feedback, set ' +
+      'manage paired users / pairing requests (including promoting a paired ' +
+      'user to admin or revoking admin), read user feedback, set ' +
       'permission ceilings, inspect or reset the sandbox, manage Feishu drive ' +
       'folders, configure deployment-wide model backends / endpoints / lanes / public proxy, ' +
       'or check the running version / pull a code update and restart.',
     agentUsage: [
       '/admin cost                                   Token usage this month, by model and user',
-      '/admin user [list|rm <name> [--purge] --y|unlink <channel:id>]',
+      '/admin user [list|rm <name> [--purge] --y|unlink <channel:id>|grant-admin <name>|revoke-admin <name>]',
       '/admin pairing [list|approve <code> [--as <name>]|reject <code>]',
       '/admin feedback [--page N]                    Read standing user feedback',
       '/admin ceiling [list|set <user> <mode>]       Per-user permission-mode ceiling',
@@ -496,6 +502,10 @@ export async function runUserCommand(rawArgs: string): Promise<string> {
       return userUnlink(args)
     case 'remove':
       return userRemove(args)
+    case 'grant-admin':
+      return userGrantAdmin(args)
+    case 'revoke-admin':
+      return userRevokeAdmin(args)
     case 'feedback':
       return userFeedback(args)
     default: {
@@ -766,7 +776,9 @@ async function userRemove(args: string[]): Promise<string> {
   if (!name) {
     return `${t('user.remove.usage')}\n`
   }
-  if ((await getAdmin()) === name) {
+  if (await isAdmin(name)) {
+    // Refuse removing the identity of ANY admin — that would leave a dangling
+    // name in the admin list with no backing identity. Revoke admin first.
     return `${t('user.remove.refuseAdmin')}\n`
   }
   const result = await removeUser(name, { purge: args.includes('--purge') })
@@ -782,6 +794,57 @@ async function userRemove(args: string[]): Promise<string> {
     response += `${t('user.remove.cleanupDocker', { container: cleanup.dockerContainer })}\n`
   }
   return response
+}
+
+async function userGrantAdmin(args: string[]): Promise<string> {
+  const name = args[0]
+  if (!name) {
+    return `${t('user.grantAdmin.usage')}\n`
+  }
+  const identities = await listIdentities()
+  if (!identities[name]) {
+    return `${t('user.grantAdmin.noSuchUser', { name })}\n`
+  }
+  if (await isAdmin(name)) {
+    return `${t('user.grantAdmin.already', { name })}\n`
+  }
+  await addAdmin(name)
+  await pushAdminStatusCard(name, 'granted')
+  return `${t('user.grantAdmin.done', { name })}\n`
+}
+
+async function userRevokeAdmin(args: string[]): Promise<string> {
+  const name = args[0]
+  if (!name) {
+    return `${t('user.revokeAdmin.usage')}\n`
+  }
+  const result = await removeAdmin(name)
+  if (!result.ok) {
+    return result.reason === 'last-admin'
+      ? `${t('user.revokeAdmin.lastOne', { name })}\n`
+      : `${t('user.revokeAdmin.notAdmin', { name })}\n`
+  }
+  await pushAdminStatusCard(name, 'revoked')
+  return `${t('user.revokeAdmin.done', { name })}\n`
+}
+
+/** Best-effort DM push of the admin-status-change card to the target user.
+ *  No-ops silently when there is no active Feishu channel or the user has no
+ *  Feishu binding (e.g. a terminal-only identity). */
+async function pushAdminStatusCard(name: string, change: 'granted' | 'revoked'): Promise<void> {
+  const sender = getFeishuSender()
+  if (!sender) {
+    return
+  }
+  const openId = await getFeishuOpenIdForUser(name)
+  if (!openId) {
+    return
+  }
+  const card = change === 'granted' ? buildAdminGrantedCard() : buildAdminRevokedCard()
+  await sender.sendInteractiveCardToOpenId(openId, card).catch(error => {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`admin-status-card: DM push failed for ${name}: ${detail}\n`)
+  })
 }
 
 function firstLine(text: string): string {

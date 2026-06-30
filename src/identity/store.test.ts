@@ -6,11 +6,17 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  addAdmin,
   addLink,
   createUser,
+  getAdmin,
   getAdminFeishuOpenId,
+  getAdminFeishuOpenIds,
   getIdentity,
   getUserPermissionCeiling,
+  isAdmin,
+  listAdmins,
+  removeAdmin,
   setAdmin,
   setUserPermissionCeiling,
 } from './store.js'
@@ -66,6 +72,72 @@ describe('getAdminFeishuOpenId', () => {
     await addLink('admin', 'terminal:terminal-admin')
 
     assert.equal(await getAdminFeishuOpenId(), 'ou_admin')
+  })
+})
+
+describe('multi-admin', () => {
+  it('addAdmin lets multiple admins coexist; getAdmin returns the primary', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    await createUser('bob')
+    await addAdmin('bob')
+
+    assert.deepEqual(await listAdmins(), ['admin', 'bob'])
+    // getAdmin must NOT throw with >1 admin (the old v1 cap is gone) and
+    // returns the bootstrap/primary admin.
+    assert.equal(await getAdmin(), 'admin')
+    assert.equal(await isAdmin('admin'), true)
+    assert.equal(await isAdmin('bob'), true)
+    assert.equal(await isAdmin('carol'), false)
+  })
+
+  it('addAdmin is idempotent', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    await addAdmin('admin')
+    assert.deepEqual(await listAdmins(), ['admin'])
+  })
+
+  it('removeAdmin removes a non-last admin but refuses the last one', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    await createUser('bob')
+    await addAdmin('bob')
+
+    assert.deepEqual(await removeAdmin('bob'), { ok: true })
+    assert.deepEqual(await listAdmins(), ['admin'])
+    assert.equal(await isAdmin('bob'), false)
+
+    // The last admin cannot be removed — the deployment must keep at least one.
+    assert.deepEqual(await removeAdmin('admin'), { ok: false, reason: 'last-admin' })
+    assert.deepEqual(await listAdmins(), ['admin'])
+  })
+
+  it('removeAdmin reports not-admin for a user who is not an admin', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    assert.deepEqual(await removeAdmin('carol'), { ok: false, reason: 'not-admin' })
+  })
+
+  it('getAdminFeishuOpenIds fans out across every admin with a binding, skipping the unbound', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    await createUser('bob')
+    await addAdmin('bob')
+    await addLink('bob', 'feishu:ou_bob')
+    await createUser('carol')
+    await addAdmin('carol') // no feishu binding → skipped
+
+    assert.deepEqual(await getAdminFeishuOpenIds(), ['ou_admin', 'ou_bob'])
+    // The single-target accessor still returns the primary admin's binding.
+    assert.equal(await getAdminFeishuOpenId(), 'ou_admin')
+  })
+
+  it('getAdminFeishuOpenIds is empty when no admin has a binding', async () => {
+    await createUser('admin')
+    await setAdmin('admin')
+    assert.deepEqual(await getAdminFeishuOpenIds(), [])
   })
 })
 

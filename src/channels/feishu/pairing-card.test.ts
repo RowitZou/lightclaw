@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { setLang } from '../../i18n/index.js'
 import { setLightclawHomeOverride } from '../../paths.js'
 import {
+  addAdmin,
   addLink,
   createUser,
   setAdmin,
@@ -204,8 +205,9 @@ describe('PairingCardCoordinator', () => {
     // Simulates the double-channel race: admin runs /user approve <code>
     // in terminal while the review card is still live. The card click then
     // finds approveCode() returns null because the entry was already
-    // removed; coordinator must surface "已通过其他渠道处理" instead of
-    // failing or double-creating identities.
+    // removed; coordinator must surface the neutral "该申请已被处理" line
+    // (no operator was recorded for this path) instead of failing or
+    // double-creating identities.
     const { approveCode: approveCodeDirect } = await import('../../identity/pairing.js')
     await createUser('admin')
     await setAdmin('admin')
@@ -228,12 +230,45 @@ describe('PairingCardCoordinator', () => {
 
     const response = await coord.handleCardAction(approve)
 
-    assert.match(JSON.stringify(response), /已通过其他渠道处理/)
+    assert.match(JSON.stringify(response), /该申请已被处理/)
     // No follow-up handover card pushed to the applicant (we never minted
     // a canonical here). The application card to applicant DM and the
     // review card to admin DM both remain as the only sends.
     assert.equal(cardsForOpenId(sender, 'ou_admin').length, 1, 'only one admin review card')
     assert.equal(cardsForOpenId(sender, 'ou_user').length, 1, 'no extra applicant card')
+  })
+
+  it('fans out the review card to every admin; the first to approve wins and others see who handled it', async () => {
+    // Two admins, both Feishu-bound. The review card must reach BOTH; whichever
+    // approves first wins, and the other admin clicking the stale card sees the
+    // "已由 <operator> 通过" line rather than the neutral fallback.
+    await createUser('admin')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    await createUser('bob')
+    await addAdmin('bob')
+    await addLink('bob', 'feishu:ou_bob')
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+    await coord.handleCardAction(extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'))
+
+    // Fan-out: both admins received a review card.
+    assert.equal(cardsForOpenId(sender, 'ou_admin').length, 1, 'admin got a review card')
+    assert.equal(cardsForOpenId(sender, 'ou_bob').length, 1, 'bob got a review card')
+
+    // admin approves first.
+    const adminApprove = { ...extractAction(cardForOpenId(sender, 'ou_admin'), 'approve'), operatorOpenId: 'ou_admin' }
+    const adminResponse = await coord.handleCardAction(adminApprove)
+    assert.match(JSON.stringify(adminResponse), /by admin/)
+
+    // bob clicks the now-stale card and sees who already approved it.
+    const bobApprove = { ...extractAction(cardForOpenId(sender, 'ou_bob'), 'approve'), operatorOpenId: 'ou_bob' }
+    const bobResponse = await coord.handleCardAction(bobApprove)
+    assert.match(JSON.stringify(bobResponse), /该申请已由 admin 通过/)
   })
 
   it('double-tap confirm only pushes one admin review card', async () => {

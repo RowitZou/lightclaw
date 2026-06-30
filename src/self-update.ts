@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { getAdminFeishuOpenId } from './identity/store.js'
+import { getAdminFeishuOpenId, getFeishuOpenIdForUser } from './identity/store.js'
 import { t } from './i18n/index.js'
 import { lightclawHome } from './paths.js'
 import { triggerUpdateRestart } from './restart-coordinator.js'
@@ -300,7 +300,12 @@ export async function announceRestart(sentinel: RestartSentinel | null): Promise
   if (!sender) {
     return
   }
-  const openId = await getAdminFeishuOpenId().catch(() => null)
+  // Route the confirmation to the admin who ran `/admin version update` — not a
+  // broadcast to every admin. `byUser` is the invoker's canonical id; fall back
+  // to the primary admin only for legacy sentinels that predate the field.
+  const openId =
+    (sentinel.byUser ? await getFeishuOpenIdForUser(sentinel.byUser).catch(() => null) : null) ??
+    (await getAdminFeishuOpenId().catch(() => null))
   if (!openId) {
     return
   }

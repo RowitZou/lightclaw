@@ -221,6 +221,12 @@ async function runAdminUser(parts: string[], ctx: AdminCommandContext): Promise<
   if (verb === 'unlink') {
     return runUserCommand(`unlink ${parts.slice(1).join(' ')}`.trim())
   }
+  if (verb === 'grant-admin') {
+    return runUserCommand(`grant-admin ${parts.slice(1).join(' ')}`.trim())
+  }
+  if (verb === 'revoke-admin') {
+    return runUserCommand(`revoke-admin ${parts.slice(1).join(' ')}`.trim())
+  }
   return usageCard()
 }
 
