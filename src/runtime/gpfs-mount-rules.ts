@@ -56,20 +56,26 @@ export function resolveGpfsMountRule(
  * agent can already reach shared paths via Bash regardless, and the mount `mode`
  * is neither knowable for worker-only mounts nor kernel-enforced against Bash —
  * so the guard refuses by path depth alone, ignoring ro/rw and scope.
+ *
+ * The depth floor is per-prefix: each `gpfsMounts` rule may set its own
+ * `minWorkspaceDepth` (the private layer can sit at a different level per
+ * deployment / per filesystem); this is the fallback when the matched rule
+ * omits it. `0` on a rule disables the guard for that prefix.
  */
 export const MIN_GPFS_PATH_DEPTH = 2
 
 /**
- * Returns the matched gpfs `hostPrefix` when `hostPath` sits FEWER than
- * `minDepth` segments below it (i.e. it is the mount root or a top-level shared
- * dir), else `null`. Returns `null` when the path is under no configured gpfs
- * prefix — "must be under a prefix" is a separate validation's job; this guard
- * only refuses paths that ARE under a prefix but too shallow.
+ * Returns the matched gpfs `hostPrefix` when `hostPath` sits FEWER than that
+ * prefix's required depth below it (i.e. it is the mount root or a top-level
+ * shared dir), else `null`. The required depth is the matched rule's
+ * `minWorkspaceDepth`, falling back to `MIN_GPFS_PATH_DEPTH`. Returns `null`
+ * when the path is under no configured gpfs prefix — "must be under a prefix" is
+ * a separate validation's job; this guard only refuses paths that ARE under a
+ * prefix but too shallow.
  */
 export function findShallowGpfsRoot(
   hostPathInput: string,
   rlaunchConfig: RlaunchGpfsMountConfig,
-  minDepth: number = MIN_GPFS_PATH_DEPTH,
 ): string | null {
   let resolved: { rule: RlaunchGpfsMountRule; suffix: string }
   try {
@@ -77,6 +83,7 @@ export function findShallowGpfsRoot(
   } catch {
     return null
   }
+  const minDepth = resolved.rule.minWorkspaceDepth ?? MIN_GPFS_PATH_DEPTH
   const segments = resolved.suffix.split('/').filter(Boolean)
   return segments.length < minDepth ? resolved.rule.hostPrefix : null
 }
@@ -84,7 +91,7 @@ export function findShallowGpfsRoot(
 export function normalizeGpfsMountRules(
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchGpfsMountRule[] {
-  const byHostPrefix = new Map<string, string>()
+  const byHostPrefix = new Map<string, RlaunchGpfsMountRule>()
   const addRule = (rule: RlaunchGpfsMountRule): void => {
     if (!rule.hostPrefix.trim()) {
       throw new Error('runtime.clusterSettings.gpfsMounts hostPrefix must be a non-empty string.')
@@ -94,7 +101,11 @@ export function normalizeGpfsMountRules(
     if (!mountPrefix) {
       throw new Error('runtime.clusterSettings.gpfsMounts mountPrefix must be a non-empty string.')
     }
-    byHostPrefix.set(hostPrefix, mountPrefix)
+    byHostPrefix.set(hostPrefix, {
+      hostPrefix,
+      mountPrefix,
+      ...(rule.minWorkspaceDepth !== undefined ? { minWorkspaceDepth: rule.minWorkspaceDepth } : {}),
+    })
   }
 
   const configuredRules = rlaunchConfig.gpfsMounts ?? []
@@ -105,9 +116,7 @@ export function normalizeGpfsMountRules(
     addRule(rule)
   }
 
-  return [...byHostPrefix.entries()]
-    .map(([hostPrefix, mountPrefix]) => ({ hostPrefix, mountPrefix }))
-    .sort((a, b) => b.hostPrefix.length - a.hostPrefix.length)
+  return [...byHostPrefix.values()].sort((a, b) => b.hostPrefix.length - a.hostPrefix.length)
 }
 
 function normalizeHostPath(input: string): string {

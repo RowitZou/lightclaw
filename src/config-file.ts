@@ -332,6 +332,7 @@ export type ConfigFileShape = {
       gpfsMounts?: Array<{
         hostPrefix?: string
         mountPrefix?: string
+        minWorkspaceDepth?: number
       }>
       distributedRdmaResources?: Record<string, string | number>
       imagePullPolicy?: string

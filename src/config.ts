@@ -99,6 +99,13 @@ export type RlaunchRuntimeSettings = {
 export type RlaunchGpfsMountRule = {
   hostPrefix: string
   mountPrefix: string
+  /**
+   * Minimum number of path segments a workspace / mount must sit BELOW this
+   * `hostPrefix` before it is allowed (a footgun guard against pointing the
+   * workspace at, or whole-mounting, a public shared root). Omitted → default
+   * `MIN_GPFS_PATH_DEPTH` (2). `0` disables the guard for this prefix.
+   */
+  minWorkspaceDepth?: number
 }
 
 export type NetworkBridgeSettings = {
@@ -975,7 +982,17 @@ function validateRlaunchGpfsMounts(
     if (!mountPrefix) {
       throw new Error(`runtime.clusterSettings.gpfsMounts[${index}].mountPrefix is required.`)
     }
-    return { hostPrefix, mountPrefix }
+    const rawDepth = (mount as { minWorkspaceDepth?: unknown }).minWorkspaceDepth
+    let minWorkspaceDepth: number | undefined
+    if (rawDepth !== undefined) {
+      if (typeof rawDepth !== 'number' || !Number.isInteger(rawDepth) || rawDepth < 0) {
+        throw new Error(
+          `runtime.clusterSettings.gpfsMounts[${index}].minWorkspaceDepth must be a non-negative integer.`,
+        )
+      }
+      minWorkspaceDepth = rawDepth
+    }
+    return { hostPrefix, mountPrefix, ...(minWorkspaceDepth !== undefined ? { minWorkspaceDepth } : {}) }
   })
 }
 
@@ -2166,6 +2183,7 @@ function dedupeRlaunchGpfsMounts(rules: readonly RlaunchGpfsMountRule[]): Rlaunc
     byHostPrefix.set(rule.hostPrefix, {
       hostPrefix: rule.hostPrefix,
       mountPrefix: rule.mountPrefix.replace(/\/+$/, ''),
+      ...(rule.minWorkspaceDepth !== undefined ? { minWorkspaceDepth: rule.minWorkspaceDepth } : {}),
     })
   }
   return [...byHostPrefix.values()]

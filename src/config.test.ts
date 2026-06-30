@@ -1048,6 +1048,51 @@ describe('config: runtime.clusterSettings.gpfsMounts', () => {
     ])
   })
 
+  it('parses and validates per-rule minWorkspaceDepth', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      runtime: {
+        driver: 'brainpp',
+        backend: 'cluster',
+        clusterSettings: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsMounts: [
+            { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1', minWorkspaceDepth: 3 },
+            { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
+          ],
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.runtime.clusterSettings.gpfsMounts, [
+      { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1', minWorkspaceDepth: 3 },
+      { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
+    ])
+  })
+
+  it('rejects a non-integer / negative minWorkspaceDepth', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      runtime: {
+        driver: 'brainpp',
+        backend: 'cluster',
+        clusterSettings: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsMounts: [
+            { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1', minWorkspaceDepth: -1 },
+          ],
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /minWorkspaceDepth must be a non-negative integer/)
+  })
+
   it('parses distributed RDMA resources for multi-node submit defaults', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },

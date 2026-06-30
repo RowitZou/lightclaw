@@ -126,7 +126,11 @@
       "chargedGroup": "<charged-group>",  // required for cluster backend
       "namespace": "<namespace>",         // required for cluster backend (or env KUBEBRAIN_NAMESPACE)
       "gpfsMounts": [                      // required for cluster (>=1 entry, longest-prefix match)
-        { "hostPrefix": "<host-path>", "mountPrefix": "<gpfs-url>" }
+        // minWorkspaceDepth (optional, default 2): a workspace / mount must sit at
+        // least this many path segments BELOW hostPrefix, else it is refused as a
+        // public shared root (hostPrefix itself = depth 0, hostPrefix/<team> = depth 1).
+        // Tune per filesystem if the private layer sits at a different level; 0 disables.
+        { "hostPrefix": "<host-path>", "mountPrefix": "<gpfs-url>", "minWorkspaceDepth": 2 }
       ],
       "cpu": 8,
       "memoryMb": 16000,
