@@ -32,7 +32,8 @@ import {
   UPDATE_RESTART_EXIT_CODE,
   setUpdateRestartHandler,
 } from './restart-coordinator.js'
-import { announceRestartIfPending } from './self-update.js'
+import { setRestartEventFloorMs } from './restart-window.js'
+import { announceRestart, readAndClearRestartSentinel } from './self-update.js'
 import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
 import { VERSION, getBuildId } from './version.js'
@@ -240,11 +241,23 @@ async function main(): Promise<void> {
   await runWithSessionContext(sessionContext, async () => {
     await initializeHooks(config)
     await initializeMcp(config)
+    // Consume the restart sentinel BEFORE channels start: a `/admin update`
+    // restart sets the WS transport's stale-event floor from it (restart-
+    // window.ts) so messages the user sent during the down window are honored
+    // on Feishu's redelivery instead of being stale-dropped. The same sentinel
+    // then drives the post-restart confirmation DM below.
+    const restartSentinel = readAndClearRestartSentinel()
+    if (restartSentinel) {
+      const floorMs = Date.parse(restartSentinel.requestedAt)
+      if (!Number.isNaN(floorMs)) {
+        setRestartEventFloorMs(floorMs)
+      }
+    }
     const channelHandles = await startEnabledChannels()
     // If the previous shutdown was a `/admin update` restart, DM the admin a
     // confirmation that we came back on the new build. Needs the channel sender
     // (registered by startEnabledChannels), so it runs here. Fire-and-forget.
-    void announceRestartIfPending().catch(error => {
+    void announceRestart(restartSentinel).catch(error => {
       process.stderr.write(
         `[self-update] restart announce failed: ${
           error instanceof Error ? error.message : String(error)

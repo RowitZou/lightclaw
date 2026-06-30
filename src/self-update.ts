@@ -262,12 +262,14 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<string>
   return `${t('admin.update.restarting', { from: getBuildId(), to: toBuildId })}\n`
 }
 
-/** Called once at startup (after channels are up). If the previous shutdown was
- *  a `/admin update` restart, DM the admin a confirmation that the daemon came
- *  back on the new build. Best-effort: a missing sender / admin binding / send
- *  failure is swallowed (the restart already happened; the notice is a courtesy). */
-export async function announceRestartIfPending(): Promise<void> {
-  const sentinel = readAndClearRestartSentinel()
+/** Called once at startup (after channels are up) with the sentinel consumed
+ *  earlier in boot (cli.ts reads it BEFORE channels start so the WS transport's
+ *  stale-event floor can be set from it — see restart-window.ts). If the
+ *  previous shutdown was a `/admin update` restart, DM the admin a confirmation
+ *  that the daemon came back on the new build. Best-effort: a missing sender /
+ *  admin binding / send failure is swallowed (the restart already happened; the
+ *  notice is a courtesy). */
+export async function announceRestart(sentinel: RestartSentinel | null): Promise<void> {
   if (!sentinel) {
     return
   }

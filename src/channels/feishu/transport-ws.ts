@@ -3,6 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as Lark from '@larksuiteoapi/node-sdk'
 
 import { t } from '../../i18n/index.js'
+import { computeStaleEventCutoff, getRestartEventFloorMs } from '../../restart-window.js'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
@@ -111,8 +112,16 @@ export async function startFeishuWsClient(input: {
 
   // Anchor "is this event from before we started?" to the moment this
   // transport spins up. Captured in the closure so each handler sees a
-  // stable cutoff even if the WSClient reconnects later.
+  // stable cutoff even if the WSClient reconnects later. A just-consumed
+  // `/admin update` restart lowers the cutoff to the restart-initiation time
+  // (restart-window.ts) so down-window messages the user sent while we were
+  // relaunching are honored on redelivery instead of stale-dropped.
   const startedAtMs = Date.now()
+  const staleCutoffMs = computeStaleEventCutoff(
+    startedAtMs,
+    STALE_EVENT_BUFFER_MS,
+    getRestartEventFloorMs(),
+  )
 
   const eventDispatcher = new Lark.EventDispatcher({
     loggerLevel: Lark.LoggerLevel.warn,
@@ -150,9 +159,9 @@ export async function startFeishuWsClient(input: {
         return
       }
       const createdAtMs = parseCreateTime(data.message?.create_time)
-      if (createdAtMs !== undefined && createdAtMs < startedAtMs - STALE_EVENT_BUFFER_MS) {
+      if (createdAtMs !== undefined && createdAtMs < staleCutoffMs) {
         process.stderr.write(
-          `feishu ws: dropped stale event ${message.eventId} create_time=${createdAtMs} started=${startedAtMs}\n`,
+          `feishu ws: dropped stale event ${message.eventId} create_time=${createdAtMs} cutoff=${staleCutoffMs}\n`,
         )
         return
       }
