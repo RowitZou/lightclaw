@@ -351,14 +351,14 @@ export const taskUpdateTool = buildTool({
       if (isOrchestrator) {
         return {
           output:
-            'main does not self-suspend to wait — it manages and is woken when a result returns. To retry or resume this objective later, schedule it with Dispatch({ schedule: { after: { afterMinutes } } }) (or a oneshot at an ISO time); to pause a running child, call wait with that child\'s runId and no wake.',
+            'You manage work and are woken when a result returns — you do not self-suspend on a wake. To pause a still-running run in your tree, call wait with its runId and no wake. To pick this objective back up on your own later, schedule it with Dispatch({ schedule: { after: { afterMinutes } } }) (or a oneshot at an ISO time).',
           isError: true,
         }
       }
       const own = getCurrentTaskRunId()
       if (!own) return { output: 'wait requires a current TaskRun to suspend.', isError: true }
       if (input.runId && input.runId !== own) {
-        return { output: `TaskRun ${input.runId} is not your current run — a worker can only wait on its own run.`, isError: true }
+        return { output: `TaskRun ${input.runId} is not your current run — you can only wait on your own run.`, isError: true }
       }
       const checkpoint = input.checkpoint?.trim()
       if (!checkpoint) return { output: 'wait requires `checkpoint` so the run can be picked back up safely.', isError: true }
