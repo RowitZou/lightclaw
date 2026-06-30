@@ -13,6 +13,14 @@
 #     failure).
 #   - crash (any other non-zero exit): relaunch after a short pause.
 #
+# Fast-fail guard: a daemon that exits non-zero within MIN_HEALTHY_SECONDS is a
+# startup failure (bad config, a port already in use, a missing dist) — NOT a
+# transient mid-run crash. Restarting it every 2s forever just spams the log and
+# never recovers. After MAX_FAST_FAILS consecutive fast failures the supervisor
+# STOPS and surfaces the exit code, so the operator fixes the root cause and
+# re-runs. A daemon that ran healthy for a while and then died resets the
+# counter and is restarted normally.
+#
 # A clean operator stop (Ctrl-D in the admin console, or SIGTERM → graceful
 # shutdown → exit 0) ends the loop so you can actually stop the daemon.
 #
@@ -30,22 +38,39 @@ set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 
 UPDATE_RESTART_CODE=75
+MIN_HEALTHY_SECONDS=20   # ran at least this long before a crash → treat as transient, restart
+MAX_FAST_FAILS=3         # this many back-to-back fast crashes → give up and surface the error
 
+fast_fails=0
 while true; do
+  start=$(date +%s)
   node dist/cli.js "$@"
   code=$?
-  case "$code" in
-    "$UPDATE_RESTART_CODE")
-      echo "[run.sh] update restart requested (exit $code); relaunching onto new build" >&2
-      continue
-      ;;
-    0)
-      echo "[run.sh] clean exit; stopping" >&2
-      break
-      ;;
-    *)
-      echo "[run.sh] daemon exited ($code); restarting in 2s" >&2
-      sleep 2
-      ;;
-  esac
+  ran=$(( $(date +%s) - start ))
+
+  if [ "$code" -eq "$UPDATE_RESTART_CODE" ]; then
+    echo "[run.sh] update restart requested (exit $code); relaunching onto new build" >&2
+    fast_fails=0
+    continue
+  fi
+  if [ "$code" -eq 0 ]; then
+    echo "[run.sh] clean exit; stopping" >&2
+    break
+  fi
+
+  # Non-zero crash. Distinguish a transient mid-run crash from a startup failure.
+  if [ "$ran" -ge "$MIN_HEALTHY_SECONDS" ]; then
+    fast_fails=0
+    echo "[run.sh] daemon exited ($code) after ${ran}s; restarting in 2s" >&2
+    sleep 2
+  else
+    fast_fails=$(( fast_fails + 1 ))
+    echo "[run.sh] daemon exited ($code) after ${ran}s (fast fail ${fast_fails}/${MAX_FAST_FAILS})" >&2
+    if [ "$fast_fails" -ge "$MAX_FAST_FAILS" ]; then
+      echo "[run.sh] daemon keeps failing at startup; NOT restarting." >&2
+      echo "[run.sh] Fix the error above (commonly: a port already in use, a stale daemon still running, or a bad config), then re-run ./run.sh." >&2
+      exit "$code"
+    fi
+    sleep 2
+  fi
 done
