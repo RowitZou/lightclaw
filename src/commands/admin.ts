@@ -1,6 +1,8 @@
 import path from 'node:path'
 
 import { createCodexAuthProvider, loadCodexCliTokens } from '../auth/codex/provider.js'
+import { deriveDeviceLoginStored } from '../auth/codex/device-login.js'
+import { beginCodexDeviceLogin } from '../channels/feishu/codex-device-login.js'
 import { writeTokenFile } from '../auth/storage.js'
 import {
   getConfig,
@@ -471,6 +473,33 @@ async function addAdminEndpoint(
   }
   const parsed = parseEndpointType(rest)
   if (!parsed.ok) return `${parsed.error}\n`
+
+  if (parsed.type === 'codex' && parsed.mode === 'login') {
+    // Web/device login into the GLOBAL codex store (<home>/auth/codex.json). The
+    // admin's own Feishu DM gets the link + code; the endpoint config
+    // (auth:'codex-oauth') is written via onPersisted once login completes.
+    const begin = await beginCodexDeviceLogin({
+      canonicalUser: ctx.userId ?? '',
+      alias,
+      ...(parsed.proxy ? { proxy: parsed.proxy } : {}),
+      persist: tokens => {
+        const stored = deriveDeviceLoginStored(tokens)
+        writeTokenFile('codex', stored)
+        return { accountId: stored.account_id }
+      },
+      onPersisted: () => {
+        const next = readJsonObjectOrEmpty(adminConfigPath())
+        const eps = asRecord(next.endpoints)
+        const endpoint: Record<string, unknown> = { auth: 'codex-oauth' }
+        if (parsed.proxy) endpoint.proxy = parsed.proxy
+        eps[alias] = endpoint
+        next.endpoints = eps
+        commitAdminConfig(next, config)
+      },
+    })
+    if (!begin.ok) return `${begin.message}\n`
+    return `${t('config.codex.login.started')}\n`
+  }
 
   if (parsed.type === 'codex') {
     // Replaces `/admin endpoint add --type codex`: read the codex auth.json at --auth-path

@@ -932,6 +932,27 @@ export const LOCALES = {
     'config.codex.removeMissing': '没有名为 "{name}" 的 Codex 凭据。',
     'config.codex.none': '尚未导入任何 Codex 凭据。运行 /config codex import --from <path> 导入。',
     'config.codex.listHeader': '已导入的 Codex 凭据：',
+    // ---- codex device-login (web login) ----
+    'config.codex.login.started':
+      '已发起 Codex 网页登录，请在私聊查看卡片完成（链接 + 验证码，15 分钟内有效）。',
+    'config.codex.login.needsChannel':
+      '错误：Codex 网页登录需要通过飞书私聊完成（我要把链接 + 验证码发给你）。请在飞书里运行该命令，或改用 --auth-path <auth.json 绝对路径> 导入文件。',
+    'card.codex.login.initTitle': '连接你的 Codex 账号',
+    'card.codex.login.initIntro': '按两步完成，完成后我会自动确认、无需回到这里：',
+    'card.codex.login.initStep1': '1️⃣ 打开链接并登录你的 ChatGPT 账号',
+    'card.codex.login.initStep2': '2️⃣ 输入这个一次性验证码（15 分钟内有效）',
+    'card.codex.login.initWarn':
+      '⚠️ 该验证码等同登录凭证，OpenAI 绝不会向你索取——请勿转发给任何人。',
+    'card.codex.login.openBtn': '打开登录页',
+    'card.codex.login.successTitle': '✅ Codex 账号已连接',
+    'card.codex.login.successBody':
+      '已保存为模型服务「{alias}」(account={account})，现在可用 Codex 模型，凭证自动续期。',
+    'card.codex.login.expiredTitle': '⌛ Codex 登录已过期',
+    'card.codex.login.expiredBody':
+      '登录超 15 分钟未完成、验证码已失效。重新运行 `/config endpoint add {alias} --type codex --login` 再试。',
+    'card.codex.login.failedTitle': '⚠️ Codex 登录失败',
+    'card.codex.login.failedBody':
+      '{reason}。请重试 `/config endpoint add {alias} --type codex --login`；若反复失败可改用 `--auth-path <auth.json 绝对路径>` 导入文件。',
     'config.endpoint.addedCodex': '已添加 Codex 模型服务 "{name}"（凭证：{ref}）。',
     'config.endpoint.codexAuthMissing': '错误：尚未导入 Codex 凭据 "{name}"。请先运行 /config endpoint add --type codex --auth-path <文件>。',
 
@@ -1936,6 +1957,27 @@ export const LOCALES = {
     'config.codex.removeMissing': 'No Codex credentials named "{name}".',
     'config.codex.none': 'No Codex credentials imported yet. Run /config codex import --from <path> to import.',
     'config.codex.listHeader': 'Imported Codex credentials:',
+    // ---- codex device-login (web login) ----
+    'config.codex.login.started':
+      'Started Codex web login — complete it via the card in your DM (link + code, valid 15 min).',
+    'config.codex.login.needsChannel':
+      'Error: Codex web login must be completed in a Feishu DM (I send you a link + code there). Run this command from Feishu, or import a file with --auth-path <absolute auth.json>.',
+    'card.codex.login.initTitle': 'Connect your Codex account',
+    'card.codex.login.initIntro': "Two steps — I'll confirm automatically when done, no need to come back:",
+    'card.codex.login.initStep1': '1️⃣ Open this link and sign in to your ChatGPT account',
+    'card.codex.login.initStep2': '2️⃣ Enter this one-time code (valid 15 minutes)',
+    'card.codex.login.initWarn':
+      '⚠️ This code is as sensitive as your login. OpenAI will never ask for it — never share it.',
+    'card.codex.login.openBtn': 'Open login page',
+    'card.codex.login.successTitle': '✅ Codex account connected',
+    'card.codex.login.successBody':
+      'Saved as "{alias}" (account={account}). Codex models are ready; credentials auto-refresh.',
+    'card.codex.login.expiredTitle': '⌛ Codex login expired',
+    'card.codex.login.expiredBody':
+      'Not completed within 15 min; code expired. Run `/config endpoint add {alias} --type codex --login` to retry.',
+    'card.codex.login.failedTitle': '⚠️ Codex login failed',
+    'card.codex.login.failedBody':
+      '{reason}. Retry `/config endpoint add {alias} --type codex --login`; if it keeps failing, import a file with `--auth-path <abs auth.json>`.',
     'config.endpoint.addedCodex': 'Added Codex model service "{name}" (credential: {ref}).',
     'config.endpoint.codexAuthMissing': 'Error: Codex credentials "{name}" are not imported. Run /config endpoint add --type codex --auth-path <file> first.',
 

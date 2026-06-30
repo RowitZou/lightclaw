@@ -6,6 +6,7 @@ import { resumePendingTurns } from './channels/feishu/resume.js'
 import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
 import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
+import { abortAllDeviceLogins } from './auth/codex/device-login-poller.js'
 import {
   clampPermissionModeToCeiling,
   isHomeConfigPath,
@@ -76,6 +77,9 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   await getBackgroundTaskScheduler().stop().catch(error => {
     process.stderr.write(`background scheduler stop failed: ${String(error)}\n`)
   })
+  // Abort any in-flight Codex device logins (in-process only, not persisted —
+  // a restart just drops them and the user re-runs the 15-min login).
+  abortAllDeviceLogins()
   // Release cluster runtimes (rlaunch workers, docker containers) before
   // exit. init.ts's parallel cleanup also calls releaseAll, but its hard
   // cap can fire before the brainctl/docker stop calls return — having
@@ -290,6 +294,7 @@ async function main(): Promise<void> {
       })
       await drainPendingBackgroundTasks(60_000)
       await getBackgroundTaskScheduler().stop()
+      abortAllDeviceLogins()
       for (const handle of channelHandles.reverse()) {
         await handle.stop().catch(error => {
           process.stderr.write(`channel stop failed: ${String(error)}\n`)

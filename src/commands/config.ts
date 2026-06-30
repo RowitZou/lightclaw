@@ -6,7 +6,9 @@ import {
   getUserCodexCredentials,
   importUserCodexAuth,
   parseCodexAuthRef,
+  persistDeviceLoginResult,
 } from '../auth/codex/user-store.js'
+import { beginCodexDeviceLogin } from '../channels/feishu/codex-device-login.js'
 import { listCodexSlugs } from '../auth/codex/models.js'
 import type { AuthCredentials } from '../auth/types.js'
 import {
@@ -399,7 +401,12 @@ function writeEndpointConfig(userId: string, obj: Record<string, unknown>): void
 // Returns a discriminated result or `{ ok:false, error }` (already-localized).
 type ParsedEndpointType =
   | { ok: true; type: 'openai' | 'anthropic'; key: string; baseUrl?: string; proxy?: string }
-  | { ok: true; type: 'codex'; authPath: string; proxy?: string }
+  // codex has two intake modes: `--auth-path <file>` imports an offline
+  // auth.json; omitting it (with or without an explicit `--login`) starts the
+  // web/device login. The trigger is auth-path presence, NOT the `--login`
+  // flag — `--login` is just an explicit synonym for the default.
+  | { ok: true; type: 'codex'; mode: 'import'; authPath: string; proxy?: string }
+  | { ok: true; type: 'codex'; mode: 'login'; proxy?: string }
   | { ok: false; error: string }
 
 export function parseEndpointType(parts: string[]): ParsedEndpointType {
@@ -420,7 +427,10 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
   if (type === 'codex') {
     if (baseUrlRaw !== undefined) return { ok: false, error: t('config.endpoint.codexNoBaseUrl') }
     if (key !== undefined) return { ok: false, error: t('config.endpoint.codexNoKey') }
-    if (!authPath) return { ok: false, error: t('config.endpoint.authPathRequired') }
+    if (!authPath) {
+      // No `--auth-path` → web/device login (whether or not `--login` is given).
+      return { ok: true, type: 'codex', mode: 'login', ...(proxy ? { proxy } : {}) }
+    }
     // The auth path is read from the DAEMON host filesystem. A `~` / `${HOME}`
     // value would silently expand to the daemon operator's home and import the
     // host's own Codex credentials into a remote user's endpoint — so require a
@@ -428,7 +438,7 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
     if (!path.isAbsolute(authPath)) {
       return { ok: false, error: t('config.endpoint.authPathNotAbsolute', { path: authPath }) }
     }
-    return { ok: true, type: 'codex', authPath, ...(proxy ? { proxy } : {}) }
+    return { ok: true, type: 'codex', mode: 'import', authPath, ...(proxy ? { proxy } : {}) }
   }
   // openai | anthropic
   if (!key) return { ok: false, error: t('config.endpoint.keyRequired', { type }) }
@@ -486,6 +496,33 @@ async function addEndpoint(
   }
   const parsed = parseEndpointType(rest)
   if (!parsed.ok) return `${parsed.error}\n`
+
+  if (parsed.type === 'codex' && parsed.mode === 'login') {
+    // Web/device login: kick off the flow, which DMs the user a link + code and
+    // (on completion, minutes later) persists the credential + writes the
+    // endpoint config via onPersisted. The slash returns immediately with the
+    // "started" notice; the endpoint config is written only once login succeeds
+    // (matching the import path's "persist after it works" ordering).
+    const codexName = 'default'
+    const begin = await beginCodexDeviceLogin({
+      canonicalUser: userId,
+      alias,
+      ...(parsed.proxy ? { proxy: parsed.proxy } : {}),
+      persist: tokens => persistDeviceLoginResult({ canonicalUser: userId, name: codexName, tokens }),
+      onPersisted: () => {
+        const endpoint: Record<string, unknown> = { authRef: `codex:${codexName}` }
+        if (parsed.proxy) endpoint.proxy = parsed.proxy
+        const obj = readUserConfig(userId)
+        const endpoints = asRecord(obj.endpoints)
+        endpoints[alias] = endpoint
+        obj.endpoints = endpoints
+        if (guardWritable(userId, obj)) return
+        writeEndpointConfig(userId, obj)
+      },
+    })
+    if (!begin.ok) return `${begin.message}\n`
+    return `${t('config.codex.login.started')}\n`
+  }
 
   if (parsed.type === 'codex') {
     // Resolve / import the codex auth file path, mirroring `/config codex import`.

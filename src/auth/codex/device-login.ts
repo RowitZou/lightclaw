@@ -20,10 +20,12 @@ import {
   CODEX_DEVICE_REDIRECT_PATH,
   CODEX_DEVICE_TOKEN_PATH,
   CODEX_DEVICE_USERCODE_PATH,
+  CODEX_DEVICE_VERIFY_PATH,
   CODEX_OAUTH_CLIENT_ID,
   CODEX_OAUTH_ISSUER,
 } from './constants.js'
-import type { HttpFn } from './provider.js'
+import { decodeExpiresAtMs, extractAccountIdFromTokens } from './jwt.js'
+import type { HttpFn, StoredCodexTokens } from './provider.js'
 
 /** Why a device-login step failed. The poller (PR3) branches on this to pick
  *  the user-facing card: `aborted` is silent (superseded / shutdown), `timeout`
@@ -71,6 +73,43 @@ export function resolveDeviceIssuer(override?: string | null): string {
 
 function apiBase(issuer: string): string {
   return `${issuer}/api/accounts`
+}
+
+/** The user-facing verification page for a given issuer (where the user enters
+ *  the user code). */
+export function deviceVerifyUrl(issuer?: string | null): string {
+  return `${resolveDeviceIssuer(issuer)}${CODEX_DEVICE_VERIFY_PATH}`
+}
+
+/** Build the `StoredCodexTokens` shape from a device-login exchange result.
+ *  The `/oauth/token` response carries no explicit `expires_at` / `account_id`
+ *  (same as the CLI `auth.json`), so both are derived from the access_token JWT
+ *  — single source of truth for the per-user (`user-store.ts`) and admin-global
+ *  (`writeTokenFile`) device-login persist paths. Throws `DeviceLoginError`
+ *  (`reason:'malformed'`) when the JWT expiry cannot be decoded. */
+export function deriveDeviceLoginStored(tokens: ExchangedTokens): StoredCodexTokens {
+  const expiresAtMs = decodeExpiresAtMs(tokens.accessToken)
+  if (expiresAtMs === null) {
+    throw new DeviceLoginError({
+      reason: 'malformed',
+      message: 'Codex device login returned an access_token whose expiry could not be decoded.',
+    })
+  }
+  const accountId = extractAccountIdFromTokens({
+    id_token: tokens.idToken,
+    access_token: tokens.accessToken,
+  })
+  return {
+    tokens: {
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      expires_at: expiresAtMs,
+      ...(tokens.idToken ? { id_token: tokens.idToken } : {}),
+    },
+    account_id: accountId,
+    imported_at: new Date().toISOString(),
+    source: 'codex-device-login',
+  }
 }
 
 function parseJson(bodyText: string): unknown {
