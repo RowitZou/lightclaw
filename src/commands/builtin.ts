@@ -47,6 +47,7 @@ import {
 } from './mode-aliases.js'
 import { t } from '../i18n/index.js'
 import { commandList } from './card-format.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 import type { CommandListCardSection, ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
@@ -477,7 +478,7 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
 
 export async function runUserCommand(rawArgs: string): Promise<string> {
   await rebuildReverseIndex()
-  const args = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const args = canonicalizeFlagTokens(rawArgs.trim().split(/\s+/).filter(Boolean))
   const action = args.shift()
   switch (action) {
     case 'list':

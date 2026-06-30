@@ -17,6 +17,7 @@ import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 import {
   adminBackendCardSpec,
   adminCeilingCardSpec,
@@ -124,7 +125,7 @@ export async function runAdminCommand(
   const firstSpace = trimmed.search(/\s/)
   const noun = (firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace)).toLowerCase()
   const rest = firstSpace === -1 ? '' : trimmed.slice(firstSpace + 1).trim()
-  const restParts = rest.split(/\s+/).filter(Boolean)
+  const restParts = canonicalizeFlagTokens(rest.split(/\s+/).filter(Boolean))
 
   switch (noun) {
     // ── ops nouns (reuse shared handlers) ──

@@ -459,6 +459,33 @@ describe('/config endpoint add --type', () => {
     assert.match(out, new RegExp(`authPath=${authFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   })
 
+  it('--type codex accepts an em-dash-mangled —auth-path (Feishu smart-punctuation)', async () => {
+    // Feishu / IME smart-punctuation rewrites a typed `--auth-path` to `—auth-path`
+    // (em-dash). Pre-fix the exact-match parser failed with authPathRequired even
+    // though the user supplied a valid absolute path (2026-06-30 dogfood).
+    const cfg = modelConfig()
+    const authFile = path.join(tmpHome, 'auth-emdash.json')
+    const { writeFileSync } = await import('node:fs')
+    const enc = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url')
+    const access = `${enc({ alg: 'none', typ: 'JWT' })}.${enc({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })}.`
+    writeFileSync(
+      authFile,
+      JSON.stringify({ tokens: { access_token: access, refresh_token: 'r', account_id: 'a' } }),
+      'utf8',
+    )
+    const out = await runConfigCommand(
+      `endpoint add cdx —type codex —auth-path ${authFile}`,
+      { config: cfg, userId: 'codexemdash' },
+    )
+    assert.match(out, /Codex model service/i)
+    const ep = (readUserConfigJson('codexemdash').endpoints as Record<string, Record<string, unknown>>)
+      .cdx
+    assert.ok(typeof ep.authRef === 'string' && (ep.authRef as string).startsWith('codex:'))
+    assert.equal(ep.authPath, authFile)
+  })
+
   it('--type codex rejects a non-absolute --auth-path (no tilde/relative; credential-leak guard)', async () => {
     const cfg = modelConfig()
     // A `~` path would expandHomePath to the DAEMON operator's home and import the

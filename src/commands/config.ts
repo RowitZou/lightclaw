@@ -73,6 +73,7 @@ import {
 } from '../state.js'
 
 import { requireConfirm } from './confirm.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 import { MODE_ALIASES, modeToAlias, parseMode } from './mode-aliases.js'
 
 type ConfigCommandContext = {
@@ -229,7 +230,7 @@ export async function runConfigCommand(
   rawArgs: string,
   ctx: ConfigCommandContext,
 ): Promise<string> {
-  const parts = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const parts = canonicalizeFlagTokens(rawArgs.trim().split(/\s+/).filter(Boolean))
   const action = (parts[0] ?? 'help').toLowerCase()
 
   if (action === 'help' || action === '--help' || action === '-h' || parts.length === 0) {
