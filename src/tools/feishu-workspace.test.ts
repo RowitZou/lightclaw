@@ -129,6 +129,62 @@ describe('Feishu workspace tools', () => {
     assert.deepEqual(records[0].ancestryChain, ['docNotes', 'userFld', 'rootFld'])
   })
 
+  // Regression: deployed dogfood (zouyicheng_62236ecd) — the model holds a
+  // doc as a pasted Feishu URL and passes it as `target`. Pre-fix the URL
+  // contains "/" so it routed to path resolution, split on "//", and reported
+  // the nonsense `Folder "https:" does not exist`. A URL now resolves by token
+  // (still ancestry-gated by the same walk that warms the ParentCache).
+  it('deletes a workspace doc addressed by a pasted Feishu URL', async () => {
+    const client = makeClient({
+      userFld: [item('notes.docx', 'docNotes', 'docx', 'userFld')],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuDelete({ target: 'https://feishu.cn/docx/docNotes' }, { client }),
+    )
+    assert.match(result.output, /Deleted doc "notes\.docx"/)
+    assert.deepEqual(client.deleted, ['docNotes'])
+  })
+
+  // A Feishu document title may contain "/", which name/path resolution can
+  // never address (it splits on the workspace path separator). The URL/token
+  // path sidesteps that — the only way to delete such a doc.
+  it('deletes a doc whose Feishu title contains a slash, via URL', async () => {
+    const client = makeClient({
+      userFld: [item('2026/finals.docx', 'docCup', 'docx', 'userFld')],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuDelete({ target: 'https://feishu.cn/docx/docCup' }, { client }),
+    )
+    assert.match(result.output, /Deleted doc "2026\/finals\.docx"/)
+    assert.deepEqual(client.deleted, ['docCup'])
+  })
+
+  // A bare resource token (as printed by FeishuList `token=...`) is accepted
+  // as a fallback after no name matches.
+  it('deletes a workspace doc addressed by a bare resource token', async () => {
+    const client = makeClient({
+      userFld: [item('notes.docx', 'docNotesLongToken000', 'docx', 'userFld')],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuDelete({ target: 'docNotesLongToken000' }, { client }),
+    )
+    assert.match(result.output, /Deleted doc "notes\.docx"/)
+    assert.deepEqual(client.deleted, ['docNotesLongToken000'])
+  })
+
+  // A URL pointing outside the user workspace is never found by the walk, so
+  // it is refused with a clear message rather than a confusing path error.
+  it('refuses a Feishu URL whose token is not inside the workspace', async () => {
+    const client = makeClient({
+      userFld: [item('notes.docx', 'docNotes', 'docx', 'userFld')],
+    })
+    await assert.rejects(
+      withFeishuSession(() => runFeishuDelete({ target: 'https://feishu.cn/docx/docOutside' }, { client })),
+      /Could not find that Feishu resource inside your workspace/,
+    )
+    assert.deepEqual(client.deleted, [])
+  })
+
   it('moves workspace docs after confirmation', async () => {
     const client = makeClient({
       userFld: [

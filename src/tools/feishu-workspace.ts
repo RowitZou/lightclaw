@@ -46,11 +46,11 @@ const feishuCreateFolderInputSchema = z.object({
 })
 
 const feishuDeleteInputSchema = z.object({
-  target: z.string().min(1).describe('Name or path of the file/folder to delete within your workspace. Use FeishuList first to confirm.'),
+  target: z.string().min(1).describe('The file/folder to delete, identified by name, workspace path, or its Feishu URL / token. Use FeishuList first to confirm.'),
 })
 
 const feishuMoveInputSchema = z.object({
-  target: z.string().min(1).describe('Name or path of the doc/folder to move and/or rename within your workspace.'),
+  target: z.string().min(1).describe('The doc/folder to move and/or rename, identified by name, workspace path, or its Feishu URL / token.'),
   destination: z.string().optional().describe('Destination folder path within your workspace. Use "/" or "." for workspace root. Omit when only renaming in place.'),
   new_name: z.string().trim().min(1).max(80).regex(/^[^/\\:]+$/, {
     message: 'New name cannot contain / \\ or :',

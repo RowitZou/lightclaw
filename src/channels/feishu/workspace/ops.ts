@@ -7,6 +7,7 @@ import {
   type FeishuFolderItem,
 } from '../resources/folder.js'
 import { getWorkspaceParentCache, type ParentCache } from './ancestry.js'
+import { resolveFeishuLink, parseFeishuFolderToken } from '../link.js'
 import {
   getOrCreateUserWorkspace,
   getOrCreateWorkspaceRoot,
@@ -196,27 +197,115 @@ export async function findEntriesByName(input: {
   return found
 }
 
+// Walk the workspace tree to the entry carrying `token`. Like
+// `findEntriesByName` but matches by token, which is unique — so it returns
+// the single entry (with its real name/type/path) or undefined. The walk is
+// also what warms the `ParentCache` for that token, so a subsequent
+// `assertWithinWorkspace` passes; an out-of-workspace token is never found,
+// which is exactly the boundary we want.
+export async function findEntryByToken(input: {
+  client: FeishuClient
+  workspaceToken: string
+  token: string
+  maxDepth?: number
+}): Promise<WorkspaceTreeEntry | undefined> {
+  const needle = input.token.trim()
+  async function walk(folderToken: string, prefix: string, depth: number): Promise<WorkspaceTreeEntry | undefined> {
+    if (depth > (input.maxDepth ?? 6)) {
+      return undefined
+    }
+    const children = await listFolder({ client: input.client, folderToken })
+    for (const child of children.items) {
+      const childPath = prefix === '/' ? child.name : `${prefix}/${child.name}`
+      if (child.token === needle) {
+        return { ...child, path: childPath }
+      }
+      if (child.type === 'folder') {
+        const hit = await walk(child.token, childPath, depth + 1)
+        if (hit) {
+          return hit
+        }
+      }
+    }
+    return undefined
+  }
+  return walk(input.workspaceToken, '/', 1)
+}
+
+// A pasted Feishu URL (doc / sheet / wiki / folder / drive file) maps to its
+// resource token. Returns undefined for a non-URL or an unrecognized link.
+function feishuUrlToToken(target: string): string | undefined {
+  const link = resolveFeishuLink(target)
+  if (link.ok) {
+    return link.token
+  }
+  return parseFeishuFolderToken(target)
+}
+
+// A bare Feishu resource token: the FeishuList / FeishuCreateFolder output
+// renders `token=<...>`, so the model sometimes passes that verbatim. Tokens
+// are long base62-ish strings with no separators; a real file/folder *name*
+// containing only 20+ alphanumerics and nothing else is vanishingly rare, so
+// this is a safe fallback to attempt only after a name lookup found nothing.
+function looksLikeFeishuToken(target: string): boolean {
+  return /^[A-Za-z0-9]{20,}$/.test(target)
+}
+
 export async function resolveEntryByNameOrPath(input: {
   client: FeishuClient
   workspaceToken: string
   target: string
   canonicalUser?: string
 }): Promise<WorkspaceTreeEntry> {
-  if (normalizeWorkspacePath(input.target, input.canonicalUser).length > 1 || input.target.includes('/')) {
+  const target = input.target.trim()
+
+  // A pasted Feishu URL addresses a resource directly. Resolve it by token so
+  // it works regardless of the resource's name — in particular a Feishu title
+  // containing "/" (which name/path resolution below cannot express, since "/"
+  // is the workspace path separator). Without this, the URL's "//" was split
+  // as a path and reported the nonsense `Folder "https:" does not exist`.
+  if (/^https?:\/\//i.test(target)) {
+    const token = feishuUrlToToken(target)
+    if (!token) {
+      throw new Error(`"${target}" is not a recognizable Feishu resource link. Paste the doc / sheet / folder URL, or use FeishuList to pick the target by name.`)
+    }
+    const entry = await findEntryByToken({
+      client: input.client,
+      workspaceToken: input.workspaceToken,
+      token,
+    })
+    if (!entry) {
+      throw new Error(`Could not find that Feishu resource inside your workspace. It may be outside your workspace, or already deleted. Use FeishuList to confirm.`)
+    }
+    return entry
+  }
+
+  if (normalizeWorkspacePath(target, input.canonicalUser).length > 1 || target.includes('/')) {
     return resolveEntryPath(input)
   }
   const matches = await findEntriesByName({
     client: input.client,
     workspaceToken: input.workspaceToken,
-    name: input.target,
+    name: target,
   })
-  if (matches.length === 0) {
-    throw new Error(`Could not find "${input.target}" in the Feishu workspace. Use FeishuList to confirm the target.`)
-  }
   if (matches.length > 1) {
-    throw new Error(`Found ${matches.length} entries named "${input.target}". Use a path such as "folder/${input.target}" to disambiguate.`)
+    throw new Error(`Found ${matches.length} entries named "${target}". Use a path such as "folder/${target}" to disambiguate.`)
   }
-  return matches[0]!
+  if (matches.length === 1) {
+    return matches[0]!
+  }
+  // No name match — a bare resource token is the remaining possibility.
+  if (looksLikeFeishuToken(target)) {
+    const entry = await findEntryByToken({
+      client: input.client,
+      workspaceToken: input.workspaceToken,
+      token: target,
+    })
+    if (entry) {
+      return entry
+    }
+  }
+  throw new Error(`Could not find "${target}" in the Feishu workspace. Use FeishuList to confirm the target.`)
 }
 
 export async function listWorkspaceTree(input: {
