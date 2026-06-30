@@ -1,4 +1,4 @@
-// Down-window message protection for `/admin update` restarts.
+// Down-window message protection for `/admin version update` restarts.
 //
 // Feishu's WS server holds un-acked events while the bot is offline and replays
 // them on reconnect (transport-ws.ts). transport-ws otherwise drops any
@@ -9,9 +9,9 @@
 // user sends during the 1-3s restart window has a create_time well before
 // `startedAt - 5s` and would be silently stale-dropped = lost.
 //
-// On a KNOWN restart (an `/admin update` we initiated), we lower the stale
+// On a KNOWN restart (an `/admin version update` we initiated), we lower the stale
 // cutoff to the moment the restart began — the sentinel's `requestedAt` — so
-// every message from the instant `/admin update` fired through the new
+// every message from the instant `/admin version update` fired through the new
 // transport coming up is honored. Feishu redelivers them; the persisted dedup
 // store drops any the old daemon already processed; the rest run exactly once.
 //

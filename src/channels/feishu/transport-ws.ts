@@ -113,7 +113,7 @@ export async function startFeishuWsClient(input: {
   // Anchor "is this event from before we started?" to the moment this
   // transport spins up. Captured in the closure so each handler sees a
   // stable cutoff even if the WSClient reconnects later. A just-consumed
-  // `/admin update` restart lowers the cutoff to the restart-initiation time
+  // `/admin version update` restart lowers the cutoff to the restart-initiation time
   // (restart-window.ts) so down-window messages the user sent while we were
   // relaunching are honored on redelivery instead of stale-dropped.
   const startedAtMs = Date.now()

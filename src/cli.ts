@@ -96,7 +96,7 @@ process.on('SIGTERM', () => {
   void gracefulShutdown('SIGTERM')
 })
 
-// `/admin update` rebuilds then asks for a restart through here: the same
+// `/admin version update` rebuilds then asks for a restart through here: the same
 // graceful drain, but exit UPDATE_RESTART_EXIT_CODE so the supervisor relaunches
 // onto the new dist instead of treating it as a clean stop.
 setUpdateRestartHandler(() => {
@@ -241,7 +241,7 @@ async function main(): Promise<void> {
   await runWithSessionContext(sessionContext, async () => {
     await initializeHooks(config)
     await initializeMcp(config)
-    // Consume the restart sentinel BEFORE channels start: a `/admin update`
+    // Consume the restart sentinel BEFORE channels start: a `/admin version update`
     // restart sets the WS transport's stale-event floor from it (restart-
     // window.ts) so messages the user sent during the down window are honored
     // on Feishu's redelivery instead of being stale-dropped. The same sentinel
@@ -254,7 +254,7 @@ async function main(): Promise<void> {
       }
     }
     const channelHandles = await startEnabledChannels()
-    // If the previous shutdown was a `/admin update` restart, DM the admin a
+    // If the previous shutdown was a `/admin version update` restart, DM the admin a
     // confirmation that we came back on the new build. Needs the channel sender
     // (registered by startEnabledChannels), so it runs here. Fire-and-forget.
     void announceRestart(restartSentinel).catch(error => {

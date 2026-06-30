@@ -1,4 +1,4 @@
-// Self-update: `/admin update` pulls the deployment checkout up to its upstream,
+// Self-update: `/admin version update` pulls the deployment checkout up to its upstream,
 // rebuilds, verifies the new bundle, then asks the supervisor to relaunch.
 //
 // Design (see info/env.md "Self-update / supervisor"):
@@ -88,7 +88,7 @@ export type GitState =
   | { kind: 'diverged'; behind: number; ahead: number }
   | { kind: 'updatable'; fromSha: string; toSha: string; behind: number }
 
-/** Decide what `/admin update` should do from the observed git facts. Refuses a
+/** Decide what `/admin version update` should do from the observed git facts. Refuses a
  *  dirty tree (a pull would clobber local edits) and a diverged branch (local
  *  commits the upstream lacks — not a fast-forward; admin must resolve by hand).
  *  Only a clean, strictly-behind branch is updatable. */
@@ -192,7 +192,7 @@ export type RunUpdateOptions = {
   byUser?: string
 }
 
-/** Outcome of `/admin update`: the localized notice text plus the severity that
+/** Outcome of `/admin version update`: the localized notice text plus the severity that
  *  colors its system-notice card — `error` (red) for failures, `warning`
  *  (orange) for refusals the admin must resolve, `info` (blue) for success /
  *  preview / already-current. */
@@ -288,7 +288,7 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateR
 /** Called once at startup (after channels are up) with the sentinel consumed
  *  earlier in boot (cli.ts reads it BEFORE channels start so the WS transport's
  *  stale-event floor can be set from it — see restart-window.ts). If the
- *  previous shutdown was a `/admin update` restart, DM the admin a confirmation
+ *  previous shutdown was a `/admin version update` restart, DM the admin a confirmation
  *  that the daemon came back on the new build. Best-effort: a missing sender /
  *  admin binding / send failure is swallowed (the restart already happened; the
  *  notice is a courtesy). */
