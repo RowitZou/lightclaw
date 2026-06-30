@@ -516,7 +516,13 @@ async function addEndpoint(
         const endpoints = asRecord(obj.endpoints)
         endpoints[alias] = endpoint
         obj.endpoints = endpoints
-        if (guardWritable(userId, obj)) return
+        // Surface a guard failure as a login failure (failed card) rather than
+        // silently swallowing it and then showing the success card — otherwise
+        // the user is told "connected, saved as <alias>" while the endpoint was
+        // never written. The import path returns this message synchronously; the
+        // device-login path can only reach the user through onSuccess's catch.
+        const guard = guardWritable(userId, obj)
+        if (guard) throw new Error(guard.trim())
         writeEndpointConfig(userId, obj)
       },
     })
