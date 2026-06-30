@@ -35,8 +35,16 @@ export function decodeAccountId(jwt: string): string | null {
   if (!auth || typeof auth !== 'object') {
     return null
   }
-  const accountId = (auth as Record<string, unknown>).account_id ??
-    (auth as Record<string, unknown>).accountId
+  // The live claim field is `chatgpt_account_id` (the org/workspace id the codex
+  // backend wants in the `chatgpt-account-id` header) — see the upstream CLI's
+  // `AuthClaims` (`codex-rs/login/src/token_data.rs`). The CLI-import path rarely
+  // exercises this decode because `auth.json` carries a pre-extracted
+  // `tokens.account_id` file field, but device-login has no file and decodes the
+  // JWT itself — reading only `account_id`/`accountId` silently returned empty
+  // and dropped the header (2026-06-30 dogfood: success card showed `account=—`).
+  // Keep `account_id`/`accountId` as fallbacks for any legacy token shape.
+  const a = auth as Record<string, unknown>
+  const accountId = a.chatgpt_account_id ?? a.account_id ?? a.accountId
   return typeof accountId === 'string' && accountId.length > 0
     ? accountId
     : null

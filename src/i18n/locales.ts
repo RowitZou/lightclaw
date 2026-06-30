@@ -942,7 +942,7 @@ export const LOCALES = {
     'card.codex.login.openBtn': '打开登录页',
     'card.codex.login.successTitle': '✅ Codex 账号已连接',
     'card.codex.login.successBody':
-      '已保存为模型服务「{alias}」(account={account})，现在可用 Codex 模型，凭证自动续期。',
+      '已连接为模型服务「{alias}」(account={account})。下一步：用 `/config backend add <名称> --endpoint {alias} --upstream <Codex模型id>` 把 Codex 模型接入可用列表，之后即可对话；凭证会自动续期。',
     'card.codex.login.expiredTitle': '⌛ Codex 登录已过期',
     'card.codex.login.expiredBody':
       '登录超 15 分钟未完成、验证码已失效。重新运行 `/config endpoint add {alias} --type codex --login` 再试。',
@@ -1962,7 +1962,7 @@ export const LOCALES = {
     'card.codex.login.openBtn': 'Open login page',
     'card.codex.login.successTitle': '✅ Codex account connected',
     'card.codex.login.successBody':
-      'Saved as "{alias}" (account={account}). Codex models are ready; credentials auto-refresh.',
+      'Connected as model service "{alias}" (account={account}). Next: run `/config backend add <name> --endpoint {alias} --upstream <codex-model-id>` to add a Codex model to your usable list; then you can chat. Credentials auto-refresh.',
     'card.codex.login.expiredTitle': '⌛ Codex login expired',
     'card.codex.login.expiredBody':
       'Not completed within 15 min; code expired. Run `/config endpoint add {alias} --type codex --login` to retry.',
