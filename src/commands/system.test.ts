@@ -113,7 +113,7 @@ describe('/system command', () => {
   })
 
   it('routes `mount rm <path>` to the mount remove path', async () => {
-    const dataPath = path.join(gpfsRoot, 'datasets')
+    const dataPath = path.join(gpfsRoot, 'team', 'datasets') // depth 2 — clears the shared-root guard
     mkdirSync(dataPath, { recursive: true })
     const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { unmountable: [] } }) }
     await runSystemCommand(`mount add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)

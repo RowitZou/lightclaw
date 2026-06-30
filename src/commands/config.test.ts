@@ -70,15 +70,29 @@ describe('validateWorkspacePath', () => {
   })
 
   it('passes for a directory under the gpfs prefix on a cluster backend', async () => {
-    const inside = path.join(gpfsRoot, 'collab')
+    const inside = path.join(gpfsRoot, 'team', 'collab')
     mkdirSync(inside, { recursive: true })
     assert.equal(await validateWorkspacePath(inside, clusterConfig()), null)
+  })
+
+  // Pre-fix this returned null (a depth-1 team/share root was accepted as a
+  // workspace); the depth guard now refuses it. Fails on old code.
+  it('rejects a top-level shared root (mount root or team share) on a cluster backend', async () => {
+    const teamShare = path.join(gpfsRoot, 'ailab-hs') // depth 1 below hostPrefix
+    mkdirSync(teamShare, { recursive: true })
+    const result = await validateWorkspacePath(teamShare, clusterConfig())
+    assert.ok(result)
+    assert.match(result!, /top-level shared storage/)
+    // The gpfs mount root itself (depth 0) is refused too.
+    const atRoot = await validateWorkspacePath(gpfsRoot, clusterConfig())
+    assert.ok(atRoot)
+    assert.match(atRoot!, /top-level shared storage/)
   })
 })
 
 describe('/config set-workspace', () => {
   it('writes .workspace into users/<u>/config.json and echoes entry count', async () => {
-    const ws = path.join(gpfsRoot, 'shared')
+    const ws = path.join(gpfsRoot, 'team', 'shared')
     mkdirSync(path.join(ws, 'a'), { recursive: true })
     mkdirSync(path.join(ws, 'b'), { recursive: true })
 
@@ -93,7 +107,7 @@ describe('/config set-workspace', () => {
   })
 
   it('reports an empty workspace directory', async () => {
-    const ws = path.join(gpfsRoot, 'empty')
+    const ws = path.join(gpfsRoot, 'team', 'empty')
     mkdirSync(ws, { recursive: true })
     const out = await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'bob' })
     assert.match(out, /is currently empty/)
@@ -116,7 +130,7 @@ describe('/config set-workspace', () => {
   })
 
   it('preserves unrelated keys when writing .workspace', async () => {
-    const ws = path.join(gpfsRoot, 'keep')
+    const ws = path.join(gpfsRoot, 'team', 'keep')
     mkdirSync(ws, { recursive: true })
     // Pre-seed config.json with an unrelated key the writer must round-trip.
     mkdirSync(path.dirname(userConfigPath('erin')), { recursive: true })
@@ -130,7 +144,7 @@ describe('/config set-workspace', () => {
   })
 
   it('removes the .workspace key on reset', async () => {
-    const ws = path.join(gpfsRoot, 'reset-me')
+    const ws = path.join(gpfsRoot, 'team', 'reset-me')
     mkdirSync(ws, { recursive: true })
     await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'frank' })
     assert.ok('workspace' in JSON.parse(readFileSync(userConfigPath('frank'), 'utf8')))
@@ -338,7 +352,7 @@ describe('/config rule (per-user permission rules)', () => {
 
 describe('/config workspace (←set-workspace)', () => {
   it('workspace set <path> behaves like set-workspace', async () => {
-    const ws = path.join(gpfsRoot, 'wsset')
+    const ws = path.join(gpfsRoot, 'team', 'wsset')
     mkdirSync(ws, { recursive: true })
     const out = await runConfigCommand(`workspace set ${ws} --y`, { config: clusterConfig(), userId: 'nina' })
     assert.match(out, /Workspace directory set to/)
@@ -346,7 +360,7 @@ describe('/config workspace (←set-workspace)', () => {
   })
 
   it('workspace reset restores the default', async () => {
-    const ws = path.join(gpfsRoot, 'wsreset')
+    const ws = path.join(gpfsRoot, 'team', 'wsreset')
     mkdirSync(ws, { recursive: true })
     await runConfigCommand(`workspace set ${ws} --y`, { config: clusterConfig(), userId: 'oscar' })
     const out = await runConfigCommand('workspace reset --y', { config: clusterConfig(), userId: 'oscar' })
@@ -775,7 +789,7 @@ describe('/config endpoint flushes the provider cache so edits take effect live'
 
 describe('/config workspace set --y', () => {
   it('set <abs> requires --y; --y migrates and notes the deferred restart when no restart hook is wired', async () => {
-    const ws = path.join(gpfsRoot, 'b5ws')
+    const ws = path.join(gpfsRoot, 'team', 'b5ws')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
     const preview = await runConfigCommand(`workspace set ${ws}`, { config: cfg, userId: 'b5ws' })
@@ -790,7 +804,7 @@ describe('/config workspace set --y', () => {
   })
 
   it('workspace set restarts the sandbox when a restart hook is wired', async () => {
-    const ws = path.join(gpfsRoot, 'b5wsrestart')
+    const ws = path.join(gpfsRoot, 'team', 'b5wsrestart')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
     let restartCalls = 0
@@ -808,7 +822,7 @@ describe('/config workspace set --y', () => {
   })
 
   it('workspace set surfaces a restart failure without losing the saved workspace', async () => {
-    const ws = path.join(gpfsRoot, 'b5wsfail')
+    const ws = path.join(gpfsRoot, 'team', 'b5wsfail')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
     const out = await runConfigCommand(`workspace set ${ws} --y`, {
@@ -825,7 +839,7 @@ describe('/config workspace set --y', () => {
   })
 
   it('workspace reset requires --y and restarts the sandbox to remount the default', async () => {
-    const ws = path.join(gpfsRoot, 'b5wsr')
+    const ws = path.join(gpfsRoot, 'team', 'b5wsr')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
     await runConfigCommand(`workspace set ${ws} --y`, { config: cfg, userId: 'b5wsr' })

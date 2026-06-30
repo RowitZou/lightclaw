@@ -13,6 +13,7 @@ import {
   type RlaunchMountScope,
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
+import { findShallowGpfsRoot } from '../runtime/gpfs-mount-rules.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
 import { type MountReport } from '../runtime/mount-authz.js'
 import { pruneUnmountableMounts, type MountRebuildResult } from './mount-ops.js'
@@ -62,6 +63,15 @@ export async function runMountCommand(
     const modeByPath = new Map<string, RlaunchMountMode>()
     const scopeByPath = new Map<string, RlaunchMountScope>()
     for (const mountPath of mountPaths) {
+      // Refuse a top-level shared-storage dir (mount root or team/project share)
+      // before probing. The `mode` we would observe is unreliable here — it is a
+      // daemon-visibility placeholder for worker-only mounts and is not
+      // kernel-enforced against Bash — so the guard refuses by path depth alone,
+      // regardless of ro/rw or scope. Mount a specific sub-directory instead.
+      const shallowPrefix = findShallowGpfsRoot(mountPath, ctxWithUser.config.runtime.clusterSettings)
+      if (shallowPrefix) {
+        return `${t('mount.tooShallow', { path: mountPath, prefix: shallowPrefix })}\n`
+      }
       // Auto-detect: a path the daemon can reach is served on the host fast
       // path; one it cannot is mounted into the worker only and served via
       // relay. The mode is the cluster's observed mode for the service

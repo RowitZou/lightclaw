@@ -35,7 +35,7 @@ let oldWorkspaceRoot: string | undefined
 beforeEach(() => {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-mount-command-'))
   gpfsRoot = path.join(tmpHome, 'gpfs')
-  workspaceRoot = path.join(gpfsRoot, 'workspaces')
+  workspaceRoot = path.join(gpfsRoot, 'team', 'workspaces')
   mkdirSync(path.join(workspaceRoot, 'alice'), { recursive: true })
   setLightclawHomeOverride(tmpHome)
   oldWorkspaceRoot = process.env.LIGHTCLAW_WORKSPACE_ROOT
@@ -56,7 +56,7 @@ afterEach(() => {
 
 describe('/mount command', () => {
   it('lists, adds, updates, and removes per-user rlaunch mounts', async () => {
-    const dataPath = path.join(gpfsRoot, 'datasets')
+    const dataPath = path.join(gpfsRoot, 'team', 'datasets')
     mkdirSync(dataPath, { recursive: true })
     let restartCount = 0
     const deps = {
@@ -100,7 +100,7 @@ describe('/mount command', () => {
       t.skip('running as root: access(W_OK) always succeeds, cannot observe ro')
       return
     }
-    const roPath = path.join(gpfsRoot, 'readonly-data')
+    const roPath = path.join(gpfsRoot, 'team', 'readonly-data')
     mkdirSync(roPath, { recursive: true })
     chmodSync(roPath, 0o555)
     const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: emptyReport }) }
@@ -115,9 +115,9 @@ describe('/mount command', () => {
   })
 
   it('adds and removes multiple mounts with a single restart', async () => {
-    const dataA = path.join(gpfsRoot, 'datasets-a')
-    const dataB = path.join(gpfsRoot, 'datasets-b')
-    const dataC = path.join(gpfsRoot, 'datasets-c')
+    const dataA = path.join(gpfsRoot, 'team', 'datasets-a')
+    const dataB = path.join(gpfsRoot, 'team', 'datasets-b')
+    const dataC = path.join(gpfsRoot, 'team', 'datasets-c')
     mkdirSync(dataA, { recursive: true })
     mkdirSync(dataB, { recursive: true })
     mkdirSync(dataC, { recursive: true })
@@ -208,7 +208,7 @@ describe('/mount command', () => {
   })
 
   it('rejects non-rlaunch backends, workspace-overlapping mounts, and bad flags', async () => {
-    const dataPath = path.join(gpfsRoot, 'datasets')
+    const dataPath = path.join(gpfsRoot, 'team', 'datasets')
     mkdirSync(dataPath, { recursive: true })
 
     assert.match(
@@ -234,6 +234,23 @@ describe('/mount command', () => {
     assert.match(
       await runMount('remove relative/path another-relative', { config: makeConfig(), userId: 'alice' }),
       /must be absolute/,
+    )
+  })
+
+  // Pre-fix a depth-1 shared root mounted fine (probe + non-overlapping add
+  // succeeded); the depth guard now refuses it by path depth alone, regardless
+  // of ro/rw or scope. Fails on old code (the sibling share was added).
+  it('rejects mounting a top-level shared root (depth < 2 below the gpfs prefix)', async () => {
+    const publicShare = path.join(gpfsRoot, 'other-share') // depth 1, no workspace overlap
+    mkdirSync(publicShare, { recursive: true })
+    assert.match(
+      await runMount(`add ${publicShare}`, { config: makeConfig(), userId: 'alice' }),
+      /top-level shared storage/,
+    )
+    // The gpfs mount root itself (depth 0) is refused too.
+    assert.match(
+      await runMount(`add ${gpfsRoot}`, { config: makeConfig(), userId: 'alice' }),
+      /top-level shared storage/,
     )
   })
 })

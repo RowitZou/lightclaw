@@ -59,7 +59,7 @@ import {
   removeIdentityRule,
 } from '../permission/storage.js'
 import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
-import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
+import { findShallowGpfsRoot, resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
 import { findWorkspaceMountConflict, loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
 import { loadUserSecrets, setUserSecret, validateSecretName } from '../secrets/store.js'
 import {
@@ -166,6 +166,14 @@ export async function validateWorkspacePath(
         path: workspacePath,
         prefixes: prefixes.join(', ') || '<none configured>',
       })}\n`
+    }
+    // Refuse a top-level shared-storage dir (mount root or team/project share):
+    // pointing the always-rw workspace there pollutes the public space and
+    // triggers GPFS metadata storms on recursive ops. Per-user work must sit at
+    // least MIN_GPFS_PATH_DEPTH levels below the gpfs hostPrefix.
+    const shallowPrefix = findShallowGpfsRoot(workspacePath, config.runtime.clusterSettings)
+    if (shallowPrefix) {
+      return `${t('config.workspace.tooShallow', { path: workspacePath, prefix: shallowPrefix })}\n`
     }
   }
 

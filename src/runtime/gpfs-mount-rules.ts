@@ -45,6 +45,42 @@ export function resolveGpfsMountRule(
   return { rule, suffix }
 }
 
+/**
+ * The minimum number of path segments a workspace / rw mount must sit BELOW a
+ * gpfs `hostPrefix`. `<prefix>` (depth 0) is the mount root and `<prefix>/<team>`
+ * (depth 1) is a public/shared top-level directory; both are too broad to be a
+ * workspace or a whole-tree mount — they pollute the shared space and trigger
+ * GPFS metadata storms on recursive ops. Real per-user work lives at
+ * `<prefix>/<team-or-project>/<user>` (depth 2) or deeper. This is a footgun
+ * guardrail, NOT an isolation boundary: uid alignment on the cluster means the
+ * agent can already reach shared paths via Bash regardless, and the mount `mode`
+ * is neither knowable for worker-only mounts nor kernel-enforced against Bash —
+ * so the guard refuses by path depth alone, ignoring ro/rw and scope.
+ */
+export const MIN_GPFS_PATH_DEPTH = 2
+
+/**
+ * Returns the matched gpfs `hostPrefix` when `hostPath` sits FEWER than
+ * `minDepth` segments below it (i.e. it is the mount root or a top-level shared
+ * dir), else `null`. Returns `null` when the path is under no configured gpfs
+ * prefix — "must be under a prefix" is a separate validation's job; this guard
+ * only refuses paths that ARE under a prefix but too shallow.
+ */
+export function findShallowGpfsRoot(
+  hostPathInput: string,
+  rlaunchConfig: RlaunchGpfsMountConfig,
+  minDepth: number = MIN_GPFS_PATH_DEPTH,
+): string | null {
+  let resolved: { rule: RlaunchGpfsMountRule; suffix: string }
+  try {
+    resolved = resolveGpfsMountRule(hostPathInput, rlaunchConfig)
+  } catch {
+    return null
+  }
+  const segments = resolved.suffix.split('/').filter(Boolean)
+  return segments.length < minDepth ? resolved.rule.hostPrefix : null
+}
+
 export function normalizeGpfsMountRules(
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchGpfsMountRule[] {
