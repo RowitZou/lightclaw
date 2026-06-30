@@ -2,7 +2,26 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import type { SenderKey } from './types.js'
-import { synthesizeReplayMessage } from './post-approve.js'
+import { shouldSurfaceNoModelOnApproval, synthesizeReplayMessage } from './post-approve.js'
+
+describe('shouldSurfaceNoModelOnApproval', () => {
+  it('surfaces the no-model notice for a slash-first message with no model', () => {
+    // The runner no-model gate sits after slash dispatch, so a slash replay
+    // never reaches it — push the notice here instead.
+    assert.equal(shouldSurfaceNoModelOnApproval('/help', ''), true)
+    assert.equal(shouldSurfaceNoModelOnApproval('  /status', undefined), true)
+  })
+
+  it('skips a non-slash first message (the runner gate covers it on replay → no duplicate)', () => {
+    assert.equal(shouldSurfaceNoModelOnApproval('hi there', ''), false)
+    assert.equal(shouldSurfaceNoModelOnApproval('', ''), false)
+  })
+
+  it('skips when a model IS configured (any first message)', () => {
+    assert.equal(shouldSurfaceNoModelOnApproval('/help', 'opus'), false)
+    assert.equal(shouldSurfaceNoModelOnApproval('chat', 'opus'), false)
+  })
+})
 
 describe('synthesizeReplayMessage', () => {
   it('carries threadId + replyAnchorMessageId for topic-group origins', () => {
