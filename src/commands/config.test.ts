@@ -475,8 +475,9 @@ describe('/config endpoint add --type', () => {
 
   it('--type codex accepts an em-dash-mangled —auth-path (Feishu smart-punctuation)', async () => {
     // Feishu / IME smart-punctuation rewrites a typed `--auth-path` to `—auth-path`
-    // (em-dash). Pre-fix the exact-match parser failed with authPathRequired even
-    // though the user supplied a valid absolute path (2026-06-30 dogfood).
+    // (em-dash). Without normalization the mangled flag never matches, so a user
+    // who supplied a valid absolute path would silently fall through to codex
+    // web-login mode instead of importing the file (2026-06-30 dogfood).
     const cfg = modelConfig()
     const authFile = path.join(tmpHome, 'auth-emdash.json')
     const { writeFileSync } = await import('node:fs')

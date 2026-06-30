@@ -171,7 +171,7 @@ export const LOCALES = {
       '用法：\n' +
       '  /admin endpoint                                列出公共模型服务\n' +
       '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
-      '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
+      '  /admin endpoint add <ep> --type codex [--login | --auth-path <auth.json>] [--proxy <url>]\n' +
       '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
       '  /admin endpoint rm <ep>',
     'admin.endpoint.added': '已添加公共模型服务 "{name}"（密钥已保存，仅本机可读）。',
@@ -848,8 +848,9 @@ export const LOCALES = {
       '`--key <KEY>` — API 密钥；可直接填密钥本身，或填一个用 /system key 保存的密钥名；仅 `--type openai` / `--type anthropic` 时使用',
     'card.endpoint.param.baseUrl': '`--base-url <url>` — 自定义服务地址（可选）；使用 set 命令时填 `-` 可清除',
     'card.endpoint.param.proxy': '`--proxy <url>` — 通过代理访问该服务（可选）；使用 set 命令时填 `-` 可清除',
-    'card.endpoint.param.authPath': '`--auth-path <绝对路径>` — Codex 凭证文件的绝对路径（如 `/path/to/auth.json`）；仅 `--type codex` 时使用',
-    'card.endpoint.note.codexAuth': '`codex login` 不在 LightClaw / 飞书里执行——它是官方 OpenAI Codex CLI 的登录命令，需你先在自己的电脑上安装并运行（`npm i -g @openai/codex && codex login`，会打开浏览器完成 OAuth），生成凭证文件 `<HOME>/.codex/auth.json`（`<HOME>` 为那台电脑的用户主目录）。随后把该文件放到 LightClaw 所在机器上可读取的位置，导入时提供它的绝对路径（如 `/path/to/auth.json`），不接受 `~`。',
+    'card.endpoint.param.authPath': '`--auth-path <绝对路径>` —（可选）导入 codex `auth.json` 的绝对路径；**不填则走网页登录 `--login`**；仅 `--type codex`。',
+    'card.endpoint.param.login': '`--login` —（codex）发起网页登录：我私聊给你链接 + 验证码，手机/电脑打开登录 ChatGPT 即可；不填 `--auth-path` 时的默认方式；仅 `--type codex`。',
+    'card.endpoint.note.codexAuth': '`--type codex` 推荐用**网页登录**：运行 `/config endpoint add <名称> --type codex --login`，我私聊给你一个链接 + 验证码，手机/电脑打开登录 ChatGPT 即可，凭证自动续期。也可离线导入：在自己机器跑官方 `codex login` 生成 `~/.codex/auth.json`，再 `--auth-path <绝对路径>` 导入（不接受 `~`）。',
     // backend sub-commands (config face)
     'card.config.backend.sub.add.cmd': 'add <名称> [参数]',
     'card.config.backend.sub.add.desc': '把一个模型加进可用列表',
@@ -926,12 +927,7 @@ export const LOCALES = {
     'config.model.checkFail': '模型连通性检查：失败；{detail}。',
     'config.byo.invalidConfig': '用户配置无效：{detail}',
     'config.byo.rejected': '错误：该改动会让用户配置不可用（{detail}）；未写入。',
-    'config.codex.imported': '已导入 Codex 凭据 "{name}"（account={account}）。',
     'config.codex.importFail': '错误：导入 Codex 凭据失败；{detail}。',
-    'config.codex.removed': '已移除 Codex 凭据 "{name}"。',
-    'config.codex.removeMissing': '没有名为 "{name}" 的 Codex 凭据。',
-    'config.codex.none': '尚未导入任何 Codex 凭据。运行 /config codex import --from <path> 导入。',
-    'config.codex.listHeader': '已导入的 Codex 凭据：',
     // ---- codex device-login (web login) ----
     'config.codex.login.started':
       '已发起 Codex 网页登录，请在私聊查看卡片完成（链接 + 验证码，15 分钟内有效）。',
@@ -954,19 +950,18 @@ export const LOCALES = {
     'card.codex.login.failedBody':
       '{reason}。请重试 `/config endpoint add {alias} --type codex --login`；若反复失败可改用 `--auth-path <auth.json 绝对路径>` 导入文件。',
     'config.endpoint.addedCodex': '已添加 Codex 模型服务 "{name}"（凭证：{ref}）。',
-    'config.endpoint.codexAuthMissing': '错误：尚未导入 Codex 凭据 "{name}"。请先运行 /config endpoint add --type codex --auth-path <文件>。',
+    'config.endpoint.codexAuthMissing': '错误：尚未为「{name}」配置 Codex 凭证。先运行 `/config endpoint add {name} --type codex --login`（网页登录）或 `--auth-path <文件>`（导入）。',
 
     // ---- /config endpoint --type / backend / lane (B3) ----
     'config.endpoint.typeMissing': '错误：必须指定 --type <openai|anthropic|codex>。',
     'config.endpoint.typeInvalid': '错误：未知 --type "{type}"。可选：openai | anthropic | codex。',
     'config.endpoint.keyRequired': '错误：--type {type} 需要 --key <KEY|secretName>。',
-    'config.endpoint.authPathRequired': '错误：--type codex 需要 --auth-path <auth.json 绝对路径>。',
     'config.endpoint.authPathNotAbsolute': '错误：--auth-path 必须是绝对路径（如 /path/to/auth.json），不接受 ~ 或相对路径："{path}"。',
     'config.endpoint.codexNoBaseUrl': '错误：--type codex 不接受 --base-url（codex URL 固定）。',
     'config.endpoint.baseUrlInvalid': '错误：服务地址（--base-url）必须是合法的 http(s) URL，你输入的是 "{value}"。{hint}',
     'config.endpoint.baseUrlProtocol': '错误：服务地址（--base-url）必须以 http:// 或 https:// 开头，你输入的是 "{value}"。{hint}',
     'config.endpoint.baseUrlNonAsciiHint': ' 注意：地址里疑似含全角 / 非 ASCII 字符（如全角冒号 "："），请改用英文半角后重试。',
-    'config.endpoint.codexNoKey': '错误：--type codex 不接受 --key（请用 --auth-path）。',
+    'config.endpoint.codexNoKey': '错误：`--type codex` 不接受 `--key`（用 `--login` 网页登录，或 `--auth-path` 导入文件）。',
     'config.endpoint.keyStored': '原始密钥已安全保存为 "{name}" 并被引用（配置中不含明文）。注意：你粘贴的密钥会留在聊天记录里——建议使用一次性令牌。',
     'config.backend.none': '还没有把任何模型加进可用列表。',
     'config.backend.listHeader': '可用模型列表：',
@@ -1199,7 +1194,7 @@ export const LOCALES = {
       'Usage:\n' +
       '  /admin endpoint                                List public model services\n' +
       '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
-      '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
+      '  /admin endpoint add <ep> --type codex [--login | --auth-path <auth.json>] [--proxy <url>]\n' +
       '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
       '  /admin endpoint rm <ep>',
     'admin.endpoint.added': 'Added public model service "{name}" (key saved; host-only).',
@@ -1875,8 +1870,9 @@ export const LOCALES = {
       '`--key <KEY>` — API key; either the raw key or the name of a key saved via /system key; only with `--type openai` / `--type anthropic`',
     'card.endpoint.param.baseUrl': '`--base-url <url>` — custom service URL (optional); pass `-` with set to clear',
     'card.endpoint.param.proxy': '`--proxy <url>` — reach this service through a proxy (optional); pass `-` with set to clear',
-    'card.endpoint.param.authPath': '`--auth-path <absolute-path>` — absolute path to the Codex credential file (e.g. `/path/to/auth.json`); only with `--type codex`',
-    'card.endpoint.note.codexAuth': '`codex login` does NOT run inside LightClaw / Feishu — it is the official OpenAI Codex CLI login command that you run on your own machine first (`npm i -g @openai/codex && codex login`, which opens a browser for OAuth), producing the credential file `<HOME>/.codex/auth.json` (`<HOME>` is that machine\'s home directory). Then place that file somewhere readable on the machine running LightClaw and import it by its absolute path (e.g. `/path/to/auth.json`); `~` is not accepted.',
+    'card.endpoint.param.authPath': '`--auth-path <absolute-path>` — (optional) import a codex `auth.json` by absolute path; **omit it to use web login (`--login`)**; only with `--type codex`.',
+    'card.endpoint.param.login': '`--login` — (codex) start web login: I DM you a link + code, open it on any device and sign in; the default when `--auth-path` is omitted; only with `--type codex`.',
+    'card.endpoint.note.codexAuth': 'For `--type codex`, the recommended path is **web login**: run `/config endpoint add <name> --type codex --login` and I\'ll DM you a link + code — open it on any device, sign in to ChatGPT, done; credentials auto-refresh. Offline alternative: run the official `codex login` on your own machine to produce `~/.codex/auth.json`, then import with `--auth-path <absolute path>` (`~` not accepted).',
     'card.config.backend.sub.add.cmd': 'add <name> [params]',
     'card.config.backend.sub.add.desc': 'add a model to the usable list',
     'card.config.backend.sub.set.cmd': 'set <name> [params]',
@@ -1951,12 +1947,7 @@ export const LOCALES = {
     'config.model.checkFail': 'Model check: failed; {detail}.',
     'config.byo.invalidConfig': 'User config is invalid: {detail}',
     'config.byo.rejected': 'Error: this change would leave the user config unusable ({detail}); not written.',
-    'config.codex.imported': 'Imported Codex credentials "{name}" (account={account}).',
     'config.codex.importFail': 'Error: failed to import Codex credentials; {detail}.',
-    'config.codex.removed': 'Removed Codex credentials "{name}".',
-    'config.codex.removeMissing': 'No Codex credentials named "{name}".',
-    'config.codex.none': 'No Codex credentials imported yet. Run /config codex import --from <path> to import.',
-    'config.codex.listHeader': 'Imported Codex credentials:',
     // ---- codex device-login (web login) ----
     'config.codex.login.started':
       'Started Codex web login — complete it via the card in your DM (link + code, valid 15 min).',
@@ -1979,19 +1970,18 @@ export const LOCALES = {
     'card.codex.login.failedBody':
       '{reason}. Retry `/config endpoint add {alias} --type codex --login`; if it keeps failing, import a file with `--auth-path <abs auth.json>`.',
     'config.endpoint.addedCodex': 'Added Codex model service "{name}" (credential: {ref}).',
-    'config.endpoint.codexAuthMissing': 'Error: Codex credentials "{name}" are not imported. Run /config endpoint add --type codex --auth-path <file> first.',
+    'config.endpoint.codexAuthMissing': 'Error: no Codex credentials configured for "{name}". Run `/config endpoint add {name} --type codex --login` (web login) or `--auth-path <file>` (import) first.',
 
     // ---- /config endpoint --type / backend / lane (B3) ----
     'config.endpoint.typeMissing': 'Error: --type <openai|anthropic|codex> is required.',
     'config.endpoint.typeInvalid': 'Error: unknown --type "{type}". Choose: openai | anthropic | codex.',
     'config.endpoint.keyRequired': 'Error: --type {type} requires --key <KEY|secretName>.',
-    'config.endpoint.authPathRequired': 'Error: --type codex requires --auth-path <absolute auth.json path>.',
     'config.endpoint.authPathNotAbsolute': 'Error: --auth-path must be an absolute path (e.g. /path/to/auth.json), not ~ or a relative path: "{path}".',
     'config.endpoint.codexNoBaseUrl': 'Error: --type codex does not accept --base-url (the codex URL is fixed).',
     'config.endpoint.baseUrlInvalid': 'Error: the service address (--base-url) must be a valid http(s) URL; you entered "{value}".{hint}',
     'config.endpoint.baseUrlProtocol': 'Error: the service address (--base-url) must start with http:// or https://; you entered "{value}".{hint}',
     'config.endpoint.baseUrlNonAsciiHint': ' Note: the address appears to contain a full-width / non-ASCII character (e.g. a full-width colon "："); retype it in half-width ASCII and retry.',
-    'config.endpoint.codexNoKey': 'Error: --type codex does not accept --key (use --auth-path).',
+    'config.endpoint.codexNoKey': 'Error: `--type codex` does not accept `--key` (use `--login` for web login, or `--auth-path` to import a file).',
     'config.endpoint.keyStored': 'Raw key saved securely as "{name}" and referenced (config holds no plaintext). Note: the key you pasted lands in chat history — recommend a throwaway token.',
     'config.backend.none': 'No models in the usable list yet.',
     'config.backend.listHeader': 'Usable models:',

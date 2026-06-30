@@ -477,7 +477,7 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     // The build error surfaces the import hint.
     const built = buildUserRegistry('alice', loadUserConfigOverride('alice'))
     assert.equal(built.ok, false)
-    assert.match((built as { error: string }).error, /is not imported; run \/config codex import/)
+    assert.match((built as { error: string }).error, /not imported; run \/config endpoint add .* --type codex --login/)
   })
 
   it('(d) config.json carries authRef but NOT any token value', () => {

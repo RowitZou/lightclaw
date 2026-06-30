@@ -317,6 +317,7 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
           t('card.endpoint.param.key'),
           t('card.endpoint.param.baseUrl'),
           t('card.endpoint.param.proxy'),
+          t('card.endpoint.param.login'),
           t('card.endpoint.param.authPath'),
         ]),
       },
@@ -325,7 +326,7 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
         heading: t('card.examples'),
         codeExamples: [
           '/config endpoint add my-ep --type openai --key sk-xxx',
-          '/config endpoint add codex-ep --type codex --auth-path /path/to/auth.json',
+          '/config endpoint add codex-ep --type codex --login',
           '/config endpoint set my-ep --proxy http://127.0.0.1:1080',
           '/config endpoint rm my-ep',
         ],
@@ -545,6 +546,7 @@ export function adminEndpointCardSpec(rows: readonly EndpointShowRow[]): Command
           t('card.endpoint.param.key'),
           t('card.endpoint.param.baseUrl'),
           t('card.endpoint.param.proxy'),
+          t('card.endpoint.param.login'),
           t('card.endpoint.param.authPath'),
         ]),
       },
@@ -553,7 +555,7 @@ export function adminEndpointCardSpec(rows: readonly EndpointShowRow[]): Command
         heading: t('card.examples'),
         codeExamples: [
           '/admin endpoint add my-ep --type openai --key sk-xxx',
-          '/admin endpoint add codex-ep --type codex --auth-path /path/to/auth.json',
+          '/admin endpoint add codex-ep --type codex --login',
           '/admin endpoint set my-ep --proxy http://127.0.0.1:1080',
           '/admin endpoint rm my-ep',
         ],

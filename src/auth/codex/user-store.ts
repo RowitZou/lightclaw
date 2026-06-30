@@ -183,7 +183,7 @@ export async function getUserCodexCredentials(input: {
       provider: providerName,
       message:
         `No Codex credentials stored for this user authRef (${providerName}). ` +
-        `Run /config codex import --from <path> --name ${name}.`,
+        `Connect via web login: /config endpoint add ${name} --type codex --login (or import with --auth-path).`,
     })
   }
   const expiring = Date.now() + CODEX_REFRESH_SKEW_SECONDS * 1000 >= stored.tokens.expires_at

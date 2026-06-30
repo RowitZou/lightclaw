@@ -186,7 +186,7 @@ export async function runConfigWizard(input: {
     configPath,
     buildWizardConfig({ home, provider, apiKey, baseUrl, modelId, runtime, feishu }),
   )
-  outro(`Config written to ${configPath}. Use /admin endpoint add codex --type codex --auth-path <auth.json> later for Codex OAuth.`)
+  outro(`Config written to ${configPath}. Use /admin endpoint add codex --type codex --login later for Codex (web login), or --auth-path to import.`)
   return { home }
 }
 

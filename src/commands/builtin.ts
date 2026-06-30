@@ -211,7 +211,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/config rule [add <rule> [--deny]|rm <n>|rm all --y]   Manage permission rules',
       '/config workspace [set <absolute-path>|reset]    Point the workspace at a directory (validated; rejected with a reason if not accessible)',
       '/config lane [set <worker|system|image> <model>|reset <bucket>]   Per-use model',
-      '/config endpoint [add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path]   Your model services',
+      '/config endpoint [add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path|--login]   Your model services',
       '/config backend [add|set|check|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Add models to your usable list',
     ].join('\n'),
     async handler(args, ctx) {
@@ -250,7 +250,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/admin ceiling [list|set <user> <mode>]       Per-user permission-mode ceiling',
       '/admin sandbox [status|prefetch|reset --y]',
       '/admin feishu-drive [status|list|orphans|rm <user> --y]',
-      '/admin endpoint [list|add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path]   Public model services',
+      '/admin endpoint [list|add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path|--login]   Public model services',
       '/admin backend [list|add|set|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Public usable model list',
       '/admin lane [set <worker|system|image> <model>|reset <bucket>]',
       '/admin proxy [show|set <url>|clear]           Public proxy fallback for model services without their own',

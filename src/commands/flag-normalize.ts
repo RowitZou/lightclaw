@@ -6,9 +6,9 @@
 // single `-`. The config/admin parsers match flags by exact string
 // (`indexOf('--auth-path')`, `=== '--default'`, `.includes('--purge')`), so a
 // token like `—auth-path` / `–auth-path` / `-auth-path` never matches and the
-// command fails with a misleading "flag missing" error even though the user
-// typed it (2026-06-30: `/config endpoint add ... --auth-path <abs path>`
-// rejected with `authPathRequired`).
+// command does the wrong thing even though the user typed the flag (2026-06-30:
+// a mangled `/config endpoint add ... --auth-path <abs path>` would fall through
+// to codex web-login mode instead of importing the file).
 //
 // `canonicalizeFlagTokens` runs once right after tokenization and rewrites the
 // LEADING dash-run of any flag-shaped token to ASCII `-` / `--`, so every

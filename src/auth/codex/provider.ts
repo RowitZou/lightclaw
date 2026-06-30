@@ -209,10 +209,10 @@ async function refreshTokens(
       code: 'refresh_consumed_by_other_client',
       provider: PROVIDER_NAME,
       message:
-        `Codex refresh token was rejected (status ${statusCode}, error=${errorCode || 'unknown'}). ` +
-        `This usually means another client (codex CLI / VS Code extension) ` +
-        `rotated the refresh token. Re-run \`codex login\` and then ` +
-        `/admin endpoint add codex --type codex --auth-path <auth.json>.`,
+        `Codex refresh token was rejected (status ${statusCode}, error=${errorCode || 'unknown'}) — ` +
+        `another client likely rotated it, or it was revoked. Re-connect this Codex endpoint: ` +
+        `\`/admin endpoint add <alias> --type codex --login\` (web login), or re-import a fresh ` +
+        `auth.json with \`--auth-path\`.`,
     })
   }
   throw new AuthError({
@@ -344,7 +344,8 @@ export function createCodexAuthProvider(
         code: 'auth_missing',
         provider: PROVIDER_NAME,
         message:
-          `No Codex credentials stored. Run \`/admin endpoint add codex --type codex --auth-path <auth.json>\` to import from the official Codex CLI.`,
+          `No Codex credentials stored. Connect via web login: ` +
+          `\`/admin endpoint add <alias> --type codex --login\` — or import an auth.json with \`--auth-path <file>\`.`,
       })
     }
     if (!isExpiringSoon(stored.tokens.expires_at, skew)) {

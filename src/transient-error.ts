@@ -67,12 +67,17 @@ const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
 // these carry no HTTP status / socket code — they would otherwise fall through
 // to the default-retry branch and surface to the user as "network jitter,
 // resend to retry", advice that cannot fix a credential problem. The real fix
-// is `/admin endpoint add --type codex` (or restoring the API key), so classify as fatal and
-// let the channel render an actionable notice instead of the transient one.
+// is `/admin endpoint add --type codex --login` (web login) / `--auth-path`
+// (or restoring the API key), so classify as fatal and let the channel render
+// an actionable notice instead of the transient one.
 // 2026-06-14 dogfood: a Codex-pinned DM session bricked at boot (expired
 // tokens) and showed "本轮因网络抖动中断…可重发消息再试" for a config error.
+// The match is by SYMPTOM WORDS, not by the recovery-command literal — the
+// device-login realign dropped the `Run `codex login`` / `/auth import` strings
+// from the provider/user-store messages, so anchoring on them would silently
+// stop classifying these failures as fatal.
 const CREDENTIAL_FAILURE_PATTERN =
-  /No .*credentials stored|credentials (?:are )?(?:missing|expired|unavailable|not (?:found|stored))|\/auth import|Run `codex login`|not authenticated|authentication (?:failed|required)/i
+  /No .*credentials stored|credentials (?:are )?(?:missing|expired|unavailable|not (?:found|stored|imported))|refresh token was (?:rejected|revoked|rotated)|not authenticated|authentication (?:failed|required)/i
 
 // Provider context-window-overflow errors. The single source of truth for the
 // "input is bigger than the model's window" concept, consumed in two places:

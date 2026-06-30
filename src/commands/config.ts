@@ -525,7 +525,7 @@ async function addEndpoint(
   }
 
   if (parsed.type === 'codex') {
-    // Resolve / import the codex auth file path, mirroring `/config codex import`.
+    // Resolve / import the codex auth file path (the --type codex import path).
     let summary
     try {
       summary = importUserCodexAuth({

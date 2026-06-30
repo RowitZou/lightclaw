@@ -214,7 +214,7 @@ export function buildUserRegistry(
       if (!readUserCodexAuth(canonical, authName)) {
         return {
           ok: false,
-          error: `endpoint "${alias}" authRef "codex:${authName}" is not imported; run /config codex import first`,
+          error: `endpoint "${alias}" authRef "codex:${authName}" not imported; run /config endpoint add ${authName} --type codex --login (or --auth-path)`,
         }
       }
       const authRef = `codex:${authName}`

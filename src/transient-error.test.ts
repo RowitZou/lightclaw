@@ -202,14 +202,30 @@ describe('isTransientError', () => {
     // The provider throws this with no HTTP status / socket code, so pre-fix it
     // fell through to the default-retry branch → wasted retries → user saw
     // "network jitter, resend to retry" for a config error.
+    // Device-login realign (2026-06-30): the provider / user-store messages no
+    // longer carry the `Run `codex login`` / `/auth import` recovery literals
+    // the old regex anchored on — classification is now by symptom words. These
+    // are the CURRENT runtime messages and MUST still classify as fatal.
     const codexMissing = new Error(
-      'No Codex credentials stored. Run `/admin endpoint add codex --type codex --auth-path <auth.json>` to import from the official Codex CLI.',
+      'No Codex credentials stored. Connect via web login: `/admin endpoint add <alias> --type codex --login` — or import an auth.json with `--auth-path <file>`.',
     )
     assert.equal(isTransientError(codexMissing), false)
     assert.equal(isCredentialError(codexMissing), true)
-    // Expired-token phrasing.
+    // Refresh-token rejected (provider.ts) — caught by the symptom-word branch,
+    // NOT by any recovery-command literal (the old regex would miss this).
     assert.equal(
-      isCredentialError(new Error('Codex CLI tokens are already expired. Re-run `codex login`.')),
+      isCredentialError(
+        new Error(
+          'Codex refresh token was rejected (status 401, error=invalid_grant) — another client likely rotated it, or it was revoked. Re-connect this Codex endpoint: `/admin endpoint add <alias> --type codex --login`.',
+        ),
+      ),
+      true,
+    )
+    // Per-user BYO store "not stored" phrasing (user-store.ts).
+    assert.equal(
+      isCredentialError(
+        new Error('No Codex credentials stored for this user authRef (codex:default). Connect via web login: ...'),
+      ),
       true,
     )
     // Carried on the cause chain.
