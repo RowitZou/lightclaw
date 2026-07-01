@@ -26,8 +26,11 @@ import { createUserMessage } from '../messages.js'
 import {
   clearAbortControllerForSession,
   getRuntime,
+  getSessionsDir,
+  registerBackgroundTask,
   setAbortControllerForSession,
 } from '../state.js'
+import { updateSessionMemoryForSession } from '../memory/session-memory.js'
 import type { TaskRunMeta, TaskRunResumedEvent } from './types.js'
 import {
   getTaskRun,
@@ -305,6 +308,47 @@ export async function resumeRunWithBlock(
         config,
       }),
     )
+    // Feature A (resume coverage). A resumed shift ends like a worker turn, so
+    // it needs the same idle-when-dirty session-memory refresh the initial fire
+    // gets in dispatched-agent — otherwise a short resume shift (below the
+    // accumulation thresholds) never re-writes SM and it freezes at the pre-
+    // resume snapshot, exactly the staleness bug on the path where it hurts most
+    // (resume == "continue the task"). Force-flush if dirty, inside the resumed
+    // shift's SessionContext so the write keys to this run's `sessionId`. Skips
+    // internal roles (they never write SM) and honors the idleRefresh switch.
+    if (
+      role.kind !== 'internal'
+      && config.memory.extractor.enabled
+      && config.memory.session.enabled
+      && config.memory.session.idleRefresh
+    ) {
+      await runWithSessionContext(childCtx, () => {
+        registerBackgroundTask(
+          updateSessionMemoryForSession({
+            sessionId,
+            sessionsDir: getSessionsDir(),
+            messages: result.messages,
+            config,
+            force: true,
+          })
+            .then(refreshResult => {
+              if (refreshResult.updated) {
+                process.stderr.write(
+                  `[resume] idle session-memory refresh wrote ${sessionId}\n`,
+                )
+              }
+            })
+            .catch(error => {
+              const detail = error instanceof Error ? error.message : String(error)
+              process.stderr.write(
+                `[resume] idle session-memory refresh failed for ${sessionId}: ${detail}\n`,
+              )
+            }),
+        )
+        return Promise.resolve()
+      })
+    }
+
     const latest = await getTaskRun(run.id, run.ownerCanonicalUser)
     if (latest?.status === 'running') {
       await markDelivered(

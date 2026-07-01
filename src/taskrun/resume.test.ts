@@ -245,6 +245,99 @@ test('a resumed turn marks its inbox in-flight and drains a queued interjection 
   }
 })
 
+test('a resumed shift force-flushes session-memory (Feature A resume coverage)', async () => {
+  // Feature A (idle-when-dirty) reaches the initial fire via dispatched-agent
+  // and channel turns via the runner, but NOT the resume path — a short resumed
+  // shift (below the accumulation thresholds) would otherwise never re-write SM
+  // and freeze at the pre-resume snapshot, the staleness bug on the path where
+  // it hurts most (resume == "continue the task"). This asserts the resumed
+  // shift force-flushes SM under the run's own sessionId. The queryImpl stub
+  // replaces the real query loop, so its own end-turn flush never runs — only
+  // the resume idle refresh can call the writer, which is the "fails on the
+  // pre-fix code" property (there the writer is never called and the race below
+  // times out to an empty `writtenSessions`).
+  writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+    endpoints: { fake: { apiKey: 'sk-fake' } },
+    models: {
+      'fake-model': { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'fake-model' },
+    },
+    defaultModel: 'fake-model',
+    autoMemory: true,
+    autoDream: { enabled: false },
+  }))
+  const sessionId = 'taskrun-resume-sm'
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Resume and finish the task.',
+    parentRunId: null,
+    chainId: 'chain-resume-sm',
+    depth: 1,
+  })
+  await markStarted(run.id, sessionId, Date.now(), 'alice')
+  await rewriteTranscript(sessionId, [createUserMessage('earlier work on the task')])
+  await markWaiting(run.id, { reason: 'awaiting-reply', bySessionId: 's-main' }, Date.now(), 'alice')
+
+  const { setSessionMemoryUpdaterForTest } = await import('../query.js')
+  const writtenSessions: string[] = []
+  let signalWrote: () => void = () => {}
+  const wrote = new Promise<void>(resolve => {
+    signalWrote = resolve
+  })
+  setSessionMemoryUpdaterForTest(input => {
+    writtenSessions.push(input.sessionId)
+    signalWrote()
+    return Promise.resolve({ updated: false })
+  })
+
+  try {
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'fake-model',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 's-main',
+      currentUserId: 'alice',
+      runtime: fakeRuntime(tmpHome),
+    })
+    const result = await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(run.id, {
+        via: 'child-join',
+        reason: 'continue',
+        body: '<taskrun-child-result>done</taskrun-child-result>',
+      }, 'alice', async params => ({
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'finished' }],
+            stopReason: 'end_turn',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          }),
+        ],
+        assistantText: 'finished',
+        finalReplyText: 'finished',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      })),
+    )
+    assert.equal(result.ok, true)
+    // Race a settle so a genuine "did not fire" (pre-fix) fails fast via the
+    // timeout instead of hanging the suite.
+    await Promise.race([wrote, new Promise<void>(resolve => setTimeout(resolve, 500))])
+    assert.deepEqual(
+      writtenSessions,
+      [sessionId],
+      'a resumed shift force-flushes SM once, under the run sessionId (not the caller ctx sessionId)',
+    )
+  } finally {
+    setSessionMemoryUpdaterForTest(null)
+  }
+})
+
 test('interjections that outlive a resumed turn are rescued, not dropped', async () => {
   // unmarkInFlight returns anything queued after the turn's last tool-boundary
   // drain; the resume path must re-deliver it instead of silently deleting it
