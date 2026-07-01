@@ -46,22 +46,31 @@ let networkBridge: NetworkBridge | null = null
 // the same sessionId the inbound message resolves to so a `/stop` typed in
 // a group never aborts the DM session's in-flight turn (or vice versa).
 const abortControllerBySession = new Map<string, AbortController>()
-// Session-memory write throttle counters. Module-level rather than per-state
-// because they reset on every resolved SessionContext (a new session starts with
-// zero accumulated work). They drive the SessionMemory double-threshold:
-// SM is rewritten only when both token AND tool_call counters cross.
-let sessionMemoryTokensSinceUpdate = 0
-let sessionMemoryToolCallsSinceUpdate = 0
+// Session-memory write throttle accumulators, keyed by persistent sessionId.
+// A Map (not module scalars) because accumulation must persist ACROSS the many
+// short turns of one persistent session. A background-dispatch task is chopped
+// into派活 / collect-result / deliver turns; the original module-scalar design
+// reset on every resolved SessionContext (i.e. every inbound message = every
+// turn), so the trailing short turns never re-crossed the tool_call threshold
+// and SM froze mid-task. Keying by sessionId lets the double-threshold
+// (token AND tool_call) accumulate across a session's turns while keeping
+// concurrent users / sessions fully isolated. The map is self-limiting:
+// `resetSessionMemoryCounters` DELETES the entry on write, so it only ever
+// holds sessions with un-flushed accumulation (size = active-and-dirty
+// sessions), and the next `add*` lazily recreates it — no TTL / eviction needed.
+const smCounters = new Map<string, { tokens: number; toolCalls: number }>()
 let sessionMemoryUpdateCount = 0
-// Phase 14 micro-compact counters. Module-level for the same reason as the
-// SessionMemory throttles above — they reset on every resolved SessionContext (a
-// fresh session starts with zero MC actions).
+// Phase 14 micro-compact counter. Module-level, reset on every resolved
+// SessionContext (a fresh session starts with zero MC actions). This is now the
+// ONLY counter resetSessionScopedCounters touches — the SM accumulators moved to
+// the per-session smCounters map above precisely so they survive across turns.
 let idleMicroCompactCount = 0
 
 export function resetSessionScopedCounters(): void {
-  sessionMemoryTokensSinceUpdate = 0
-  sessionMemoryToolCallsSinceUpdate = 0
-  sessionMemoryUpdateCount = 0
+  // Deliberately does NOT touch the SM accumulators anymore — dismantling this
+  // per-turn reset is the whole fix for cross-turn SM accumulation. SM counters
+  // are per-session (smCounters map) and are cleared only at decide-to-write
+  // time via resetSessionMemoryCounters(sessionId).
   idleMicroCompactCount = 0
 }
 
@@ -434,27 +443,43 @@ export async function awaitBackgroundTasks(): Promise<void> {
   await Promise.allSettled([...current.backgroundTasks])
 }
 
-export function getSessionMemoryTokensSinceUpdate(): number {
-  return sessionMemoryTokensSinceUpdate
+// The two getters + reset take an explicit sessionId (the persistent session,
+// not the ALS scope) because the shared session-memory core (which owns the
+// threshold read + decide-to-write reset) may run on the idle / worker refresh
+// paths outside a live turn's ALS scope. The two `add*` mutators stay ALS-based:
+// they are only ever called from the query hot loop, where getSessionId() is the
+// same persistent sessionId (chain leaf for dispatched workers) that the counter
+// must be attributed to.
+export function getSessionMemoryTokensSinceUpdate(sessionId: string): number {
+  return smCounters.get(sessionId)?.tokens ?? 0
 }
 
 export function addSessionMemoryTokens(tokens: number): void {
-  if (tokens > 0) {
-    sessionMemoryTokensSinceUpdate += tokens
+  if (tokens <= 0) {
+    return
   }
+  const sessionId = getSessionId()
+  const entry = smCounters.get(sessionId) ?? { tokens: 0, toolCalls: 0 }
+  entry.tokens += tokens
+  smCounters.set(sessionId, entry)
 }
 
-export function getSessionMemoryToolCallsSinceUpdate(): number {
-  return sessionMemoryToolCallsSinceUpdate
+export function getSessionMemoryToolCallsSinceUpdate(sessionId: string): number {
+  return smCounters.get(sessionId)?.toolCalls ?? 0
 }
 
 export function addSessionMemoryToolCall(): void {
-  sessionMemoryToolCallsSinceUpdate += 1
+  const sessionId = getSessionId()
+  const entry = smCounters.get(sessionId) ?? { tokens: 0, toolCalls: 0 }
+  entry.toolCalls += 1
+  smCounters.set(sessionId, entry)
 }
 
-export function resetSessionMemoryCounters(): void {
-  sessionMemoryTokensSinceUpdate = 0
-  sessionMemoryToolCallsSinceUpdate = 0
+export function resetSessionMemoryCounters(sessionId: string): void {
+  // DELETE, not zero: a just-written session has no un-flushed accumulation, so
+  // dropping the entry keeps the map bounded to active-and-dirty sessions. The
+  // next add* lazily recreates it.
+  smCounters.delete(sessionId)
 }
 
 export function getSessionMemoryUpdateCount(): number {

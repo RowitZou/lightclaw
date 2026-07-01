@@ -9,6 +9,7 @@ import {
   setTransientTurnRetryDelayForTest,
 } from './query.js'
 import { createSessionContext, runWithSessionContext } from './session-context.js'
+import { resetSessionScopedCounters } from './state.js'
 import { installTestConfigHome } from './test-support/config-fixture.js'
 import { buildTool } from './tool.js'
 import { createUserMessage } from './messages.js'
@@ -269,6 +270,51 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
         `message ${message.uuid} (${message.type}) must be summarized exactly once, was ${coverage.get(message.uuid) ?? 0}`,
       )
     }
+  })
+
+  it('accumulates the tool_call threshold ACROSS short turns (busy stream) and refreshes SM mid-stream', async () => {
+    // Reproduces the production freeze (puyuclaw DM, clone-competitor task): a
+    // background-dispatch task is chopped into several short turns (派活 /
+    // collect-result / deliver), each under the 5 tool_call threshold. init.ts
+    // resets session-scoped counters on every inbound message, so with the old
+    // per-turn reset the tool_call accumulator restarted each turn, the
+    // threshold was never re-crossed, and SM froze at a stale "still doing X"
+    // snapshot. With per-session accumulation the calls add up across turns and
+    // SM refreshes once the cumulative count crosses the threshold.
+    const sessionId = 'feishu:dm:busy-accumulate'
+
+    let updaterCalls = 0
+    let signalUpdated!: () => void
+    const updated = new Promise<void>(resolve => {
+      signalUpdated = resolve
+    })
+    setSessionMemoryUpdaterForTest(() => {
+      updaterCalls += 1
+      signalUpdated()
+      return Promise.resolve({ updated: true })
+    })
+
+    // 3 short turns, each 2 heavy tool calls (2 tool_calls, ~66k tokens). No
+    // single turn crosses the 5-call gate; cumulatively turn 3 does (2+2+1).
+    for (let turn = 0; turn < 3; turn += 1) {
+      // Mirror init.ts: every inbound message resets session-scoped counters.
+      // Post-fix this no longer wipes the SM accumulators.
+      resetSessionScopedCounters()
+      fakeStreamChat([heavyToolUseTurn, heavyToolUseTurn, endTurn])
+      await runQuery(sessionId, [makePingTool()])
+    }
+
+    // On the fixed code the 5th cumulative tool_call (turn 3) crosses the gate
+    // and fires exactly one update. On the old per-turn-reset code each turn
+    // caps at 2 calls, this `await` never resolves, and the node:test per-test
+    // timeout converts it into an honest failure — the required "fails on old
+    // code" regression property.
+    await updated
+    assert.equal(
+      updaterCalls,
+      1,
+      'SM refreshes once tool_calls accumulate across turns past the threshold',
+    )
   })
 
   it('does not touch session-memory when the turn never crosses the thresholds', async () => {

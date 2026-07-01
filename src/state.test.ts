@@ -5,11 +5,17 @@ import path from 'node:path'
 
 import {
   abortInFlightForSession,
+  addSessionMemoryToolCall,
+  addSessionMemoryTokens,
   getCurrentUserId,
   getCwd,
   getPermissionApprover,
   getPermissionMode,
   getSessionId,
+  getSessionMemoryToolCallsSinceUpdate,
+  getSessionMemoryTokensSinceUpdate,
+  resetSessionMemoryCounters,
+  resetSessionScopedCounters,
   setCwd,
   setPermissionApprover,
   setPermissionMode,
@@ -79,6 +85,78 @@ describe('per-session abort controllers', () => {
     abortInFlightForSession('feishu:dm:chatA')
     assert.equal(old.signal.aborted, false, 'stale controller is not aborted')
     assert.equal(next.signal.aborted, true, 'newest controller is aborted')
+  })
+})
+
+describe('session-memory accumulators (per-session, cross-turn)', () => {
+  it('accumulates per sessionId and never pollutes across sessions', async () => {
+    // Feature B invariant: the accumulators are keyed by persistent sessionId,
+    // so two sessions of the SAME canonical user (a DM long-task and a group
+    // quick-task) count independently. Under the old module-scalar design both
+    // would add into one global and the group's calls would push the DM over
+    // the tool_call threshold (and vice versa) — false SM refreshes and blown
+    // isolation. `add*` reads the ALS sessionId; the getters take it explicitly.
+    const dm = 'feishu:dm:acctA'
+    const group = 'feishu:group:acctB:userX'
+    resetSessionMemoryCounters(dm)
+    resetSessionMemoryCounters(group)
+
+    await runWithSessionContext(freshContext({ sessionId: dm }), async () => {
+      addSessionMemoryToolCall()
+      addSessionMemoryToolCall()
+      addSessionMemoryTokens(1000)
+    })
+    await runWithSessionContext(freshContext({ sessionId: group }), async () => {
+      addSessionMemoryToolCall()
+      addSessionMemoryTokens(50)
+    })
+
+    assert.equal(getSessionMemoryToolCallsSinceUpdate(dm), 2, 'DM counts only its own tool calls')
+    assert.equal(getSessionMemoryToolCallsSinceUpdate(group), 1, 'group counts only its own tool calls')
+    assert.equal(getSessionMemoryTokensSinceUpdate(dm), 1000)
+    assert.equal(getSessionMemoryTokensSinceUpdate(group), 50)
+  })
+
+  it('reset deletes only the target session and add* lazily recreates it', async () => {
+    const a = 'feishu:dm:resetA'
+    const b = 'feishu:dm:resetB'
+    resetSessionMemoryCounters(a)
+    resetSessionMemoryCounters(b)
+    await runWithSessionContext(freshContext({ sessionId: a }), async () => {
+      addSessionMemoryToolCall()
+    })
+    await runWithSessionContext(freshContext({ sessionId: b }), async () => {
+      addSessionMemoryToolCall()
+    })
+
+    resetSessionMemoryCounters(a)
+    assert.equal(getSessionMemoryToolCallsSinceUpdate(a), 0, 'reset drops A back to 0')
+    assert.equal(getSessionMemoryToolCallsSinceUpdate(b), 1, 'B is untouched by A reset')
+
+    await runWithSessionContext(freshContext({ sessionId: a }), async () => {
+      addSessionMemoryToolCall()
+    })
+    assert.equal(getSessionMemoryToolCallsSinceUpdate(a), 1, 'add* lazily recreates the deleted entry')
+  })
+
+  it('resetSessionScopedCounters no longer clears SM accumulators (dismantled per-turn reset)', async () => {
+    // The core of the fix: init.ts calls resetSessionScopedCounters on every
+    // inbound message. It must NOT wipe the per-session SM accumulators anymore,
+    // otherwise cross-turn accumulation (a task chopped into short turns) never
+    // re-crosses the threshold.
+    const sid = 'feishu:dm:scopedReset'
+    resetSessionMemoryCounters(sid)
+    await runWithSessionContext(freshContext({ sessionId: sid }), async () => {
+      addSessionMemoryToolCall()
+      addSessionMemoryToolCall()
+    })
+    resetSessionScopedCounters()
+    assert.equal(
+      getSessionMemoryToolCallsSinceUpdate(sid),
+      2,
+      'per-turn scoped reset leaves SM accumulators intact',
+    )
+    resetSessionMemoryCounters(sid)
   })
 })
 

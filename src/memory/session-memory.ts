@@ -308,8 +308,8 @@ export async function updateSessionMemoryForSession(
 
   if (
     !force
-    && (getSessionMemoryTokensSinceUpdate() < config.memory.session.updateTokenThreshold
-      || getSessionMemoryToolCallsSinceUpdate() < config.memory.session.updateToolCallThreshold)
+    && (getSessionMemoryTokensSinceUpdate(sessionId) < config.memory.session.updateTokenThreshold
+      || getSessionMemoryToolCallsSinceUpdate(sessionId) < config.memory.session.updateToolCallThreshold)
   ) {
     return { updated: false, reason: 'below-threshold' }
   }
@@ -320,7 +320,7 @@ export async function updateSessionMemoryForSession(
   // LLM rewrite is in flight; a finally-reset would wipe that concurrent
   // accumulation and the next update would fire late. Resetting here leaves
   // exactly the post-snapshot work counted toward the next update.
-  resetSessionMemoryCounters()
+  resetSessionMemoryCounters(sessionId)
 
   try {
     const result = await sessionMemoryWriter({
