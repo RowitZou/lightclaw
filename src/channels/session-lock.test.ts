@@ -37,14 +37,36 @@ describe('SessionLock', () => {
 
   it('allows different sessions to run in parallel', async () => {
     const lock = new SessionLock()
-    const startedAt = Date.now()
+
+    // Deterministic concurrency proof — no wall-clock budget (a `Date.now()`
+    // deadline flakes under CPU oversubscription, where two genuinely parallel
+    // 100ms tasks can still wall-clock past the budget when descheduled). Both
+    // tasks must be in-flight simultaneously before either is allowed to
+    // finish: each arrives at a barrier that only releases once BOTH have
+    // arrived. If the lock serialized different sessions, session-b's task
+    // would not start until session-a's returned — but session-a is parked on
+    // the barrier waiting for session-b, so the two would deadlock and the
+    // node:test per-test timeout would fail this honestly. Reaching the
+    // assertion proves the two sessions overlapped.
+    let arrived = 0
+    let releaseBarrier!: () => void
+    const barrier = new Promise<void>(resolve => {
+      releaseBarrier = resolve
+    })
+    const enterAndWaitForBoth = async () => {
+      arrived += 1
+      if (arrived === 2) {
+        releaseBarrier()
+      }
+      await barrier
+    }
 
     await Promise.all([
-      lock.runExclusive('session-a', () => delay(100)),
-      lock.runExclusive('session-b', () => delay(100)),
+      lock.runExclusive('session-a', enterAndWaitForBoth),
+      lock.runExclusive('session-b', enterAndWaitForBoth),
     ])
 
-    assert.ok(Date.now() - startedAt < 170)
+    assert.equal(arrived, 2, 'both sessions were in-flight at the same time')
   })
 
   it('does not let a failed task poison the next task for the same session', async () => {
