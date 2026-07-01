@@ -98,6 +98,7 @@ export type ConfigFileMemorySection = {
     enabled?: boolean
     updateTokenThreshold?: number
     updateToolCallThreshold?: number
+    idleRefresh?: boolean
   }
   nudge?: {
     enabled?: boolean

@@ -17,7 +17,13 @@ import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
 import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
-import { getDaemonLocalRuntime, getRuntime } from '../state.js'
+import { updateSessionMemoryForSession } from '../memory/session-memory.js'
+import {
+  getDaemonLocalRuntime,
+  getRuntime,
+  getSessionsDir,
+  registerBackgroundTask,
+} from '../state.js'
 import { resolveDispatchedFireSecrets } from './dispatch-secrets.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext, workerInterjectionRenderer } from './invocation-context.js'
@@ -301,6 +307,23 @@ export async function runDispatchedAgent(
       ? await runWithSessionContext(childCtx, run)
       : await run()
     messagesToPersist = result.messages
+    // Feature A (worker coverage). A dispatched worker is one-shot and
+    // fresh-context: its query ending ≈ the session turning idle (no persistent
+    // channel queue keeps feeding it). Force-flush SM if dirty so a long or
+    // resumed worker's SM reflects the finished work before a later resume reads
+    // it. A worker's first run has no prior SM (dirty → writes it once); a
+    // clean re-run is a cheap early-return in the core. Runs inside the worker's
+    // own SessionContext so the write lands under the chain-leaf sessionId.
+    if (childCtx && chainSessionId && params.role.kind !== 'internal') {
+      await runWithSessionContext(childCtx, () => {
+        maybeWorkerIdleRefreshSessionMemory(
+          chainSessionId,
+          effectiveConfig,
+          result.messages,
+        )
+        return Promise.resolve()
+      })
+    }
     if (forkTranscriptPath) {
       persistTask = persistForkTranscript(
         forkTranscriptPath,
@@ -341,4 +364,47 @@ export async function runDispatchedAgent(
         })
     }
   }
+}
+
+/**
+ * Feature A worker idle-when-dirty refresh (best-effort, fire-and-forget). Must
+ * be called inside the worker's SessionContext scope so the SM write lands under
+ * the worker's chain-leaf sessionId. Skips when auto-memory / SM / idle-refresh
+ * is disabled; the caller already excludes internal roles (they never write SM).
+ * The core early-returns "clean" on a non-dirty worker, so a re-run that added
+ * nothing costs no LLM call; its writer serializes per-session.
+ */
+function maybeWorkerIdleRefreshSessionMemory(
+  sessionId: string,
+  config: LightClawConfig,
+  messages: Message[],
+): void {
+  if (
+    !config.memory.extractor.enabled
+    || !config.memory.session.enabled
+    || !config.memory.session.idleRefresh
+  ) {
+    return
+  }
+  const task = updateSessionMemoryForSession({
+    sessionId,
+    sessionsDir: getSessionsDir(),
+    messages,
+    config,
+    force: true,
+  })
+    .then(result => {
+      if (result.updated) {
+        process.stderr.write(
+          `[dispatched-agent] idle session-memory refresh wrote ${sessionId}\n`,
+        )
+      }
+    })
+    .catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `[dispatched-agent] idle session-memory refresh failed for ${sessionId}: ${detail}\n`,
+      )
+    })
+  registerBackgroundTask(task)
 }

@@ -1032,6 +1032,133 @@ function writeMinimalConfig(home: string): void {
   }))
 }
 
+// autoMemory ON so the session-memory extractor gate is open — required for the
+// Feature A worker idle refresh to run. `idleRefresh` (default on) is togglable.
+function writeSessionMemoryConfig(home: string, opts?: { idleRefresh?: boolean }): void {
+  writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+    endpoints: { fake: { apiKey: 'sk-fake' } },
+    models: {
+      'fake-model': { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'fake-model' },
+    },
+    defaultModel: 'fake-model',
+    autoMemory: true,
+    ...(opts?.idleRefresh === false
+      ? { memory: { session: { idleRefresh: false } } }
+      : {}),
+  }))
+}
+
+async function runWorkerAndCaptureIdleRefresh(opts: {
+  tempDir: string
+  role: Role
+}): Promise<string[]> {
+  const { setSessionMemoryWriterForTest } = await import('../memory/session-memory.js')
+  const config = getConfig()
+  const ctx = createSessionContext({
+    cwd: opts.tempDir,
+    model: 'fake-model',
+    sessionsDir: path.join(opts.tempDir, 'sessions'),
+    memoryDir: path.join(opts.tempDir, 'memory', 'alice'),
+    currentUserId: 'alice',
+    currentRole: roleWithTools(['Dispatch']),
+    runtime: fakeRuntime(opts.tempDir),
+    sessionId: 'main-session',
+  })
+  const chainState = makeChainState('dispatch-sm')
+  const writtenSessions: string[] = []
+  let signalWrite: () => void = () => {}
+  const wrote = new Promise<void>(resolve => {
+    signalWrite = resolve
+  })
+  setSessionMemoryWriterForTest(input => {
+    writtenSessions.push(input.sessionId)
+    signalWrite()
+    return Promise.resolve({ updated: true })
+  })
+  try {
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'finish the task',
+      role: opts.role,
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_test-worker',
+      queryImpl: async params => ({
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'done' }],
+            stopReason: 'end_turn',
+            usage: emptyUsage(),
+          }),
+        ],
+        assistantText: 'done',
+        finalReplyText: 'done',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: emptyUsage(),
+      }),
+    }))
+    // The refresh is fire-and-forget; race it against a short settle so a
+    // "did not fire" case resolves as an empty array rather than hanging.
+    await Promise.race([wrote, new Promise<void>(r => setTimeout(r, 200))])
+    return writtenSessions
+  } finally {
+    setSessionMemoryWriterForTest(null)
+  }
+}
+
+test('worker idle-when-dirty refresh force-flushes SM under the chain-leaf sessionId', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-sm-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeSessionMemoryConfig(tempDir)
+    const written = await runWorkerAndCaptureIdleRefresh({
+      tempDir,
+      role: roleWithTools([]),
+    })
+    // A dispatched worker's first run has no prior SM → dirty → one force flush,
+    // written under the worker's chain-leaf sessionId ('child'), not main.
+    assert.deepEqual(written, ['child'])
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('worker idle refresh skips internal roles (they never write session-memory)', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-sm-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeSessionMemoryConfig(tempDir)
+    const written = await runWorkerAndCaptureIdleRefresh({
+      tempDir,
+      role: internalRole(),
+    })
+    assert.deepEqual(written, [])
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('worker idle refresh honors the memory.session.idleRefresh off switch', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-sm-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeSessionMemoryConfig(tempDir, { idleRefresh: false })
+    const written = await runWorkerAndCaptureIdleRefresh({
+      tempDir,
+      role: roleWithTools([]),
+    })
+    assert.deepEqual(written, [])
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 function fakeRuntime(workspaceRoot: string): Runtime {
   return { workspaceRoot } as unknown as Runtime
 }

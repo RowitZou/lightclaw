@@ -154,6 +154,13 @@ export type SessionMemoryConfig = {
   enabled: boolean
   updateTokenThreshold: number
   updateToolCallThreshold: number
+  // Feature A rollback switch (default on). When on, a session that turns idle
+  // with un-flushed transcript is force-flushed (bypassing the accumulation
+  // thresholds) so SM reflects the completed work before it is next read. A
+  // clean (non-dirty) session costs nothing — the idle path returns early — so
+  // this only ever spends an LLM write when there is genuinely new work to
+  // summarize.
+  idleRefresh: boolean
 }
 
 /** Memory Nudge — a passive, turn-based reminder injected into the live
@@ -1521,6 +1528,10 @@ export function getConfig(): LightClawConfig {
         5,
     ),
   )
+  const sessionMemoryIdleRefresh =
+    parseBoolean(process.env.LIGHTCLAW_SESSION_MEMORY_IDLE_REFRESH) ??
+    fileConfig.memory?.session?.idleRefresh ??
+    true
   const memoryNudgeEnabled =
     parseBoolean(process.env.LIGHTCLAW_MEMORY_NUDGE_ENABLED) ??
     pickWithLegacy(
@@ -1749,6 +1760,7 @@ export function getConfig(): LightClawConfig {
         enabled: sessionMemoryEnabled,
         updateTokenThreshold: sessionMemoryUpdateTokenThreshold,
         updateToolCallThreshold: sessionMemoryUpdateToolCallThreshold,
+        idleRefresh: sessionMemoryIdleRefresh,
       },
       nudge: { enabled: memoryNudgeEnabled, everyTurns: memoryNudgeEveryTurns },
     },

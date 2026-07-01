@@ -839,6 +839,85 @@ describe('ChannelRunner in-flight slash routing', () => {
   })
 })
 
+describe('ChannelRunner idle-when-dirty session-memory refresh (Feature A)', () => {
+  // The production freeze: a task finished across short turns leaves SM frozen
+  // at a stale mid-task snapshot because no single short turn crosses the
+  // accumulation thresholds. Feature A force-flushes SM when the turn ends and
+  // the session is idle + dirty. Pre-PR3 the runner never called the force path,
+  // so a single short turn wrote nothing and this test's write signal never
+  // fired (the required "fails on old code" property). The SM writer seam is
+  // shared with query.ts's threshold-gated end-turn flush, but a single short
+  // turn stays below threshold, so the force idle refresh is the only caller.
+  it('force-flushes SM at the end of a short (below-threshold) turn', async () => {
+    writeFileSync(
+      path.join(tmpHome, 'config.json'),
+      JSON.stringify({
+        endpoints: { fake: { apiKey: 'sk-fake' } },
+        models: {
+          fake: { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'claude-fake' },
+        },
+        defaultModel: 'fake',
+        autoMemory: true,
+        hooksEnabled: false,
+        mcpEnabled: false,
+        runtime: { backend: 'docker', docker: { image: 'lightclaw-test', autoPull: false } },
+      }),
+    )
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { setSessionMemoryWriterForTest } = await import('../memory/session-memory.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-alice-idle'
+    strategy.resolveSessionId = () => mainSessionId
+
+    // A trivial single end_turn — no tools, low tokens → below both thresholds,
+    // so query.ts's own end-turn flush never fires the writer; only the idle
+    // force refresh can.
+    setStreamChatForTest(async function* (): AsyncGenerator<StreamEvent> {
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'done' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+
+    const written: string[] = []
+    let signalWrite: () => void = () => {}
+    const wrote = new Promise<void>(resolve => {
+      signalWrite = resolve
+    })
+    setSessionMemoryWriterForTest(input => {
+      written.push(input.sessionId)
+      signalWrite()
+      return Promise.resolve({ updated: true })
+    })
+
+    try {
+      await runner.handleMessage(
+        makeFakeFeishuMessage({
+          sender: 'ou_alice',
+          text: '任务做完了吗',
+          chatId: mainSessionId,
+        }),
+      )
+      // Race a settle so a genuine "did not fire" (pre-PR3) fails fast via the
+      // node:test per-test timeout rather than hanging the whole suite.
+      await Promise.race([wrote, delay(500)])
+      assert.deepEqual(
+        written,
+        [mainSessionId],
+        'a completed short turn force-flushes SM once under the session id',
+      )
+    } finally {
+      setSessionMemoryWriterForTest(null)
+      setStreamChatForTest(null)
+    }
+  })
+})
+
 describe('applyAttachmentMaterialization', () => {
   // Phase 24 contract: feishu raw onMessage attaches `pendingAttachments`,
   // ChannelRunner materializes each entry after pairing + runtime acquire

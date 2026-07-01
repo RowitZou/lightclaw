@@ -39,6 +39,7 @@ import {
 } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
+import { updateSessionMemoryForSession } from '../memory/session-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
@@ -88,7 +89,9 @@ import {
   getRuntime,
   getRuntimePool,
   getSessionId,
+  getSessionsDir,
   getTodos,
+  registerBackgroundTask,
 } from '../state.js'
 import {
   createEmptySessionContext,
@@ -1739,6 +1742,15 @@ export class ChannelRunner {
           }
         }
         turnCard?.finalize()
+        // Feature A — idle-when-dirty session-memory refresh. The turn is done
+        // and its reply / transcript are persisted; if nothing else is queued
+        // for this session, force-flush SM now (bypassing the accumulation
+        // thresholds) so a task completed across several short turns — each
+        // below the threshold — still lands a fresh SM before it is next read,
+        // instead of freezing at a stale mid-task snapshot. A clean session is a
+        // cheap early return inside the core; a still-busy session is left to
+        // Feature B's cross-turn accumulation.
+        this.maybeIdleRefreshSessionMemory(mainSessionId, appConfig, result.messages)
         })
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
@@ -1839,6 +1851,60 @@ export class ChannelRunner {
         }
       }
     }
+  }
+
+  /**
+   * Feature A idle-when-dirty session-memory refresh (best-effort,
+   * fire-and-forget). Called at the end of a completed main turn, inside the
+   * turn's SessionContext scope. Force-flushes SM (bypassing the accumulation
+   * thresholds) when the session has turned idle and its transcript is dirty,
+   * so a task finished across several short turns lands a fresh SM before it is
+   * next read. Skips when auto-memory / SM / idle-refresh is disabled, or when
+   * work is still queued (a not-yet-drained interjection or a pending write
+   * slash means another turn is imminent — leave it to Feature B / the next
+   * turn's own refresh). The core early-returns "clean" on a non-dirty session,
+   * so this only spends an LLM write when there is genuinely new work; its
+   * writer serializes per-session, so it cannot race the mid-turn kicks.
+   */
+  private maybeIdleRefreshSessionMemory(
+    sessionId: string,
+    config: LightClawConfig,
+    messages: Message[],
+  ): void {
+    if (
+      !config.memory.extractor.enabled
+      || !config.memory.session.enabled
+      || !config.memory.session.idleRefresh
+    ) {
+      return
+    }
+    if (
+      channelInterjectionQueue.size(sessionId) > 0
+      || channelPendingSlashQueue.size(sessionId) > 0
+    ) {
+      return
+    }
+    const task = updateSessionMemoryForSession({
+      sessionId,
+      sessionsDir: getSessionsDir(),
+      messages,
+      config,
+      force: true,
+    })
+      .then(result => {
+        if (result.updated) {
+          process.stderr.write(
+            `${this.strategy.channelId}: idle session-memory refresh wrote ${sessionId}\n`,
+          )
+        }
+      })
+      .catch(error => {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `${this.strategy.channelId}: idle session-memory refresh failed for ${sessionId}: ${detail}\n`,
+        )
+      })
+    registerBackgroundTask(task)
   }
 
   /**
