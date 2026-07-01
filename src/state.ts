@@ -49,7 +49,7 @@ const abortControllerBySession = new Map<string, AbortController>()
 // Session-memory write throttle accumulators, keyed by persistent sessionId.
 // A Map (not module scalars) because accumulation must persist ACROSS the many
 // short turns of one persistent session. A background-dispatch task is chopped
-// into派活 / collect-result / deliver turns; the original module-scalar design
+// into dispatch / collect-result / deliver turns; the original module-scalar design
 // reset on every resolved SessionContext (i.e. every inbound message = every
 // turn), so the trailing short turns never re-crossed the tool_call threshold
 // and SM froze mid-task. Keying by sessionId lets the double-threshold

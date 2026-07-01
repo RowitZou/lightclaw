@@ -274,7 +274,7 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
 
   it('accumulates the tool_call threshold ACROSS short turns (busy stream) and refreshes SM mid-stream', async () => {
     // Reproduces the production freeze (puyuclaw DM, clone-competitor task): a
-    // background-dispatch task is chopped into several short turns (派活 /
+    // background-dispatch task is chopped into several short turns (dispatch /
     // collect-result / deliver), each under the 5 tool_call threshold. init.ts
     // resets session-scoped counters on every inbound message, so with the old
     // per-turn reset the tool_call accumulator restarted each turn, the
