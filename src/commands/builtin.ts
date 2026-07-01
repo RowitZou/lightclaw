@@ -783,8 +783,8 @@ async function userUnlink(args: string[]): Promise<string> {
   }
   try {
     parseSenderKey(rawLink)
-  } catch (error) {
-    return `${error instanceof Error ? error.message : String(error)}\n`
+  } catch {
+    return `${t('user.unlink.invalidKey', { link: rawLink })}\n`
   }
   const boundTo = lookupBySender(rawLink as SenderKey)
   if (!boundTo) {

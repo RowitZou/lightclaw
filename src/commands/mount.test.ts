@@ -253,6 +253,18 @@ describe('/mount command', () => {
       /top-level shared storage/,
     )
   })
+
+  // A daemon-reachable path that sits under NO configured shared-storage root
+  // surfaces a localized, de-jargoned message — not the raw internal
+  // "must be under one of runtime.clusterSettings.gpfsMounts hostPrefix" throw.
+  it('rejects a reachable path outside every shared-storage root with a de-jargoned message', async () => {
+    const outside = path.join(tmpHome, 'elsewhere', 'data') // reachable, but not under gpfsRoot
+    mkdirSync(outside, { recursive: true })
+    const out = await runMount(`add ${outside}`, { config: makeConfig(), userId: 'alice' })
+    assert.match(out, /not under any mountable shared-storage root/)
+    assert.doesNotMatch(out, /gpfsMounts|hostPrefix|rlaunch/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [])
+  })
 })
 
 function makeConfig(

@@ -7,13 +7,14 @@ import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
+  RlaunchMountPathNotAbsoluteError,
   saveUserRlaunchMounts,
   userMountToRuntimeMount,
   type RlaunchMountMode,
   type RlaunchMountScope,
   type UserRlaunchMount,
 } from '../runtime/rlaunch-mounts.js'
-import { findShallowGpfsRoot } from '../runtime/gpfs-mount-rules.js'
+import { findShallowGpfsRoot, GpfsHostPrefixMismatchError } from '../runtime/gpfs-mount-rules.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
 import { type MountReport } from '../runtime/mount-authz.js'
 import { pruneUnmountableMounts, type MountRebuildResult } from './mount-ops.js'
@@ -245,7 +246,7 @@ function parseMountAddInput(
       mountPaths: dedupePaths(positional.map(normalizeRlaunchMountPath)),
     }
   } catch (error) {
-    return error instanceof Error ? error.message : String(error)
+    return mountErrorMessage(error)
   }
 }
 
@@ -256,12 +257,31 @@ function parseMountRemoveInput(rawPaths: string[]): string[] | string {
   try {
     return dedupePaths(rawPaths.map(normalizeRlaunchMountPath))
   } catch (error) {
-    return error instanceof Error ? error.message : String(error)
+    return mountErrorMessage(error)
   }
 }
 
 function formatLightclawPermission(mode: RlaunchMountMode): string {
   return mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')
+}
+
+/** Render a validation error thrown by the runtime mount modules as a localized,
+ *  de-jargoned user message. Known typed errors map to `t()` keys; anything else
+ *  (e.g. admin config-shape errors) falls back to the raw English message. */
+function mountErrorMessage(error: unknown): string {
+  if (error instanceof RlaunchMountPathNotAbsoluteError) {
+    return t('mount.pathNotAbsolute', { path: error.input })
+  }
+  if (error instanceof GpfsHostPrefixMismatchError) {
+    return t('mount.notUnderSharedRoot', {
+      path: error.hostPath,
+      roots: error.prefixes.join(', '),
+    })
+  }
+  if (error instanceof MountOverlapError) {
+    return t('mount.overlap', { a: error.workerA, b: error.workerB })
+  }
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** Auto-detect a mount's scope AND observed mode from daemon visibility. The
@@ -301,7 +321,7 @@ async function probeMountScope(
       ctx.config.runtime.clusterSettings,
     )
   } catch (error) {
-    return { error: `${error instanceof Error ? error.message : String(error)}\n` }
+    return { error: `${mountErrorMessage(error)}\n` }
   }
   return { scope, mode }
 }
@@ -326,10 +346,7 @@ function validateMountTable(
     ])
     return null
   } catch (error) {
-    if (error instanceof MountOverlapError) {
-      return t('mount.overlap', { a: error.workerA, b: error.workerB })
-    }
-    return error instanceof Error ? error.message : String(error)
+    return mountErrorMessage(error)
   }
 }
 

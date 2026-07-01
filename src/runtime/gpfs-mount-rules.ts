@@ -10,6 +10,26 @@ import { expandHomePath } from '../paths.js'
  */
 export type RlaunchGpfsMountConfig = Pick<RlaunchRuntimeSettings, 'gpfsMounts'>
 
+/**
+ * Thrown when a host path is not under any configured gpfs `hostPrefix`. The
+ * `.message` stays English (this fires from runtime mount-table building too,
+ * where it lands in stderr — locale drift hurts log grepping); the command
+ * layer catches this typed error and renders a de-jargoned localized message.
+ * Mirrors the `MountOverlapError` pattern in `path-policy/mount-table.ts`.
+ */
+export class GpfsHostPrefixMismatchError extends Error {
+  constructor(
+    public readonly hostPath: string,
+    public readonly prefixes: string[],
+  ) {
+    super(
+      `rlaunch mount path must be under one of runtime.clusterSettings.gpfsMounts hostPrefix values ` +
+      `(${prefixes.join(', ')}); got ${hostPath}`,
+    )
+    this.name = 'GpfsHostPrefixMismatchError'
+  }
+}
+
 export function buildGpfsMountStringFromRules(
   hostPathInput: string,
   workerPathInput: string,
@@ -36,9 +56,9 @@ export function resolveGpfsMountRule(
   matches.sort((a, b) => b.hostPrefix.length - a.hostPrefix.length)
   const rule = matches[0]
   if (!rule) {
-    throw new Error(
-      `rlaunch mount path must be under one of runtime.clusterSettings.gpfsMounts hostPrefix values ` +
-      `(${rules.map(item => item.hostPrefix).join(', ')}); got ${hostPath}`,
+    throw new GpfsHostPrefixMismatchError(
+      hostPath,
+      rules.map(item => item.hostPrefix),
     )
   }
   const suffix = hostPath.slice(rule.hostPrefix.length).split(path.sep).filter(Boolean).join('/')

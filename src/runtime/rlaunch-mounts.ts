@@ -36,10 +36,22 @@ export type RlaunchRuntimeMount = {
   daemonVisible?: boolean
 }
 
+/**
+ * Thrown when a mount path is not absolute. `.message` stays English (fires
+ * from runtime paths that land in stderr); the command layer catches this typed
+ * error and renders a localized message. See `GpfsHostPrefixMismatchError`.
+ */
+export class RlaunchMountPathNotAbsoluteError extends Error {
+  constructor(public readonly input: string) {
+    super(`rlaunch mount path must be absolute: ${input}`)
+    this.name = 'RlaunchMountPathNotAbsoluteError'
+  }
+}
+
 export function normalizeRlaunchMountPath(input: string): string {
   const expanded = expandHomePath(input.trim())
   if (!path.isAbsolute(expanded)) {
-    throw new Error(`rlaunch mount path must be absolute: ${input}`)
+    throw new RlaunchMountPathNotAbsoluteError(input)
   }
   return path.resolve(expanded)
 }
