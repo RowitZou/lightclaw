@@ -17,8 +17,8 @@ import { resolveHooks } from './agents/hook-registry.js'
 import type { HookContext, RenderedPrompt } from './agents/hooks/types.js'
 import { runHook } from './hooks/index.js'
 import {
-  updateSessionMemory as defaultUpdateSessionMemory,
-  type SessionMemoryUpdateInput,
+  setSessionMemoryWriterForTest,
+  updateSessionMemoryForSession,
 } from './memory/session-memory.js'
 import {
   collectAssistantText,
@@ -45,17 +45,9 @@ import {
   getRuntime,
   getSessionId,
   getSessionsDir,
-  getSessionMemoryToolCallsSinceUpdate,
-  getSessionMemoryTokensSinceUpdate,
   getTodos,
-  incrementSessionMemoryUpdateCount,
   registerBackgroundTask,
-  resetSessionMemoryCounters,
 } from './state.js'
-import {
-  loadMeta,
-  updateMetaSessionMemoryAt,
-} from './session/storage.js'
 import { getCurrentSessionContext } from './session-context.js'
 import {
   buildTurnToolCatalog,
@@ -108,14 +100,13 @@ export function setTransientTurnRetryDelayForTest(ms: number | null): void {
 
 // updateSessionMemory indirection so unit tests can observe and control
 // session-memory write timing without a real LLM call. Production code always
-// uses the real implementation.
-let sessionMemoryUpdaterImpl: typeof defaultUpdateSessionMemory =
-  defaultUpdateSessionMemory
-
+// uses the real implementation. The seam now lives in session-memory.ts (the
+// shared `updateSessionMemoryForSession` core calls it); this re-export keeps
+// the historical `setSessionMemoryUpdaterForTest` name for existing tests.
 export function setSessionMemoryUpdaterForTest(
-  impl: typeof defaultUpdateSessionMemory | null,
+  impl: Parameters<typeof setSessionMemoryWriterForTest>[0],
 ): void {
-  sessionMemoryUpdaterImpl = impl ?? defaultUpdateSessionMemory
+  setSessionMemoryWriterForTest(impl)
 }
 
 type QueryParams = {
@@ -388,51 +379,17 @@ export async function query(params: QueryParams): Promise<{
     ) {
       return
     }
-    if (
-      getSessionMemoryTokensSinceUpdate() < config.memory.session.updateTokenThreshold
-      || getSessionMemoryToolCallsSinceUpdate() < config.memory.session.updateToolCallThreshold
-    ) {
-      return
-    }
-    // Reset the accumulators now, synchronously, against `snapshot` — NOT in a
-    // finally after the await. Mid-turn updates run non-blocking, so the agent
-    // loop keeps producing messages (and bumping these counters) while the LLM
-    // rewrite is in flight; a finally-reset would wipe that concurrent
-    // accumulation and the next update would fire late. Resetting here leaves
-    // exactly the post-snapshot work counted toward the next update.
-    resetSessionMemoryCounters()
-
-    const meta = await loadMeta(getSessionId())
-    const since = meta?.sessionMemoryUpdatedAt ?? 0
-    const newMessages = snapshot.filter(
-      message => message.type !== 'system' && message.timestamp > since,
-    )
-    if (newMessages.length === 0) {
-      return
-    }
-
-    try {
-      const update: SessionMemoryUpdateInput = {
-        sessionId: getSessionId(),
-        sessionsDir: getSessionsDir(),
-        newMessages,
-        config,
-      }
-      const result = await sessionMemoryUpdaterImpl(update)
-      if (result.updated) {
-        // Watermark = the newest message actually summarized, NOT Date.now().
-        // Mid-turn updates are non-blocking, so the loop produces more messages
-        // during the rewrite window; a wall-clock watermark would jump past
-        // them and the next update's `timestamp > since` filter would
-        // permanently exclude every message created while this update ran.
-        const ts = Math.max(...newMessages.map(message => message.timestamp))
-        await updateMetaSessionMemoryAt(getSessionId(), ts)
-        incrementSessionMemoryUpdateCount()
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(`[session-memory] ${message}`)
-    }
+    // The mid-turn (kick) and end-turn (flush) paths are the threshold-gated
+    // trigger: force=false runs the per-session accumulation gate, the
+    // decide-to-write counter reset, the LLM rewrite, and the watermark advance
+    // inside the shared core. Errors are logged there, never raised.
+    await updateSessionMemoryForSession({
+      sessionId: getSessionId(),
+      sessionsDir: getSessionsDir(),
+      messages: snapshot,
+      config,
+      force: false,
+    })
   }
 
   // Mid-turn session-memory updates run non-blocking. A long turn crosses the
