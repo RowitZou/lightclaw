@@ -73,7 +73,16 @@ export async function awaitAbortable<T>(
 ): Promise<T> {
   throwIfAborted(signal)
   let onAbort: (() => void) | undefined
-  const aborted = new Promise<never>((_resolve, reject) => {
+  // `settle` lets the finally resolve `aborted` once the race is over. Without
+  // it, when `promise` wins the race the abort event never fires, so `aborted`
+  // stays FOREVER unsettled — a promise that never resolves/rejects. Those
+  // danglers accumulate (one per tool / hook / permission call) and, under load,
+  // are still pending when node:test finalises a test file's process, which it
+  // reports as "Promise resolution is still pending but the event loop has
+  // already resolved" and cancels the suite. Settling on cleanup removes them.
+  let settle: (() => void) | undefined
+  const aborted = new Promise<never>((resolve, reject) => {
+    settle = () => resolve(undefined as never)
     onAbort = () => reject(new Error(ABORT_ERROR_MESSAGE))
     signal.addEventListener('abort', onAbort, { once: true })
   })
@@ -83,6 +92,7 @@ export async function awaitAbortable<T>(
     if (onAbort) {
       signal.removeEventListener('abort', onAbort)
     }
+    settle?.()
     void Promise.resolve(promise).catch(() => {})
   }
 }

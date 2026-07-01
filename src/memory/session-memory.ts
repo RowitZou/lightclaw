@@ -295,17 +295,18 @@ export async function updateSessionMemoryForSession(
 ): Promise<UpdateSessionMemoryForSessionResult> {
   const { sessionId, sessionsDir, messages, config, force } = input
 
-  const meta = await loadMeta(sessionId)
-  const since = meta?.sessionMemoryUpdatedAt ?? 0
-  const newMessages = messages.filter(
-    message => message.type !== 'system' && message.timestamp > since,
-  )
-  if (newMessages.length === 0) {
-    // Nothing new since the last watermark — clean. `force` cannot conjure work
-    // out of an unchanged session, so it returns clean too.
-    return { updated: false, reason: 'clean' }
-  }
-
+  // Threshold gate + counter reset happen SYNCHRONOUSLY, before any await —
+  // exactly as the pre-refactor inline query.ts did. This ordering is
+  // load-bearing: the mid-turn kick runs non-blocking, so the agent loop keeps
+  // dispatching tools (bumping the accumulators) while this update is in flight.
+  // If the reset were deferred until after `await loadMeta`, the tool-call
+  // boundaries that fire during that await would be counted and then WIPED by
+  // the late reset, so the end-turn flush sees a zeroed counter, skips as
+  // below-threshold, and never runs — dropping the end-turn session-memory
+  // refresh (and, in the single-flight test, hanging its `await` on a second
+  // update that never fires, which surfaces under load as a "Promise still
+  // pending" suite cancel). Resetting here leaves exactly the post-reset work
+  // counted toward the next update.
   if (
     !force
     && (getSessionMemoryTokensSinceUpdate(sessionId) < config.memory.session.updateTokenThreshold
@@ -313,14 +314,20 @@ export async function updateSessionMemoryForSession(
   ) {
     return { updated: false, reason: 'below-threshold' }
   }
-
-  // Reset the accumulators now, synchronously, at the decide-to-write moment —
-  // NOT in a finally after the await. Mid-turn updates run non-blocking, so the
-  // agent loop keeps producing messages (and bumping these counters) while the
-  // LLM rewrite is in flight; a finally-reset would wipe that concurrent
-  // accumulation and the next update would fire late. Resetting here leaves
-  // exactly the post-snapshot work counted toward the next update.
   resetSessionMemoryCounters(sessionId)
+
+  const meta = await loadMeta(sessionId)
+  const since = meta?.sessionMemoryUpdatedAt ?? 0
+  const newMessages = messages.filter(
+    message => message.type !== 'system' && message.timestamp > since,
+  )
+  if (newMessages.length === 0) {
+    // Nothing new since the last watermark — clean. `force` cannot conjure work
+    // out of an unchanged session, so it returns clean too. (The reset above
+    // already ran; a clean session's accumulators are correctly zeroed since
+    // there is nothing left un-summarized.)
+    return { updated: false, reason: 'clean' }
+  }
 
   try {
     const result = await sessionMemoryWriter({
