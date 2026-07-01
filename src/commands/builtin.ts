@@ -623,25 +623,50 @@ async function rejectNonAdminInLocal(name: string): Promise<string | null> {
   return `${t('user.localOnlyReject', { name, admin: adminId })}\n`
 }
 
+// One markdown block per identity: bold name + optional admin / non-default
+// ceiling badges, then one line per bound channel with its peer ids in inline
+// code (keeps the full Feishu open_id readable AND copyable for `unlink`). The
+// ceiling badge is emitted ONLY when it differs from the deployment default, so
+// a homogeneous roster reads clean instead of repeating `ceiling=yolo` on every
+// row. Rendered as the show-段 of `adminUserCardSpec` (Feishu card) and, via
+// `formatCommandListSpecAsText` markup-stripping, the terminal fallback.
+const CHANNEL_ICON: Record<'terminal' | 'feishu', string> = {
+  terminal: '🖥',
+  feishu: '💬',
+}
+
 async function userList(): Promise<string> {
   const identities = await listIdentities()
   const names = Object.keys(identities).sort()
   if (names.length === 0) {
     return `${t('user.list.empty')}\n`
   }
-  const lines: string[] = []
   const defaultCeiling = defaultPermissionCeiling()
+  const blocks: string[] = []
   for (const name of names) {
-    const record = identities[name]
-    const marker = await isAdmin(name) ? t('status.identitiesAdmin') : ''
-    lines.push(`${name}${marker} ceiling=${modeToAlias(record.permissionCeiling ?? defaultCeiling)}`)
-    for (const channel of ['terminal', 'feishu'] as const) {
-      for (const peerId of record.channels[channel]) {
-        lines.push(`  - ${channel}:${peerId}`)
-      }
+    const record = identities[name]!
+    const badges: string[] = []
+    if (await isAdmin(name)) {
+      badges.push(t('card.admin.user.badge.admin'))
     }
+    const ceiling = record.permissionCeiling ?? defaultCeiling
+    if (ceiling !== defaultCeiling) {
+      badges.push(t('card.admin.user.badge.ceiling', { mode: modeToAlias(ceiling) }))
+    }
+    const lines = [
+      badges.length > 0 ? `**${name}**  ${badges.join(' · ')}` : `**${name}**`,
+    ]
+    for (const channel of ['terminal', 'feishu'] as const) {
+      const peers = record.channels[channel]
+      if (peers.length === 0) {
+        continue
+      }
+      const rendered = peers.map(peer => `\`${peer}\``).join('、')
+      lines.push(`${CHANNEL_ICON[channel]} ${channel} · ${rendered}`)
+    }
+    blocks.push(lines.join('\n'))
   }
-  return `${lines.join('\n')}\n`
+  return `${blocks.join('\n\n')}\n`
 }
 
 async function userPending(): Promise<string> {
