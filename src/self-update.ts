@@ -2,17 +2,34 @@
 // rebuilds, verifies the new bundle, then asks the supervisor to relaunch.
 //
 // Design (see info/env.md "Self-update / supervisor"):
-//   - Build BEFORE exit. git pull + pnpm build + a `--help` smoke-check all run
-//     while the OLD daemon is still serving. Any failure aborts WITHOUT
-//     restarting, so a broken build never takes the daemon down — the running
-//     process keeps its in-memory code until a verified build is in place.
+//   - Build BEFORE exit, into a STAGING dir. git pull + `pnpm build:staged`
+//     (→ dist.next/) + a `--help` smoke-check all run while the OLD daemon is
+//     still serving. Any failure aborts WITHOUT restarting, so a broken build
+//     never takes the daemon down — the running process keeps its in-memory
+//     code until a verified build is in place. The live `dist/` is NEVER
+//     touched while the old process runs: its code is a rolldown chunk graph
+//     resolved lazily from disk (ESM dynamic import), so an in-place rebuild
+//     used to crash any not-yet-loaded chunk import during the build + drain
+//     window (2026-06-30 prod: a pairing approval hit
+//     `Cannot find module dist/welcome-card-<oldhash>.js` and preheat +
+//     welcome card were lost until the next manual restart).
 //   - Restart is an exit, not an in-process re-exec: we drop a restart-sentinel,
-//     trigger gracefulShutdown with UPDATE_RESTART_EXIT_CODE, and the external
-//     supervisor (run.sh / systemd) relaunches `node dist/cli.js`
+//     trigger gracefulShutdown with UPDATE_RESTART_EXIT_CODE, and cli.ts
+//     promotes dist.next → dist (old dist parked as dist.prev for rollback)
+//     synchronously right before process.exit — after every drain, when no
+//     further lazy import can occur (see src/staged-dist.ts). The external
+//     supervisor (run.sh / systemd) then relaunches `node dist/cli.js`
 //     onto the freshly-built dist. On next boot announceRestartIfPending() reads
 //     the sentinel and DMs the admin a "now running <newBuild>" confirmation —
 //     closing the loop the admin can't otherwise see (the bot just goes quiet
 //     across the restart).
+//   - Single-flight: one update at a time. Concurrent `/admin version update`
+//     (two admins, or one admin double-sending) would race pnpm install/build
+//     on the same node_modules / dist.next and could produce a corrupt bundle;
+//     the second call is refused with an "already in progress" notice. The
+//     lock is held FOREVER once a restart is scheduled — the process is going
+//     down, and a second update during the drain window must not start a
+//     build that the swap-at-exit would promote half-written.
 //   - No hot-reload: Feishu ws subscriptions, in-memory ALS state, and runtime
 //     worker pools cannot transfer across processes, so a full restart is the
 //     honest unit. Durability (TaskRun ledger resume, bg-task reschedule,
@@ -28,6 +45,7 @@ import { triggerUpdateRestart } from './restart-coordinator.js'
 import { getFeishuSender } from './channels/feishu/sender-registry.js'
 import { buildSystemNoticeCard, type SystemNoticeKind } from './channels/feishu/system-notice.js'
 import { runProcess } from './runtime/process.js'
+import { STAGED_DIST_DIR } from './staged-dist.js'
 import { getBuildId, repoRoot, VERSION } from './version.js'
 
 // git ops are quick; pnpm install/build can be slow on a cold node_modules or a
@@ -198,10 +216,51 @@ export type RunUpdateOptions = {
  *  preview / already-current. */
 export type UpdateResult = { text: string; severity: SystemNoticeKind }
 
+// ── single-flight lock ───────────────────────────────────────────────────────
+
+// In-process is the right scope: all admins' slashes land in this one daemon,
+// and the checkout being updated is the one this process runs from.
+let updateInFlight = false
+
+/** Test seam + guard primitive. Returns false when an update already holds the
+ *  lock. Production code must only take the lock through runUpdate(). */
+export function beginUpdateSingleFlight(): boolean {
+  if (updateInFlight) {
+    return false
+  }
+  updateInFlight = true
+  return true
+}
+
+/** Release the single-flight lock (failure paths / tests). The scheduled-
+ *  restart success path deliberately never releases — see the header note. */
+export function endUpdateSingleFlight(): void {
+  updateInFlight = false
+}
+
 /** Execute the `update` verb of `/admin version`. On the success path it ALSO
  *  schedules the restart (after a short flush delay); the returned text is the
  *  "rebuilt, restarting…" notice. */
 export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateResult> {
+  if (!beginUpdateSingleFlight()) {
+    return { text: `${t('admin.update.inProgress')}\n`, severity: 'warning' }
+  }
+  let restartScheduled = false
+  try {
+    return await runUpdateLocked(options, () => {
+      restartScheduled = true
+    })
+  } finally {
+    if (!restartScheduled) {
+      endUpdateSingleFlight()
+    }
+  }
+}
+
+async function runUpdateLocked(
+  options: RunUpdateOptions,
+  onRestartScheduled: () => void,
+): Promise<UpdateResult> {
   const probe = await collectGitState()
   if ('error' in probe) {
     return { text: `${probe.error}\n`, severity: 'error' }
@@ -238,8 +297,11 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateR
     }
   }
 
-  // Install to match the (possibly updated) lockfile, then build. A failure here
-  // leaves the running daemon on its old in-memory code; we do NOT restart.
+  // Install to match the (possibly updated) lockfile, then build into the
+  // staging dir (dist.next/) so the running daemon's dist/ stays intact for
+  // lazy chunk imports until the swap at exit. A failure here leaves the
+  // running daemon on its old in-memory code AND its old on-disk dist; we do
+  // NOT restart.
   const installed = await buildStep('pnpm', ['install', '--frozen-lockfile'])
   if (!installed.ok) {
     return {
@@ -247,15 +309,16 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateR
       severity: 'error',
     }
   }
-  const built = await buildStep('pnpm', ['build'])
+  const built = await buildStep('pnpm', ['build:staged'])
   if (!built.ok) {
     return {
       text: `${t('admin.update.buildFailed', { detail: tail(built.err || built.out) })}\n`,
       severity: 'error',
     }
   }
-  // Smoke-check the freshly built bundle before betting the restart on it.
-  const verified = await buildStep('node', ['dist/cli.js', '--help'])
+  // Smoke-check the freshly built bundle IN the staging dir before betting the
+  // restart on it (this is exactly the bundle the swap will promote).
+  const verified = await buildStep('node', [`${STAGED_DIST_DIR}/cli.js`, '--help'])
   if (!verified.ok) {
     return {
       text: `${t('admin.update.verifyFailed', { detail: tail(verified.err || verified.out) })}\n`,
@@ -275,6 +338,7 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateR
   // Schedule the restart so this reply (and its card) reaches Feishu first. If
   // no supervisor handler is installed (shouldn't happen in a running daemon),
   // the sentinel still records the intent and the admin sees the notice.
+  onRestartScheduled()
   setTimeout(() => {
     triggerUpdateRestart()
   }, RESTART_FLUSH_DELAY_MS).unref?.()

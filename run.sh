@@ -7,10 +7,12 @@
 # own:
 #
 #   - `/admin version update` restart (exit 75): the slash handler has already
-#     pulled + built + verified the new dist before exiting, so the supervisor
-#     only has to relaunch — it deliberately does NOT pull or build, so a broken
-#     build can never reach this loop (the handler aborts without exiting on
-#     failure).
+#     pulled + built into dist.next/ + verified it, and cli.ts swapped it into
+#     dist/ right before exiting (old build parked as dist.prev/), so the
+#     supervisor only has to relaunch — it deliberately does NOT pull or build,
+#     so a broken build can never reach this loop (the handler aborts without
+#     exiting on failure). The dist.next promotion below only covers a crash
+#     between the swap's two renames.
 #   - crash (any other non-zero exit): relaunch after a short pause.
 #
 # Fast-fail guard: a daemon that exits non-zero within MIN_HEALTHY_SECONDS is a
@@ -43,6 +45,14 @@ MAX_FAST_FAILS=3         # this many back-to-back fast crashes → give up and s
 
 fast_fails=0
 while true; do
+  # Crash-window recovery for the self-update staged-build swap (cli.ts does
+  # `mv dist dist.prev && mv dist.next dist` right before exit 75): if the
+  # process died between the two renames there is no dist/ but a verified
+  # dist.next/ — promote it so the relaunch has a build to run.
+  if [ ! -d dist ] && [ -d dist.next ]; then
+    echo "[run.sh] no dist/ but staged dist.next/ present; promoting staged build" >&2
+    mv dist.next dist
+  fi
   start=$(date +%s)
   node dist/cli.js "$@"
   code=$?

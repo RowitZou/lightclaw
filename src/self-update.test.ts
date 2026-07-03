@@ -4,11 +4,15 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, before, describe, test } from 'node:test'
 
+import { t } from './i18n/index.js'
 import { setLightclawHomeOverride } from './paths.js'
 import { UPDATE_RESTART_EXIT_CODE } from './restart-coordinator.js'
 import {
+  beginUpdateSingleFlight,
   classifyGitState,
+  endUpdateSingleFlight,
   readAndClearRestartSentinel,
+  runUpdate,
   writeRestartSentinel,
   type RestartSentinel,
 } from './self-update.js'
@@ -72,6 +76,34 @@ describe('restart sentinel', () => {
 
   test('absent sentinel reads as null', () => {
     assert.equal(readAndClearRestartSentinel(), null)
+  })
+})
+
+describe('update single-flight', () => {
+  test('the lock admits exactly one holder until released', () => {
+    assert.equal(beginUpdateSingleFlight(), true)
+    try {
+      assert.equal(beginUpdateSingleFlight(), false)
+    } finally {
+      endUpdateSingleFlight()
+    }
+    assert.equal(beginUpdateSingleFlight(), true)
+    endUpdateSingleFlight()
+  })
+
+  test('runUpdate refuses while another update holds the lock (no git/build spawned)', async () => {
+    // Concurrent `/admin version update` (two admins, or a double-send) racing
+    // pnpm install/build on the same node_modules / dist.next can corrupt the
+    // staged bundle; the second call must bail out BEFORE collectGitState —
+    // this test would hang on a real `git fetch` if it did not.
+    assert.equal(beginUpdateSingleFlight(), true)
+    try {
+      const result = await runUpdate()
+      assert.equal(result.severity, 'warning')
+      assert.equal(result.text, `${t('admin.update.inProgress')}\n`)
+    } finally {
+      endUpdateSingleFlight()
+    }
   })
 })
 

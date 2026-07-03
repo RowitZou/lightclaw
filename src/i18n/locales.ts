@@ -196,6 +196,7 @@ export const LOCALES = {
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
     // ---- /admin version update (self-update + supervised restart) ----
+    'admin.update.inProgress': '已有一次更新正在进行中（拉取/构建/重启排程），本次请求已忽略。',
     'admin.update.dirty': '已取消：部署检出有未提交改动，拉取会覆盖它们。请先清理工作树再更新。',
     'admin.update.upToDate': '已是最新（{sha}），无需更新。',
     'admin.update.diverged': '已取消：本地分支已分叉（领先 {ahead} / 落后 {behind} 个提交），无法快进。请手动处理后再更新。',
@@ -1248,6 +1249,7 @@ export const LOCALES = {
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
     // ---- /admin version update (self-update + supervised restart) ----
+    'admin.update.inProgress': 'An update is already in progress (pull/build/restart pending); this request was ignored.',
     'admin.update.dirty': 'Aborted: the deployment checkout has uncommitted changes; a pull would clobber them. Clean the working tree first, then update.',
     'admin.update.upToDate': 'Already up to date ({sha}); nothing to update.',
     'admin.update.diverged': 'Aborted: the local branch has diverged (ahead {ahead} / behind {behind}); not a fast-forward. Resolve by hand, then update.',

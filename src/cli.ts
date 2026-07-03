@@ -36,8 +36,9 @@ import {
 import { setRestartEventFloorMs } from './restart-window.js'
 import { announceRestart, readAndClearRestartSentinel } from './self-update.js'
 import { runWithSessionContext } from './session-context.js'
+import { promoteStagedDist } from './staged-dist.js'
 import { getRuntimePool } from './state.js'
-import { VERSION, getBuildId } from './version.js'
+import { VERSION, getBuildId, repoRoot } from './version.js'
 
 type CliArgs = {
   help: boolean
@@ -87,6 +88,21 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   await getRuntimePool().releaseAll().catch(error => {
     process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
   })
+  // Update restart: promote the staged build (dist.next → dist, old dist
+  // parked as dist.prev) HERE — after every drain, synchronously, so no lazy
+  // chunk import can race the swap and the relaunch lands on the new build.
+  // A failed swap still exits 75: the old dist is intact, so the supervisor
+  // relaunches the previous build instead of no build at all.
+  if (exitCode === UPDATE_RESTART_EXIT_CODE) {
+    const swap = promoteStagedDist(repoRoot)
+    if (swap.promoted) {
+      process.stderr.write('[lightclaw] promoted staged build dist.next → dist (previous kept as dist.prev)\n')
+    } else if (swap.reason === 'swap-failed') {
+      process.stderr.write(`[lightclaw] staged build promotion FAILED (${swap.error}); relaunching on the previous build\n`)
+    } else {
+      process.stderr.write('[lightclaw] no staged build (dist.next) found; relaunching on the existing dist\n')
+    }
+  }
   // Flush the stderr tee so the shutdown drain lines land in the log file
   // before process.exit cuts the event loop.
   await flushLogTee().catch(() => {})

@@ -1,7 +1,9 @@
 // Build-time copy of bundled skill assets (scripts/ and references/) into
-// dist/skill-assets/<name>/. Runs after `tsdown` so that
+// <outDir>/skill-assets/<name>/. Runs after `tsdown` so that
 // `${LIGHTCLAW_SKILL_DIR}` placeholder resolves to a real on-disk directory
 // in production (where SKILL.md itself is already inlined into the JS bundle).
+// The optional first CLI arg is the output dir name relative to the repo root
+// (default `dist`; the self-update staged build passes `dist.next`).
 //
 // Phase 16 V1 bundled skills (remember / skillify) shipped without scripts/,
 // so this is effectively no-op for them. The empty placeholder directory is
@@ -16,8 +18,9 @@ import { SKILL_ASSET_SUBDIRS } from '../src/skill/skill-assets.js'
 async function main(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const repoRoot = path.resolve(here, '..')
+  const outDirName = process.argv[2] ?? 'dist'
   const bundledDir = path.join(repoRoot, 'src/skill/bundled')
-  const distAssetsDir = path.join(repoRoot, 'dist/skill-assets')
+  const distAssetsDir = path.join(repoRoot, outDirName, 'skill-assets')
 
   const entries = await readdir(bundledDir, { withFileTypes: true })
   for (const entry of entries) {

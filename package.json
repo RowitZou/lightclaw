@@ -14,6 +14,7 @@
     "dev": "tsx src/cli.ts",
     "prebuild": "pnpm gen:skills",
     "build": "tsdown src/cli.ts --format esm --out-dir dist --clean && pnpm copy:skill-assets",
+    "build:staged": "pnpm gen:skills && tsdown src/cli.ts --format esm --out-dir dist.next --clean && pnpm copy:skill-assets dist.next",
     "start": "node dist/cli.js",
     "pretypecheck": "pnpm gen:skills",
     "typecheck": "tsc --noEmit",
