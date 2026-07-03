@@ -7,6 +7,10 @@ import { tmpdir } from 'node:os'
 import { appendMessage, appendMessages, loadTranscript } from './storage.js'
 import { createUserMessage } from '../messages.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import {
+  createEmptySessionContext,
+  runWithSessionContext,
+} from '../session-context.js'
 
 // §十: sessions derive from <home>; isolate via the home override (the old
 // LIGHTCLAW_SESSIONS_DIR per-subdir env was removed).
@@ -67,5 +71,39 @@ describe('appendMessages (atomic batch transcript append)', () => {
       await loadTranscript('feishu:dm:one-write'),
       await loadTranscript('feishu:dm:n-writes'),
     )
+  })
+})
+
+describe('getSessionDir ambient-context mismatch guard', () => {
+  // Production shape (2026-07-03): AsyncLocalStorage leaks the startup
+  // bootstrap SessionContext into channel socket handlers, so a bare
+  // loadTranscript(sessionId) there resolved another user's session into the
+  // bootstrap identity's sessions dir and read empty — every non-bootstrap
+  // user's turn reached the model with zero history while writes (made inside
+  // the correctly-hydrated per-turn scope) kept accumulating on disk.
+  it('reads a session living under a user dir even when the ambient context points at another identity', async () => {
+    const sid = 'feishu:dm:oc_alice_chat'
+    const aliceSessions = path.join(tmpHome, 'users', 'alice', 'sessions')
+    const bootstrapSessions = path.join(tmpHome, 'users', 'admin', 'sessions')
+    const batch = [createUserMessage('hello', null)]
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: aliceSessions }),
+      () => appendMessages(sid, batch),
+    )
+    const loaded = await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: bootstrapSessions }),
+      () => loadTranscript(sid),
+    )
+    assert.deepEqual(loaded, batch)
+  })
+
+  it('still creates a genuinely new session under the ambient context dir', async () => {
+    const sid = 'feishu:dm:brand_new'
+    const bobSessions = path.join(tmpHome, 'users', 'bob', 'sessions')
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: bobSessions }),
+      () => appendMessages(sid, [createUserMessage('hi', null)]),
+    )
+    assert.ok(existsSync(path.join(bobSessions, sid, 'transcript.jsonl')))
   })
 })

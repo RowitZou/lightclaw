@@ -885,18 +885,27 @@ export class ChannelRunner {
         await this.stopTyping(message, typingToken)
       }
       try {
-        const meta = await loadMeta(sessionId)
-        const messages = await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
         // Wrap the entire turn in a SessionContext scope BEFORE
         // resetSessionContext resolves the real fields. The placeholder ctx
         // is then hydrated in-place so downstream state getters see only
         // this message's session data; no module-level session singleton
         // exists in the channel or terminal paths.
+        //
+        // sessionsDir is resolved here, NOT left to the ambient
+        // AsyncLocalStorage: handleMessage is reached from callbacks whose
+        // async resources were created inside OTHER scopes (channel socket
+        // handlers carry the startup bootstrap context; wake/resume callers
+        // carry their own), so any session storage read before this scope
+        // would resolve against whatever identity happened to leak in —
+        // 2026-07-03 prod: loadTranscript hit the bootstrap identity's
+        // sessions dir and every non-bootstrap user's turn reached the
+        // model with zero history.
         const sessionContext = createEmptySessionContext({
           sessionId,
           currentUserId: userId,
           channel: 'feishu',
+          sessionsDir: userSessionsRoot(userId),
           resourceGrantTarget: this.strategy.resolveResourceGrantTarget?.(effectiveMessage),
         })
         const approver = this.strategy.createPermissionApprover?.(
@@ -919,6 +928,11 @@ export class ChannelRunner {
         // recall-root index.
         sessionContext.openerMessageId = message.synthetic ? undefined : message.messageId
         await runWithSessionContext(sessionContext, async () => {
+        // Load session state only INSIDE the scope above, where sessionsDir
+        // is pinned to this message's user — never under the caller's
+        // (possibly leaked) ambient context.
+        const meta = await loadMeta(sessionId)
+        const messages = await loadTranscript(sessionId)
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
           channel: 'feishu',
@@ -2293,14 +2307,17 @@ export class ChannelRunner {
     )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
-    // Load transcript from disk so a read slash (anything that
-    // wants ctx.messages.length) sees the persisted message count instead
-    // of 0. Catches ENOENT for fresh users — empty array is fine.
-    const messagesOnDisk = await loadTranscript(sessionId).catch(() => [])
-    const meta = await loadMeta(sessionId).catch(() => null)
-    const createdAt = meta?.createdAt ?? Date.now()
-    const result = await runWithSessionContext(ctx, () =>
-      dispatchChannelSlash(message.text, {
+    const result = await runWithSessionContext(ctx, async () => {
+      // Load transcript from disk so a read slash (anything that
+      // wants ctx.messages.length) sees the persisted message count instead
+      // of 0. Catches ENOENT for fresh users — empty array is fine.
+      // Loaded INSIDE the ctx scope so session storage resolves against this
+      // user's sessions dir, not whatever ambient context leaked into the
+      // channel callback (same class as the handleMessage load reorder).
+      const messagesOnDisk = await loadTranscript(sessionId).catch(() => [])
+      const meta = await loadMeta(sessionId).catch(() => null)
+      const createdAt = meta?.createdAt ?? Date.now()
+      return dispatchChannelSlash(message.text, {
         config,
         sessionId,
         createdAt,
@@ -2314,8 +2331,8 @@ export class ChannelRunner {
         async persistMeta() {
           // Read-fast-path never mutates session meta — the slash is read-only.
         },
-      }),
-    )
+      })
+    })
     if (!result.handled) {
       // Whitelist drift: parseFastPathSlash matched but dispatch did not. Be
       // visible about it so a future reviewer notices instead of silent drop.

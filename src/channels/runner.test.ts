@@ -10,7 +10,12 @@ import {
 } from '../__tests__/concurrency-helpers.js'
 import { createUser, addLink, setAdmin } from '../identity/store.js'
 import { setIdentityPreference } from '../identity/preferences.js'
-import { saveMeta } from '../session/storage.js'
+import { appendMessages, saveMeta } from '../session/storage.js'
+import { createAssistantMessage, createUserMessage } from '../messages.js'
+import {
+  createEmptySessionContext,
+  runWithSessionContext,
+} from '../session-context.js'
 import { setStreamChatForTest } from '../query.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setLang } from '../i18n/index.js'
@@ -913,6 +918,85 @@ describe('ChannelRunner idle-when-dirty session-memory refresh (Feature A)', () 
       )
     } finally {
       setSessionMemoryWriterForTest(null)
+      setStreamChatForTest(null)
+    }
+  })
+})
+
+describe('ChannelRunner history load under a leaked ambient SessionContext', () => {
+  // Production shape (2026-07-03): channel socket handlers carry the startup
+  // bootstrap SessionContext (AsyncLocalStorage propagates into callbacks whose
+  // async resources were created inside that scope), so handleMessage's
+  // pre-scope loadTranscript resolved the inbound user's sessionId into the
+  // BOOTSTRAP identity's sessions dir → empty → the model received only the
+  // current message. Writes ran inside the correctly-hydrated per-turn scope,
+  // so transcripts kept growing on disk while every turn stayed amnesiac.
+  it('a turn handled under a foreign ambient context still sends the persisted history to the model', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_history'
+    strategy.resolveSessionId = () => sessionId
+
+    // A prior turn persisted where the channel turn itself writes: the
+    // inbound user's own sessions dir.
+    const aliceSessions = path.join(tmpHome, 'users', 'alice', 'sessions')
+    const priorUser = createUserMessage('请翻译这封英文邮件', null)
+    const priorAssistant = createAssistantMessage({
+      content: [{ type: 'text', text: '好的，译文如下……' }],
+      stopReason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      parentUuid: priorUser.uuid,
+    })
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: aliceSessions }),
+      () => appendMessages(sessionId, [priorUser, priorAssistant]),
+    )
+
+    const capturedWire: unknown[][] = []
+    setStreamChatForTest(async function* (params: {
+      messages: unknown[]
+    }): AsyncGenerator<StreamEvent> {
+      capturedWire.push(params.messages)
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'ok' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+
+    // The leaked scope: a context whose sessionsDir belongs to a DIFFERENT
+    // identity, exactly what the bootstrap console context looks like to a
+    // non-bootstrap user's inbound message.
+    const leakedBootstrapCtx = createEmptySessionContext({
+      sessionId: 'terminal-console',
+      sessionsDir: path.join(tmpHome, 'users', 'admin-boot', 'sessions'),
+    })
+    try {
+      await runWithSessionContext(leakedBootstrapCtx, () =>
+        runner.handleMessage(
+          makeFakeFeishuMessage({
+            sender: 'ou_alice',
+            text: '上面内容翻译成中文',
+            chatId: sessionId,
+          }),
+        ),
+      )
+      assert.equal(capturedWire.length, 1, 'exactly one model call')
+      const wire = capturedWire[0]!
+      assert.ok(
+        wire.length > 1,
+        `model must receive the persisted history, got ${wire.length} message(s)`,
+      )
+      assert.match(
+        JSON.stringify(wire[0]),
+        /请翻译这封英文邮件/,
+        'first wire message is the persisted prior turn',
+      )
+    } finally {
       setStreamChatForTest(null)
     }
   })

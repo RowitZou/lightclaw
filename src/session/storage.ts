@@ -93,7 +93,22 @@ async function ensureSessionDir(sessionId: string): Promise<string> {
 export function getSessionDir(sessionId: string): string {
   const contextDir = getCurrentSessionContext()?.sessionsDir
   if (contextDir) {
-    return path.join(contextDir, sessionId)
+    const contextScopedDir = path.join(contextDir, sessionId)
+    if (existsSync(contextScopedDir)) {
+      return contextScopedDir
+    }
+    // Ambient-context mismatch guard: AsyncLocalStorage leaks into callbacks
+    // whose async resources were created inside another scope — e.g. channel
+    // socket handlers registered during startup carry the terminal-console
+    // bootstrap context, so a bare `loadTranscript(sessionId)` there would
+    // resolve another user's session into the bootstrap identity's dir and
+    // read empty (2026-07-03 prod: every non-bootstrap user's turn reached
+    // the model with zero history). When the session does not live under
+    // the ambient dir but does exist under some user's sessions dir, the
+    // on-disk location wins — sessionIds are globally unique (chat ids /
+    // canonical names are embedded), so the scan cannot be ambiguous. A
+    // genuinely new session still lands under the ambient dir.
+    return findUserSessionDir(sessionId) ?? contextScopedDir
   }
   const unboundDir = path.join(resolveSessionsDir(), sessionId)
   if (existsSync(unboundDir)) {
