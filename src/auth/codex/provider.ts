@@ -337,7 +337,9 @@ export function createCodexAuthProvider(
   const http = opts.http ?? buildDefaultHttp(buildProxyDispatcher(opts.proxy))
   const skew = opts.refreshSkewSeconds ?? CODEX_REFRESH_SKEW_SECONDS
 
-  async function getCredentials(): Promise<AuthCredentials> {
+  async function getCredentials(
+    credOpts?: { forceRefresh?: boolean },
+  ): Promise<AuthCredentials> {
     const stored = readStored()
     if (!stored) {
       throw new AuthError({
@@ -348,7 +350,10 @@ export function createCodexAuthProvider(
           `\`/admin endpoint add <alias> --type codex --login\` — or import an auth.json with \`--auth-path <file>\`.`,
       })
     }
-    if (!isExpiringSoon(stored.tokens.expires_at, skew)) {
+    // forceRefresh: the caller saw a wire 401 on this token — the server has
+    // revoked it even though the local expiry clock says it is still valid,
+    // so skip the clock and go straight to the refresh grant.
+    if (!credOpts?.forceRefresh && !isExpiringSoon(stored.tokens.expires_at, skew)) {
       return {
         accessToken: stored.tokens.access_token,
         expiresAt: stored.tokens.expires_at,

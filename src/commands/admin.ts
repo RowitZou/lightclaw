@@ -547,7 +547,8 @@ async function addAdminEndpoint(
       ctx,
       t('admin.endpoint.addedCodex', { name: alias }),
       endpointDetails(endpoint),
-      [probe.summary],
+      // Import-path-only warning — see the /config codex import site.
+      [probe.summary, `\n${t('config.codex.importShareWarning')}`],
     )
   }
 

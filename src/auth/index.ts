@@ -31,9 +31,12 @@ export function getAuthProvider(name: string): AuthProvider {
 }
 
 /** Convenience: resolve credentials for a provider by name.
- *  Equivalent to `getAuthProvider(name).getCredentials()`. */
-export async function getCredentials(name: string): Promise<AuthCredentials> {
-  return getAuthProvider(name).getCredentials()
+ *  Equivalent to `getAuthProvider(name).getCredentials(opts)`. */
+export async function getCredentials(
+  name: string,
+  opts?: { forceRefresh?: boolean },
+): Promise<AuthCredentials> {
+  return getAuthProvider(name).getCredentials(opts)
 }
 
 /** Names of all registered providers — for `/admin endpoint`. */

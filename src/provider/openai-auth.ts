@@ -9,8 +9,12 @@ import type {
 } from 'openai/resources/responses/responses'
 import type { FunctionTool } from 'openai/resources/responses/responses'
 
-import { getCredentials, type AuthCredentials } from '../auth/index.js'
+import { AuthError, getCredentials, type AuthCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
+import {
+  clearCodexRevocationNotice,
+  reportCodexCredentialRevoked,
+} from '../auth/codex/revocation-notice.js'
 import type { ApiKeyEndpoint, OAuthEndpoint } from '../config.js'
 import { getSessionId } from '../state.js'
 import {
@@ -429,8 +433,9 @@ export type OpenAIAuthProviderOptions = {
   /** Internal per-user override (PR5 checkpoint 2 BYO codex). When set,
    *  streamChat credentials are resolved from this function instead of the
    *  global auth-provider registry, so a BYO codex endpoint refreshes from its
-   *  owner's per-user store rather than the admin global `<home>/auth/codex.json`. */
-  credentialsProvider?: () => Promise<AuthCredentials>
+   *  owner's per-user store rather than the admin global `<home>/auth/codex.json`.
+   *  `forceRefresh` is passed through on the wire-401 retry path. */
+  credentialsProvider?: (opts?: { forceRefresh?: boolean }) => Promise<AuthCredentials>
   /** apiKey mode (schema `openai`, 2026-06-27): this Responses provider is
    *  driven by a static Bearer apiKey against an arbitrary OpenAI-compatible
    *  gateway, NOT the Codex OAuth backend. When set:
@@ -517,15 +522,27 @@ export function createOpenAIAuthProvider(
   // apiKey mode resolves a static Bearer key off the endpoint (no codex store,
   // no token refresh); codex mode resolves OAuth credentials from the per-user
   // override or the global auth provider.
-  const resolveCredentials: () => Promise<AuthCredentials> = apiKeyMode
-    ? async () => ({
-        accessToken: (endpoint as ApiKeyEndpoint).apiKey,
-        // Static apiKey never expires / refreshes; the refresh path is
-        // codex-only and is never reached in apiKey mode.
-        expiresAt: Number.MAX_SAFE_INTEGER,
-        accountId: '',
-      })
-    : (opts.credentialsProvider ?? (() => getCredentials(authName)))
+  const resolveCredentials: (credOpts?: { forceRefresh?: boolean }) => Promise<AuthCredentials> =
+    apiKeyMode
+      ? async () => ({
+          accessToken: (endpoint as ApiKeyEndpoint).apiKey,
+          // Static apiKey never expires / refreshes; the refresh path is
+          // codex-only and is never reached in apiKey mode.
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          accountId: '',
+        })
+      : (opts.credentialsProvider ?? (credOpts => getCredentials(authName, credOpts)))
+  // Credential identity for the revocation-notice dedup key (codex mode only):
+  // BYO endpoints carry `credentialOwner` + `authRef`; the admin-global codex
+  // endpoint carries neither and the notice resolves its owner to admin.
+  const noticeIdentity = apiKeyMode
+    ? null
+    : {
+        ...('credentialOwner' in endpoint && endpoint.credentialOwner
+          ? { credentialOwner: endpoint.credentialOwner }
+          : {}),
+        ...('authRef' in endpoint && endpoint.authRef ? { authRef: endpoint.authRef } : {}),
+      }
   // apiKey mode: respect the endpoint's baseUrl (the OpenAI SDK appends
   // `/responses`); if absent, fall through to the SDK's api.openai.com default.
   // codex mode: default to the ChatGPT backend.
@@ -552,6 +569,52 @@ export function createOpenAIAuthProvider(
         : {}),
       ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
     })
+
+  /** Resolve credentials, run one Responses request, and — codex mode only —
+   *  retry ONCE with a forced token refresh on a wire 401. A locally-valid
+   *  access token that 401s means server-side revocation (another client's
+   *  login rotated the token family): the local expiry clock can never see
+   *  that, so the 401 itself is the staleness signal. If the forced refresh
+   *  comes back `invalid_grant` the rotation is CONFIRMED — the credential
+   *  owner gets one warning card (`reportCodexCredentialRevoked`) and the
+   *  AuthError (fatal per `CREDENTIAL_FAILURE_PATTERN`) surfaces to the turn.
+   *  apiKey mode never retries: a 401 there is a bad static key, and a
+   *  "refresh" would re-send the same key. */
+  async function requestWithAuthRetry<T>(
+    errorPrefix: string,
+    create: (client: OpenAI) => Promise<T>,
+  ): Promise<T> {
+    const credentials = await resolveCredentials()
+    // A successful resolve ends any recorded outage for this credential so a
+    // future revocation notifies again (re-login wrote a fresh token file).
+    if (noticeIdentity) clearCodexRevocationNotice(noticeIdentity)
+    try {
+      return await create(makeClient(credentials))
+    } catch (error) {
+      const status = isRecord(error) && typeof error.status === 'number' ? error.status : undefined
+      if (!noticeIdentity || status !== 401) {
+        throw formatOpenAIAuthError(errorPrefix, error)
+      }
+      let refreshed: AuthCredentials
+      try {
+        refreshed = await resolveCredentials({ forceRefresh: true })
+      } catch (refreshError) {
+        if (
+          refreshError instanceof AuthError &&
+          refreshError.code === 'refresh_consumed_by_other_client'
+        ) {
+          reportCodexCredentialRevoked({ ...noticeIdentity, detail: refreshError.message })
+        }
+        throw refreshError
+      }
+      clearCodexRevocationNotice(noticeIdentity)
+      try {
+        return await create(makeClient(refreshed))
+      } catch (retryError) {
+        throw formatOpenAIAuthError(errorPrefix, retryError)
+      }
+    }
+  }
 
   return {
     name: providerName,
@@ -594,9 +657,6 @@ export function createOpenAIAuthProvider(
       ? {}
       : { idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 } as const }),
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      const credentials = await resolveCredentials()
-      const client = makeClient(credentials)
-
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`
       // (run once at construction by getProviderFor → capability cache).
@@ -631,14 +691,10 @@ export function createOpenAIAuthProvider(
         promptCacheKey: getSessionId(),
       })
 
-      let stream: Awaited<ReturnType<typeof client.responses.create>>
-      try {
-        stream = await client.responses.create(body, {
-          signal: params.signal,
-        })
-      } catch (error) {
-        throw formatOpenAIAuthError('OpenAI Responses streamChat request failed', error)
-      }
+      const stream = await requestWithAuthRetry(
+        'OpenAI Responses streamChat request failed',
+        client => client.responses.create(body, { signal: params.signal }),
+      )
 
       yield* processResponseStream(
         stream as AsyncIterable<ResponseStreamEvent>,
@@ -699,12 +755,9 @@ export function createOpenAIAuthProvider(
       if (images.length === 0) {
         throw new Error('describeImage requires at least one image.')
       }
-      const credentials = await resolveCredentials()
-      const client = makeClient(credentials)
-
-      let stream: AsyncIterable<ResponseStreamEvent>
-      try {
-        stream = await client.responses.create({
+      const stream = await requestWithAuthRetry(
+        'OpenAI Responses image request failed',
+        client => client.responses.create({
           model: params.model,
           instructions:
             params.system ??
@@ -730,10 +783,8 @@ export function createOpenAIAuthProvider(
           store: false,
         } as never, {
           signal: params.signal,
-        }) as unknown as AsyncIterable<ResponseStreamEvent>
-      } catch (error) {
-        throw formatOpenAIAuthError('OpenAI Responses image request failed', error)
-      }
+        }) as Promise<unknown> as Promise<AsyncIterable<ResponseStreamEvent>>,
+      )
       let outputText = ''
       for await (const event of processResponseStream(stream, params.signal)) {
         if (event.type === 'text') {

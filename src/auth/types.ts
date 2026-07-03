@@ -62,10 +62,15 @@ export type AuthProvider = {
    * the provider's refresh skew, calls refresh if needed, persists the
    * refreshed tokens, and returns the live access bundle.
    *
+   * `forceRefresh` skips the local expiry check and refreshes unconditionally.
+   * The wire caller uses it after a 401 on a locally-"valid" access token —
+   * server-side revocation (another client's login rotated the family) is
+   * invisible to the expiry clock, so the 401 itself is the staleness signal.
+   *
    * Throws `AuthError` for missing / invalid / unrefreshable state. The
    * caller surfaces the message to the operator.
    */
-  getCredentials(): Promise<AuthCredentials>
+  getCredentials(opts?: { forceRefresh?: boolean }): Promise<AuthCredentials>
 
   /** Delete the stored token file. Idempotent — missing file is OK. */
   logout(): Promise<void>

@@ -579,7 +579,11 @@ async function addEndpoint(
       ctx,
       t('config.endpoint.addedCodex', { name: alias, ref: summary.name }),
       endpointDetails(endpoint),
-      [probe.summary],
+      // The share warning is import-path-only: an --auth-path import COPIES the
+      // codex CLI's rotating refresh token, so the two sides invalidate each
+      // other on the next refresh. --login mints an independent token family
+      // and does not need (or get) this warning.
+      [probe.summary, `\n${t('config.codex.importShareWarning')}`],
     )
   }
 

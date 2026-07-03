@@ -100,11 +100,12 @@ function buildProvider(
         const authRef = endpoint.authRef
         const proxy = endpoint.proxy
         return createOpenAIAuthProvider(endpoint, {
-          credentialsProvider: () =>
+          credentialsProvider: credOpts =>
             getUserCodexCredentials({
               canonicalUser: owner,
               name: parseCodexAuthRef(authRef),
               proxy,
+              ...(credOpts?.forceRefresh ? { forceRefresh: true } : {}),
             }),
         })
       }

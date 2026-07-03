@@ -953,6 +953,10 @@ export const LOCALES = {
     'config.byo.invalidConfig': '用户配置无效：{detail}',
     'config.byo.rejected': '错误：该改动会让用户配置不可用（{detail}）；未写入。',
     'config.codex.importFail': '错误：导入 Codex 凭据失败；{detail}。',
+    'config.codex.importShareWarning':
+      '⚠️ 注意：--auth-path 导入后，此处与 codex CLI 共用同一个 refresh token（单次有效、每次刷新轮换）。任一侧刷新都会使另一侧凭证失效——如果你还会继续使用 codex CLI，推荐改用 --login 网页登录，二者互不影响。',
+    'auth.codex.revokedNotice':
+      'Codex 凭证（{ref}）的 refresh token 已被其他客户端轮换或撤销，该端点已不可用，需要重新登录。\n\n{detail}',
     // ---- codex device-login (web login) ----
     'config.codex.login.started':
       '已发起 Codex 网页登录，请在私聊查看卡片完成（链接 + 验证码，15 分钟内有效）。',
@@ -1998,6 +2002,10 @@ export const LOCALES = {
     'config.byo.invalidConfig': 'User config is invalid: {detail}',
     'config.byo.rejected': 'Error: this change would leave the user config unusable ({detail}); not written.',
     'config.codex.importFail': 'Error: failed to import Codex credentials; {detail}.',
+    'config.codex.importShareWarning':
+      '⚠️ Note: after an --auth-path import, this credential SHARES one refresh token with the codex CLI (single-use, rotated on every refresh). A refresh on either side invalidates the other — if you keep using the codex CLI, prefer --login (web login), which mints an independent token.',
+    'auth.codex.revokedNotice':
+      'The Codex credential ({ref}) refresh token was rotated or revoked by another client. This endpoint is down until you re-login.\n\n{detail}',
     // ---- codex device-login (web login) ----
     'config.codex.login.started':
       'Started Codex web login — complete it via the card in your DM (link + code, valid 15 min).',
