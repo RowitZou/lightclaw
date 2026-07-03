@@ -640,7 +640,10 @@ export function createOpenAIAuthProvider(
         throw formatOpenAIAuthError('OpenAI Responses streamChat request failed', error)
       }
 
-      yield* processResponseStream(stream as AsyncIterable<ResponseStreamEvent>)
+      yield* processResponseStream(
+        stream as AsyncIterable<ResponseStreamEvent>,
+        params.signal,
+      )
     },
     detectStaticDropKinds(): readonly AttachmentKind[] {
       // Probe convertMessagesToResponsesInput with one block of every
@@ -732,7 +735,7 @@ export function createOpenAIAuthProvider(
         throw formatOpenAIAuthError('OpenAI Responses image request failed', error)
       }
       let outputText = ''
-      for await (const event of processResponseStream(stream)) {
+      for await (const event of processResponseStream(stream, params.signal)) {
         if (event.type === 'text') {
           outputText += event.text
         }
@@ -751,6 +754,7 @@ export function createOpenAIAuthProvider(
  */
 export async function* processResponseStream(
   stream: AsyncIterable<ResponseStreamEvent>,
+  signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   const pending = new Map<string, PendingFunctionCall>()
   let textBuffer = ''
@@ -898,8 +902,39 @@ export async function* processResponseStream(
     }
   }
 
-  // pending function_calls without a corresponding output_item.done
-  // (defensive — should not happen in normal flow).
+  // An aborted stream can end iteration WITHOUT throwing: the SDK's stream
+  // reader treats AbortError as "user cancelled, end gracefully". Falling
+  // through would finalize whatever half content accumulated — a
+  // function_call cut mid arguments delta degrades to `input: {}` in the
+  // pending flush below, which query.ts dispatches, Zod rejects, and the
+  // model then re-issues the same call next turn: an unbounded model-driven
+  // retry loop that no framework retry cap ever sees (2026-06-29 prod on the
+  // anthropic-schema sibling: 186 idle aborts → 2.5h loop, quota burned
+  // negative). A terminal frame (response.completed/failed/incomplete →
+  // stopReason set) means the response finished before the abort landed —
+  // keep it.
+  if (stopReason === null && signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(
+          'OpenAI Responses stream aborted before a terminal frame; partial output discarded.',
+        )
+  }
+  // Same truncation without an abort: upstream/gateway closed the SSE
+  // connection mid function_call (output_item.added arrived, its
+  // output_item.done never did) and never sent a terminal frame. The
+  // accumulated arguments JSON is incomplete by construction — never emit it
+  // as a finished tool_use. "terminated" matches TRANSIENT_FAILURE_PATTERN so
+  // the failure routes into query.ts's bounded per-turn retry.
+  if (stopReason === null && pending.size > 0) {
+    throw new Error(
+      'OpenAI Responses stream terminated mid function_call arguments before a terminal frame (likely upstream/proxy truncation); a retry should recover.',
+    )
+  }
+
+  // pending function_calls without a corresponding output_item.done despite
+  // a terminal frame having arrived (defensive — should not happen in
+  // normal flow).
   for (const [, slot] of pending) {
     const parsedInput = parseFunctionCallArguments(slot)
     toolUseBlocks.push({

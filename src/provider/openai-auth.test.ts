@@ -1058,3 +1058,91 @@ describe('openai-auth: provider mode (apiKey vs codex)', () => {
     assert.equal(provider.idleTimeouts, undefined)
   })
 })
+
+describe('openai-auth: processResponseStream truncation guards', () => {
+  // Regression (2026-06-29 prod incident, anthropic-schema sibling): a
+  // stream cut mid function_call arguments (no output_item.done, no
+  // terminal frame) must THROW, not finalize the half-accumulated JSON as
+  // `input: {}`. The `{}` path dispatches, Zod rejects, and the model
+  // re-issues the same call next turn — an unbounded model-driven retry
+  // loop no framework retry cap ever sees.
+  it('throws a transient error when the stream ends mid function_call without a terminal frame', async () => {
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{"label": "truncated mid-w',
+      },
+      // stream EOF: no output_item.done, no response.completed
+    ]
+    await assert.rejects(
+      collect(processResponseStream(fromArray(events) as never)),
+      (error: unknown) => {
+        assert.match(String(error), /terminated mid function_call/)
+        assert.equal(isTransientError(error), true, 'must route into the bounded transient retry')
+        return true
+      },
+    )
+  })
+
+  it('throws the abort reason when an aborted stream ends without a terminal frame', async () => {
+    // The SDK swallows AbortError as "user cancelled, end gracefully", so
+    // the generator sees a clean EOF. The signal is the only truncation
+    // witness left; its reason (IdleStreamError for the idle watchdog) must
+    // propagate so query.ts classifies the failure instead of accepting a
+    // partial turn.
+    const events = [
+      { type: 'response.output_text.delta', delta: 'partial tex' },
+    ]
+    const reason = new Error('stream idle > 30001ms (inter-event)')
+    const controller = new AbortController()
+    controller.abort(reason)
+    await assert.rejects(
+      collect(processResponseStream(fromArray(events) as never, controller.signal)),
+      (error: unknown) => error === reason,
+    )
+  })
+
+  it('a completed response is kept even when the signal aborted after the terminal frame', async () => {
+    const events = [
+      { type: 'response.output_text.delta', delta: 'done' },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 2 } },
+      },
+    ]
+    const controller = new AbortController()
+    controller.abort(new Error('late abort'))
+    const out = await collect(processResponseStream(fromArray(events) as never, controller.signal))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.stopReason, 'end_turn')
+  })
+
+  it('keeps the defensive pending flush when a terminal frame DID arrive without output_item.done', async () => {
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Write' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{"file_path":"/tmp/a.md"}',
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 4 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.content.length, 1)
+    assert.equal(stop.content[0].type, 'tool_use')
+  })
+})

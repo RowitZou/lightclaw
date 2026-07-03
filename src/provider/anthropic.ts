@@ -643,6 +643,41 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         }
       }
 
+      // An aborted stream can end iteration WITHOUT throwing: the SDK's
+      // stream reader treats AbortError as "user cancelled, end gracefully".
+      // Falling through would finalize whatever half content accumulated —
+      // a tool_use cut mid input_json_delta degrades to `input: {}` below,
+      // which query.ts dispatches, Zod rejects, and the model then re-issues
+      // the same call next turn: an unbounded model-driven retry loop that
+      // no framework retry cap ever sees (2026-06-29 prod: 186 inter-event
+      // idle aborts → 187 truncated Dispatch inputs → 2.5h loop, quota
+      // burned to -$0.219). A terminal frame (message_delta stop_reason)
+      // means the response completed before the abort landed — keep it.
+      if (stopReason === null && params.signal?.aborted) {
+        throw params.signal.reason instanceof Error
+          ? params.signal.reason
+          : new Error(
+              'Anthropic stream aborted before a terminal frame; partial output discarded.',
+            )
+      }
+      // Same truncation without an abort: upstream/relay closed the SSE
+      // connection mid tool_use (a block opened by content_block_start never
+      // got its content_block_stop) and never sent a stop_reason. The
+      // accumulated input JSON is incomplete by construction — never emit it
+      // as a finished tool_use. "terminated" matches TRANSIENT_FAILURE_PATTERN
+      // so the failure routes into query.ts's bounded per-turn retry. A
+      // model-authored malformed JSON on a PROPERLY closed block still takes
+      // the safeParseToolInput `{}` + Zod-error path — that one is the
+      // model's own mistake to read and fix.
+      if (
+        stopReason === null &&
+        [...contentBlocks.values()].some(isPendingToolUseBlock)
+      ) {
+        throw new Error(
+          'Anthropic stream terminated mid tool_use input before a terminal frame (likely upstream/proxy truncation); a retry should recover.',
+        )
+      }
+
       const finalContent = finalizeContentBlocks(contentBlocks)
       // A stream that closed without yielding any events at all (or yielded
       // events but produced no content blocks AND no stop_reason AND no
