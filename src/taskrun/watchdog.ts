@@ -879,7 +879,20 @@ async function applyEscalationBudget(
   const findingsByRoot = groupFindingsByRoot(findings)
   for (const [rootRunId, rootFindings] of findingsByRoot) {
     const rootEvents = eventsForRoot(rootRunId, input.runs, input.eventsByRun)
-    if (latestEscalatedFingerprint(rootEvents) === input.fingerprint) {
+    // "Stop waking until something moves" must watch the whole rooted TREE,
+    // not just the finding run's own event stream. The finding fingerprint
+    // only folds in the finding run's lastStateEventSeq, so main answering an
+    // escalation by settling a DESCENDANT (its events land on the child, the
+    // root's stream stays frozen) left the fingerprint identical and the
+    // suppression permanent — 2026-06-30 prod: two escalated idle-root runs
+    // stayed running for days while main had actually accepted a child 27min
+    // after the escalation. A state event anywhere in the tree after the
+    // escalation re-arms reporting; the budget then bounds it again.
+    const lastEscalated = latestEscalatedEvent(rootEvents)
+    if (
+      lastEscalated?.fingerprint === input.fingerprint &&
+      !hasStateEventAfter(rootEvents, lastEscalated.ts)
+    ) {
       suppressedRootIds.add(rootRunId)
       continue
     }
@@ -972,14 +985,20 @@ function countWatchdogReports(
   ).length
 }
 
-function latestEscalatedFingerprint(events: TaskRunEvent[]): string | undefined {
+function latestEscalatedEvent(
+  events: TaskRunEvent[],
+): { fingerprint: string; ts: number } | undefined {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index] as TaskRunEvent & { fingerprint?: unknown }
     if (event.kind === 'escalated' && typeof event.fingerprint === 'string') {
-      return event.fingerprint
+      return { fingerprint: event.fingerprint, ts: event.ts }
     }
   }
   return undefined
+}
+
+function hasStateEventAfter(events: TaskRunEvent[], ts: number): boolean {
+  return events.some(event => !WATCHDOG_EVENT_KINDS.has(event.kind) && event.ts > ts)
 }
 
 function lastStateEventSeqFor(events: TaskRunEvent[]): number {

@@ -8,6 +8,7 @@ import type { BackgroundTaskEntry } from '../background-task/types.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  acceptTaskRun,
   appendEvent,
   appendProgress,
   createRootTaskRun,
@@ -749,6 +750,97 @@ describe('TaskRun watchdog', () => {
       assert.equal(reports, 1)
       assert.equal(escalations, 1)
       assert.notEqual(resumed.fingerprint, fingerprint)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('re-arms an escalated root when state moves on a descendant, not just the root itself', async () => {
+    // 2026-06-30 prod: main answered an idle-root escalation by dispatching
+    // and settling a CHILD — every resulting event landed on the child's
+    // stream, the root's own stayed frozen, so the finding fingerprint never
+    // changed and the escalated suppression silenced the watchdog forever
+    // while the root sat running for days. Tree movement must re-arm.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-rearm-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Coordinate task.',
+        title: 'Root task',
+        now: 100,
+      })
+
+      let reports = 0
+      let escalations = 0
+      const deps = (now: number) => ({
+        now,
+        rootIdleGraceMs: 1,
+        budgetWindowMinutes: 30,
+        reportFindings: async () => {
+          reports += 1
+          return { ok: true, mode: 'queued' } as const
+        },
+        escalateFindings: async () => {
+          escalations += 1
+          return { ok: true, mode: 'synthetic' } as const
+        },
+      })
+
+      const first = await reconcileTaskRunsOnce('alice', deps(10_000))
+      assert.equal(first.reported, true)
+      assert.equal(reports, 1)
+      const fingerprint = first.fingerprint!
+      await appendEvent(root.id, 'watchdog-report', {
+        fingerprint,
+        findingKind: 'idle-root',
+        rootRunId: root.id,
+      }, 10_001, 'alice')
+      await appendEvent(root.id, 'watchdog-report', {
+        fingerprint,
+        findingKind: 'idle-root',
+        rootRunId: root.id,
+      }, 10_002, 'alice')
+
+      // idle-root gates on now - updatedAt, and the report/escalated events
+      // themselves bump updatedAt — keep each reconcile past the grace.
+      const escalated = await reconcileTaskRunsOnce('alice', deps(10_010))
+      assert.deepEqual(escalated.escalatedRootRunIds, [root.id])
+      assert.equal(escalations, 1)
+      assert.equal(reports, 1)
+
+      // Tree quiet since the escalation: stays suppressed.
+      const suppressed = await reconcileTaskRunsOnce('alice', deps(10_020))
+      assert.equal(suppressed.reported, false)
+      assert.equal(reports, 1)
+      assert.equal(escalations, 1)
+
+      // Main answers the escalation by dispatching a child under the root
+      // and settling it to terminal — events land ONLY on the child.
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'webSearcher',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Answer the escalation.',
+        parentRunId: root.id,
+        chainId: 'chain-1',
+        depth: 1,
+        now: 20_000,
+      })
+      await markStarted(child.id, 'bg-alice-child', 20_001, 'alice')
+      await markDelivered(child.id, { ok: true, summary: 'Done.' }, 20_002, 'alice')
+      await acceptTaskRun(child.id, { byRole: 'main' }, 20_003, 'alice')
+
+      // The root is still open with the same idle-root finding fingerprint
+      // (its own event stream is unchanged), but the tree moved after the
+      // escalation — reporting must re-arm instead of staying silent.
+      const rearmed = await reconcileTaskRunsOnce('alice', deps(2_000_000))
+      assert.equal(rearmed.fingerprint, fingerprint)
+      assert.equal(rearmed.reported, true)
+      assert.equal(reports, 2)
+      assert.equal(escalations, 1)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
