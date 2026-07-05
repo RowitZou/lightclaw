@@ -5,6 +5,7 @@ import type {
 } from '../config.js'
 import { createAnthropicProvider } from './anthropic.js'
 import {
+  FAILURE_THRESHOLD,
   readCacheEntry,
   writeCacheEntry,
   type AttachmentPosition,
@@ -217,7 +218,7 @@ function precharge(provider: Provider, entry: ModelEntry, baseUrl: string | unde
           upstreamModel: entry.upstreamModel,
           kind,
           position,
-          entry: { enabled: false, failures: 0 },
+          entry: { enabled: false, failures: 0, source: 'static' },
         })
         if (prior?.enabled === true) {
           warnings.push(
@@ -227,7 +228,22 @@ function precharge(provider: Provider, entry: ModelEntry, baseUrl: string | unde
         continue
       }
       if (prior?.enabled === false) {
-        continue
+        // Preserve only runtime-authored disables — the backend 4xx'd this
+        // kind, which a converter probe cannot refute. A static-sourced
+        // false is a residue of an OLDER converter that dropped the kind;
+        // the probe just proved the current converter emits it, so keeping
+        // the entry would pin the deployment to the old converter's limits
+        // until a manual --clear-cache (post-f826b9b upgrades: image/pdf
+        // tool_result reads silently degrading to text descriptions).
+        // Legacy entries without `source` are treated as static UNLESS the
+        // failure counter sits at the disable threshold (a fresh runtime
+        // disable that no success has reset yet).
+        if (prior.source === 'runtime' || prior.failures >= FAILURE_THRESHOLD) {
+          continue
+        }
+        warnings.push(
+          `capability-heal ${entry.endpoint}/${entry.upstreamModel} ${kind}@${position}: stale static-disabled entry -> true (probe now emits)`,
+        )
       }
       writeCacheEntry({
         endpoint: entry.endpoint,

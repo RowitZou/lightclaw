@@ -1540,13 +1540,15 @@ export class ChannelRunner {
                   userMessageCounterKept = !counter.flippedToDisabled
                   // Force cache to false so the immediate re-encode below
                   // routes to text-breadcrumb fallback (existing pattern).
+                  // source:'runtime' — wire-failure-driven, so if this false
+                  // outlives the turn (no restore) precharge must not heal it.
                   writeCacheEntry({
                     endpoint: providerEntry.endpoint,
                     baseUrl: providerBaseUrl,
                     upstreamModel: providerEntry.upstreamModel,
                     kind: missingSignal.kind,
                     position,
-                    entry: { enabled: false, failures: counter.newFailures },
+                    entry: { enabled: false, failures: counter.newFailures, source: 'runtime' },
                   })
                 }
                 flipSummaries.push(

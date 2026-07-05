@@ -8,9 +8,24 @@ import type { AttachmentKind } from './types.js'
 
 export type AttachmentPosition = 'inUserMessage' | 'inToolResult'
 
+/** Who authored the current `enabled:false` verdict. `static` = the
+ *  converter probe dropped the kind at precharge; `runtime` = wire 4xx
+ *  capability failures disabled it. The distinction matters because a
+ *  static drop is a fact about OUR converter code — after an upgrade the
+ *  probe may start emitting the kind, and the stale `false` must self-heal
+ *  (see precharge in provider/index.ts). A runtime disable is a fact about
+ *  the remote backend and must survive precharge re-probes. `failures`
+ *  cannot stand in for this flag: `resetAllFailureCountersFor` zeroes it on
+ *  ANY successful call of the model, so a runtime-disabled entry looks like
+ *  `failures:0` almost immediately. Absent on `enabled:true` entries and on
+ *  pre-source cache files (legacy `false` entries are treated as static —
+ *  deliberately, so caches written before converter upgrades self-heal). */
+export type CacheEntrySource = 'static' | 'runtime'
+
 export type CacheEntry = {
   enabled: boolean
   failures: number
+  source?: CacheEntrySource
 }
 
 export type CapabilityMissingSignal = {
@@ -125,12 +140,15 @@ function isLegacyKey(modelKey: string): boolean {
 
 function normalizeEntry(value: unknown): CacheEntry | null {
   if (!value || typeof value !== 'object') return null
-  const candidate = value as { enabled?: unknown; failures?: unknown }
+  const candidate = value as { enabled?: unknown; failures?: unknown; source?: unknown }
   if (typeof candidate.enabled !== 'boolean') return null
   const failures = typeof candidate.failures === 'number' && Number.isFinite(candidate.failures)
     ? Math.max(0, Math.floor(candidate.failures))
     : 0
-  return { enabled: candidate.enabled, failures }
+  const source = candidate.source === 'static' || candidate.source === 'runtime'
+    ? candidate.source
+    : undefined
+  return { enabled: candidate.enabled, failures, ...(source ? { source } : {}) }
 }
 
 function normalizeV2Flags(flags: CapabilityCacheShape['flags']): CapabilityCacheShape['flags'] {
@@ -205,6 +223,7 @@ export function writeCacheEntry(input: {
   perPosition[input.position] = {
     enabled: input.entry.enabled,
     failures: Math.max(0, Math.floor(input.entry.failures)),
+    ...(input.entry.source ? { source: input.entry.source } : {}),
   }
   save()
 }
@@ -221,7 +240,10 @@ export function incrementFailureCounter(input: {
   const enabled = prior?.enabled === false ? false : newFailures < FAILURE_THRESHOLD
   writeCacheEntry({
     ...input,
-    entry: { enabled, failures: newFailures },
+    // A wire-failure-driven disable is a fact about the backend, not the
+    // converter — mark it `runtime` so precharge's stale-static heal never
+    // flips it back on daemon restart.
+    entry: { enabled, failures: newFailures, ...(enabled ? {} : { source: 'runtime' as const }) },
   })
   return { newFailures, flippedToDisabled: enabled === false && prior?.enabled !== false }
 }

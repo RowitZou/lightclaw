@@ -259,7 +259,7 @@ describe('provider precharge writes capability cache', () => {
       for (const kind of ['audio', 'video'] as const) {
         assert.deepEqual(
           read(kind, position),
-          { enabled: false, failures: 0 },
+          { enabled: false, failures: 0, source: 'static' },
           `expected ${kind}/${position} cache=false after precharge`,
         )
       }
@@ -372,8 +372,78 @@ describe('provider precharge writes capability cache', () => {
           kind,
           position: 'inUserMessage',
         }),
-        { enabled: false, failures: 0 },
+        { enabled: false, failures: 0, source: 'static' },
       )
     }
+  })
+
+  it('heals a stale static-disabled entry when the converter now emits the kind', () => {
+    // The post-upgrade deployment shape: an OLD converter statically dropped
+    // pdf@inToolResult and precharged {enabled:false, failures:0}; the NEW
+    // converter emits it. Legacy entries carry no `source` (pre-source cache
+    // file). Pre-fix, precharge skipped every prior false unconditionally,
+    // so reads silently degraded until a manual --clear-cache.
+    writeCacheEntry({
+      endpoint: 'codex',
+      baseUrl: undefined,
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 0 },
+    })
+    const cfg: LightClawConfig = {
+      ...buildConfig(),
+      models: {
+        codex: { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
+      },
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      defaultModel: 'codex',
+    }
+    getProviderFor(cfg, 'codex')
+
+    assert.deepEqual(
+      readCacheEntry({
+        endpoint: 'codex',
+        baseUrl: undefined,
+        upstreamModel: 'gpt-5.5',
+        kind: 'pdf',
+        position: 'inToolResult',
+      }),
+      { enabled: true, failures: 0 },
+    )
+  })
+
+  it('keeps a runtime-sourced disable even after successes zeroed its failure counter', () => {
+    // resetAllFailureCountersFor zeroes `failures` on ANY successful call of
+    // the model, so a genuine runtime disable quickly looks like failures:0.
+    // The source marker is what protects it from the stale-static heal.
+    writeCacheEntry({
+      endpoint: 'codex',
+      baseUrl: undefined,
+      upstreamModel: 'gpt-5.5',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 0, source: 'runtime' },
+    })
+    const cfg: LightClawConfig = {
+      ...buildConfig(),
+      models: {
+        codex: { endpoint: 'codex', schema: 'codex', upstreamModel: 'gpt-5.5' },
+      },
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      defaultModel: 'codex',
+    }
+    getProviderFor(cfg, 'codex')
+
+    assert.deepEqual(
+      readCacheEntry({
+        endpoint: 'codex',
+        baseUrl: undefined,
+        upstreamModel: 'gpt-5.5',
+        kind: 'image',
+        position: 'inToolResult',
+      }),
+      { enabled: false, failures: 0, source: 'runtime' },
+    )
   })
 })

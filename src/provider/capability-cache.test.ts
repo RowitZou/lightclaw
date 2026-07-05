@@ -307,7 +307,9 @@ describe('capability-cache', () => {
     }
     const fifth = incrementFailureCounter(key)
     assert.deepEqual(fifth, { newFailures: 5, flippedToDisabled: true })
-    assert.deepEqual(readCacheEntry(key), { enabled: false, failures: 5 })
+    // The flip stamps source:'runtime' so precharge's stale-static heal
+    // never re-enables a backend-confirmed incapability on restart.
+    assert.deepEqual(readCacheEntry(key), { enabled: false, failures: 5, source: 'runtime' })
   })
 
   it('resetAllFailureCountersFor clears failures across one model', () => {
