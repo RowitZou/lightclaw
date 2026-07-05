@@ -3,6 +3,7 @@ import {
   FeishuApiError,
   type FeishuErrorClassification,
 } from './errors.js'
+import { paceWrite } from './write-pacer.js'
 
 export interface FeishuRetryOptions {
   maxAttempts?: number
@@ -10,6 +11,13 @@ export interface FeishuRetryOptions {
   maxDelayMs?: number
   shouldRetry?: (c: FeishuErrorClassification, attempt: number) => boolean
   onRetry?: (c: FeishuErrorClassification, attempt: number, delayMs: number) => void
+  /**
+   * When set, every attempt routes through `paceWrite(paceKey, fn)`: calls
+   * sharing the key serialize with a minimum inter-request gap (Feishu
+   * per-document edit QPS). Applied per attempt on purpose — a retried
+   * request must respect the same spacing as a fresh one.
+   */
+  paceKey?: string
   /**
    * Out-param incremented once per backoff sleep. After the call returns,
    * `retryCounter.count` equals the number of retries actually performed
@@ -37,7 +45,7 @@ export async function withFeishuRetry<T>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await fn()
+      return opts.paceKey ? await paceWrite(opts.paceKey, fn) : await fn()
     } catch (error) {
       const classification = error instanceof FeishuApiError
         ? error.classification

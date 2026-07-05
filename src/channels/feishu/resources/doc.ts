@@ -4,6 +4,15 @@ import { readNestedString, truncate } from './common.js'
 import { classifyFeishuError, logFeishuRetry } from './errors.js'
 import { withFeishuRetry } from './retry.js'
 
+// Feishu enforces a per-document edit QPS budget; every document-scoped docx
+// mutation below passes this paceKey so one document's writes are serialized
+// and spaced (see write-pacer.ts). Not paced: reads (separate budget), and
+// document creation / markdown convert / media upload (not per-document
+// edit quota).
+function docWritePaceKey(documentId: string): string {
+  return `docx-write:${documentId}`
+}
+
 export type FeishuDocCreateResult = {
   documentId?: string
   title: string
@@ -385,6 +394,7 @@ export async function appendDocText(input: {
     },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.append'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
 }
@@ -533,6 +543,7 @@ export async function createDocTable(input: {
     },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.table.create'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   const tableBlock = readInsertedChildren(result.data).find(child => child.block_type === 31)
@@ -558,9 +569,12 @@ export async function writeDocTableCells(input: {
     throw new Error('values must be a non-empty 2D array.')
   }
   const client = input.client as FeishuDocClient
-  const table = await callFeishu(() => client.docx.documentBlock.get({
+  const table = await withFeishuRetry(() => callFeishu(() => client.docx.documentBlock.get({
     path: { document_id: input.documentId, block_id: input.tableBlockId },
-  }))
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.block.get'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
   const tableBlock = readBlockRecord(table.data)
   if (tableBlock.block_type !== 31) {
     throw new Error('table_block_id is not a table block.')
@@ -588,13 +602,14 @@ export async function writeDocTableCells(input: {
       if (!cellId) {
         continue
       }
-      const existing = await listDocBlockChildrenPaginated(client, input.documentId, cellId)
+      const existing = await listDocBlockChildrenPaginated(client, input.documentId, cellId, input.retryCounter)
       if (existing.length > 0) {
         await withFeishuRetry(() => callFeishu(() => client.docx.documentBlockChildren.batchDelete({
           path: { document_id: input.documentId, block_id: cellId },
           data: { start_index: 0, end_index: existing.length },
         })), {
           onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.table.cell.clear'),
+          paceKey: docWritePaceKey(input.documentId),
           ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
         })
       }
@@ -605,6 +620,7 @@ export async function writeDocTableCells(input: {
           data: { children: contentToDocBlocks(text) },
         })), {
           onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.table.cell.write'),
+          paceKey: docWritePaceKey(input.documentId),
           ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
         })
       }
@@ -790,6 +806,7 @@ export async function updateDocBlockText(input: {
     },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.block.patch'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   return {
@@ -807,9 +824,12 @@ export async function deleteDocBlock(input: {
   retryCounter?: { count: number }
 }): Promise<FeishuDocBlockMutationResult> {
   const client = input.client as FeishuDocClient
-  const block = await callFeishu(() => client.docx.documentBlock.get({
+  const block = await withFeishuRetry(() => callFeishu(() => client.docx.documentBlock.get({
     path: { document_id: input.documentId, block_id: input.blockId },
-  }))
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.block.get'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
   const blockData = block.data && typeof block.data === 'object'
     ? block.data as Record<string, unknown>
     : {}
@@ -817,7 +837,7 @@ export async function deleteDocBlock(input: {
     ? blockData.block as Record<string, unknown>
     : {}
   const parentId = typeof blockRecord.parent_id === 'string' ? blockRecord.parent_id : input.documentId
-  const items = await listDocBlockChildrenPaginated(client, input.documentId, parentId)
+  const items = await listDocBlockChildrenPaginated(client, input.documentId, parentId, input.retryCounter)
   const index = items.findIndex(item => item.block_id === input.blockId)
   if (index < 0) {
     throw new Error(`Block ${input.blockId} not found under parent ${parentId}.`)
@@ -827,6 +847,7 @@ export async function deleteDocBlock(input: {
     data: { start_index: index, end_index: index + 1 },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.block.delete'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   return {
@@ -859,6 +880,7 @@ export async function uploadDocImage(input: {
     },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.image.block.create'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   const imageBlock = readInsertedChildren(created.data).find(child => child.block_type === 27)
@@ -883,6 +905,7 @@ export async function uploadDocImage(input: {
       data: { replace_image: { token: uploaded.fileToken } },
     })), {
       onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.image.patch'),
+      paceKey: docWritePaceKey(input.documentId),
       ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
     })
     return {
@@ -1163,6 +1186,7 @@ async function insertBlocksWithDescendant(input: {
     },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.descendant.create'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
 }
@@ -1223,6 +1247,7 @@ async function insertBlocksInBatches(input: {
       },
     })), {
       onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.descendant.create.batch'),
+      paceKey: docWritePaceKey(input.documentId),
       ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
     })
     children.push(...readInsertedChildren(result.data))
@@ -1530,9 +1555,11 @@ async function resolveInsertAfterPosition(
   documentId: string,
   afterBlockId: string,
 ): Promise<{ parentBlockId: string; index: number }> {
-  const block = await callFeishu(() => client.docx.documentBlock.get({
+  const block = await withFeishuRetry(() => callFeishu(() => client.docx.documentBlock.get({
     path: { document_id: documentId, block_id: afterBlockId },
-  }))
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.block.get'),
+  })
   const data = block.data && typeof block.data === 'object' ? block.data as Record<string, unknown> : {}
   const blockRecord = data.block && typeof data.block === 'object' ? data.block as Record<string, unknown> : {}
   const parentBlockId = typeof blockRecord.parent_id === 'string' ? blockRecord.parent_id : documentId
@@ -1566,6 +1593,7 @@ async function clearDocumentContentSafely(input: {
     data: { start_index: 0, end_index: rootChildren.length },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.clear'),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   return rootChildren.length
@@ -1695,21 +1723,30 @@ function normalizeChildIds(children: unknown): string[] {
   return typeof children === 'string' ? [children] : []
 }
 
+// Only reached from inside write operations (table cell writes, block
+// delete, insert-position resolution), so the page GET retries on transient
+// / rate-limited errors: during a paced write burst a single 429 on this
+// read used to abort the whole mutation halfway (e.g. a half-written table).
+// User-facing read paths use listDocBlocksPaginated, which stays direct.
 async function listDocBlockChildrenPaginated(
   client: FeishuDocClient,
   documentId: string,
   blockId: string,
+  retryCounter?: { count: number },
 ): Promise<Array<Record<string, unknown>>> {
   const items: Array<Record<string, unknown>> = []
   let pageToken: string | undefined
   for (let page = 0; page < FEISHU_DOC_CHILDREN_MAX_PAGES; page++) {
-    const response = await callFeishu(() => client.docx.documentBlockChildren.get({
+    const response = await withFeishuRetry(() => callFeishu(() => client.docx.documentBlockChildren.get({
       path: { document_id: documentId, block_id: blockId },
       params: {
         page_size: FEISHU_DOC_CHILDREN_PAGE_SIZE,
         ...(pageToken ? { page_token: pageToken } : {}),
       },
-    }))
+    })), {
+      onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.children.get'),
+      ...(retryCounter ? { retryCounter } : {}),
+    })
     items.push(...readBlockItems(response.data))
     const data = response.data && typeof response.data === 'object'
       ? response.data as Record<string, unknown>
@@ -1814,6 +1851,7 @@ async function patchDocTable(
     data,
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, label),
+    paceKey: docWritePaceKey(input.documentId),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
   return result.data
