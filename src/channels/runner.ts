@@ -2533,6 +2533,22 @@ export class ChannelRunner {
     message: NormalizedChannelMessage
   }): Promise<void> {
     const { detail, isTransient, sessionId, model, message } = input
+    // Transient rate-limit / quota exhaustion repeats for as long as the
+    // window stays exhausted, and the taskrun watchdog re-wakes the session
+    // every few minutes — without dedup that stacks one identical failure
+    // card per wake (2026-07-05 official dogfood: 10+ cards in an hour).
+    // Reuse the model-down edge-trigger: full card on the first failure,
+    // one short line per repeat, re-armed by any successful turn.
+    if (isTransient && model && isRateLimitError(detail)) {
+      const phase = recordUserModelDown(sessionId, model)
+      if (phase === 'repeat') {
+        await this.sendNotice(message, 'info', t('channel.failure.rateRepeatBrief', { model }))
+        return
+      }
+      const notice = formatNoticeFromFailure(detail, true, { model })
+      await this.sendNotice(message, notice.kind, notice.text)
+      return
+    }
     const classification = isTransient ? null : classifyChannelFailure(detail)
     const modelDown = !!classification && !!model && isModelDownCode(classification.code)
     if (!modelDown) {
@@ -3090,6 +3106,19 @@ export function formatNoticeFromFailure(
   opts?: { model?: string; isPublic?: boolean },
 ): { text: string; kind: SystemNoticeKind } {
   if (isTransient) {
+    // Rate-limit / quota exhaustion (429, codex usage_limit_reached) is
+    // transient on the retry axis, but the copy must say "limit reached",
+    // not "network jitter" — a quota window can take hours to reset, and
+    // "resend the same message" alone cannot fix it (2026-07-05 official
+    // dogfood: codex usage_limit_reached rendered as 网络抖动 repeatedly).
+    if (isRateLimitError(detail)) {
+      const lines = [t('channel.failure.title'), '', t('channel.failure.rateReason')]
+      if (opts?.model) {
+        lines.push(t('channel.failure.modelLine', { model: opts.model }))
+      }
+      lines.push(t('channel.failure.rateHint'))
+      return { text: lines.join('\n'), kind: 'info' }
+    }
     return {
       text: [
         t('channel.failure.title'),

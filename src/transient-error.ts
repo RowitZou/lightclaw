@@ -33,8 +33,15 @@ const QUOTA_SELF_HEAL_SIGNAL =
 const OVERLOADED_PATTERN =
   /overloaded_error|"type"\s*:\s*"overloaded_error"|overloaded|at capacity|high demand|high load/i
 
+// `usage[_\s-]?limit` covers the codex `type=usage_limit_reached` error code
+// AND its human message "The usage limit has been reached" — a plan quota
+// window that resets on its own, so it classifies as rate-limit (self-healing
+// throttle), NOT billing-fatal. Matching the code word directly matters
+// because a relay may strip the `status=429` marker from the message string
+// (2026-07-05 official dogfood: quota exhaustion rendered as "network
+// jitter" because only the copy layer looked and it saw no rate signal).
 const RATE_LIMIT_PATTERN =
-  /rate[_\s-]?limit|too many requests|\b429\b|requests? per (?:minute|hour|day)|throttl(?:e|ed|ing)|retry after|try again later/i
+  /rate[_\s-]?limit|usage[_\s-]?limit|too many requests|\b429\b|requests? per (?:minute|hour|day)|throttl(?:e|ed|ing)|retry after|try again later/i
 
 // User-driven /stop and channel-runner-driven interjection auto-aborts both
 // surface as the SDK's "Request was aborted." string. Exported because the

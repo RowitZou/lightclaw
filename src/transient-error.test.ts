@@ -5,6 +5,7 @@ import {
   IdleStreamError,
   isContextOverflowError,
   isCredentialError,
+  isRateLimitError,
   isTransientError,
   retryAfterMsOf,
   retryDelayMsWithRetryAfter,
@@ -288,5 +289,30 @@ describe('isTransientError', () => {
       ),
       60_000,
     )
+  })
+})
+
+describe('isRateLimitError', () => {
+  it('recognizes codex usage_limit_reached without a literal 429 in the string', () => {
+    // 2026-07-05 official dogfood: the copy layer receives only the message
+    // STRING; when a relay strips the status marker, the usage_limit wording
+    // itself must classify as rate-limit or the card falls back to the
+    // generic "network jitter" copy.
+    assert.equal(
+      isRateLimitError('type=usage_limit_reached, message=The usage limit has been reached'),
+      true,
+    )
+    assert.equal(isRateLimitError('The usage limit has been reached'), true)
+  })
+
+  it('keeps billing errors out of the rate-limit class', () => {
+    assert.equal(
+      isRateLimitError('insufficient_quota: You exceeded your current quota.'),
+      false,
+    )
+  })
+
+  it('does not classify plain network errors as rate-limit', () => {
+    assert.equal(isRateLimitError('fetch failed: socket hang up'), false)
   })
 })

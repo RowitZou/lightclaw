@@ -12,9 +12,14 @@
  *  - **user**, keyed by `(sessionId, model)`: full failure card on the
  *    healthy→down edge, a short "still unavailable" line on repeats. The user
  *    still needs per-message feedback that THIS message failed, so repeats are
- *    not fully suppressed (unlike admin) — just de-verbosed.
+ *    not fully suppressed (unlike admin) — just de-verbosed. The same user
+ *    mark also dedups TRANSIENT rate-limit / quota-exhaustion cards
+ *    (2026-07-05): while a quota window is exhausted, every watchdog wake
+ *    fails identically, and "this model can't answer right now" is the same
+ *    user-facing state regardless of whether the cause is fatal or throttling.
  *  - **admin**, keyed by `model` (global): one alert on the healthy→down edge
- *    for a PUBLIC (admin-owned) model. Repeats are fully suppressed.
+ *    for a PUBLIC (admin-owned) model. Repeats are fully suppressed. Not used
+ *    for transient rate-limits (self-healing, not admin-actionable).
  *
  * Recovery is implicit: a successful turn on `(sessionId, model)` clears the
  * user mark AND the admin mark for that model — "the model can talk again" is

@@ -19,6 +19,9 @@ type Sample = {
   // Category label that must appear in the card text. Omitted for the
   // transient card (no category line — it carries the transient reason).
   expectCat?: string
+  // Transient rate-limit / quota cards carry the rate reason line instead of
+  // the generic "network jitter" one (2026-07-05 usage_limit_reached fix).
+  expectTransientRate?: boolean
 }
 
 const SAMPLES: Sample[] = [
@@ -52,6 +55,23 @@ const SAMPLES: Sample[] = [
     detail: 'Rate limit reached, please try again in 20s',
     expectTransient: true,
     expectKind: 'info',
+    expectTransientRate: true,
+  },
+  {
+    // 2026-07-05 official dogfood: codex plan quota exhausted. Transient on
+    // the retry axis (429 → the window self-heals), but the card must say
+    // "limit reached", not "network jitter". The detail string deliberately
+    // omits the literal "429" so the copy axis must recognize the
+    // usage_limit wording itself.
+    name: 'codex usage_limit_reached (quota window exhausted)',
+    error: {
+      status: 429,
+      message: 'OpenAI Responses streamChat request failed status=429: type=usage_limit_reached, message=The usage limit has been reached',
+    },
+    detail: 'type=usage_limit_reached, message=The usage limit has been reached',
+    expectTransient: true,
+    expectKind: 'info',
+    expectTransientRate: true,
   },
   {
     name: 'overloaded 529',
@@ -89,11 +109,34 @@ describe('failure notice taxonomy (D12 contract)', () => {
           notice.text.includes(s.expectCat),
           `category should be ${s.expectCat}; got:\n${notice.text}`,
         )
+      } else if (s.expectTransientRate) {
+        assert.ok(
+          notice.text.includes(t('channel.failure.rateReason')),
+          `transient rate card should carry the rate reason; got:\n${notice.text}`,
+        )
+        assert.equal(
+          notice.text.includes(t('channel.failure.transientReason')),
+          false,
+          'transient rate card must not say network jitter',
+        )
       } else {
         assert.ok(notice.text.includes(t('channel.failure.transientReason')))
       }
     })
   }
+
+  // The transient rate card names the failing model when the caller passes it
+  // (surfaceQueryFailure does on the dedup edge path).
+  it('transient rate card renders the model line when provided', () => {
+    const notice = formatNoticeFromFailure(
+      'type=usage_limit_reached, message=The usage limit has been reached',
+      true,
+      { model: 'gpt-5.5' },
+    )
+    assert.equal(notice.kind, 'info')
+    assert.ok(notice.text.includes(t('channel.failure.modelLine', { model: 'gpt-5.5' })))
+    assert.ok(notice.text.includes(t('channel.failure.rateHint')))
+  })
 
   // Pins the two dogfood regressions PR6 fixes (old code returned cat.rate +
   // "resend" for billing, cat.generic + "internal error" for 404).
