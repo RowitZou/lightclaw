@@ -21,6 +21,21 @@ describe('canonicalizeFlagTokens', () => {
     assert.deepEqual(canonicalizeFlagTokens(['-h']), ['-h'])
   })
 
+  it('recovers a smart-punctuation `--` on single-letter flags (—y → --y)', () => {
+    // En dash / em dash / horizontal bar are what editors substitute for a
+    // typed `--` — a single typed `-` is never rewritten to them — so each
+    // maps back to TWO ASCII dashes even on a one-letter body.
+    for (const dash of ['–', '—', '―']) {
+      assert.deepEqual(canonicalizeFlagTokens([`${dash}y`]), ['--y'])
+    }
+    // Narrow hyphen-like variants substitute a single typed `-` and keep it.
+    for (const dash of ['‐', '‑', '‒', '−']) {
+      assert.deepEqual(canonicalizeFlagTokens([`${dash}h`]), ['-h'])
+    }
+    // ASCII input is untouched in both counts.
+    assert.deepEqual(canonicalizeFlagTokens(['--y', '-h']), ['--y', '-h'])
+  })
+
   it('leaves non-flag tokens (paths, urls, keys, bare words) untouched', () => {
     const tokens = [
       'endpoint',

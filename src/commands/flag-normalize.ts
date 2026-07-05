@@ -13,10 +13,15 @@
 // `canonicalizeFlagTokens` runs once right after tokenization and rewrites the
 // LEADING dash-run of any flag-shaped token to ASCII `-` / `--`, so every
 // downstream comparison (flagValue / equality / includes / startsWith) is
-// dash-robust without per-site changes. Scope is deliberately the config/admin
-// parsers only — NOT the global slash dispatcher — because free-text slashes
-// (e.g. `/feedback`) legitimately contain em-dashes in prose that must not be
-// reinterpreted as flags.
+// dash-robust without per-site changes. Scope is deliberately per flag-bearing
+// parser — NOT the global slash dispatcher — because free-text slashes (e.g.
+// `/feedback`) legitimately contain em-dashes in prose that must not be
+// reinterpreted as flags. Current opt-in sites: builtin.ts (/user), config.ts,
+// admin.ts, system.ts (key + data nouns), feishu-workspace.ts, and the
+// `requireConfirm` gate itself (which canonicalizes its own view of the tokens
+// so every `--y` confirm is dash-robust even if a future parser forgets to
+// opt in). When adding a NEW slash parser that matches `--flag` tokens by
+// string, wire it through this function at its tokenization point.
 
 // Hyphen/dash-like code points that an editor may substitute for ASCII `-`:
 // hyphen-minus, hyphen, non-breaking hyphen, figure dash, en dash, em dash,
@@ -31,11 +36,16 @@ const LEADING_DASH_RUN = /^[-‐‑‒–—―−]+/
  * so a single-dash slip (`-auth-path`) and any unicode-dash substitution
  * (`—auth-path` / `–auth-path`) both recover to `--auth-path`.
  *
- * Single-letter bodies are the one case we must NOT re-count: the codebase has
- * both `-h` (single-dash) and `--y` (double-dash), and the dash count is the
- * only thing distinguishing them. For those we only normalize the unicode dash
- * characters to ASCII and preserve the original count, leaving `--y` / `-h`
- * intact for the overwhelmingly common ASCII input.
+ * Single-letter bodies are the one case we must NOT blindly collapse: the
+ * codebase has both `-h` (single-dash) and `--y` (double-dash), and the dash
+ * count is the only thing distinguishing them. For those we reconstruct the
+ * TYPED dash count per character: en dash / em dash / horizontal bar are what
+ * smart punctuation produces from a typed `--` (a single typed `-` is never
+ * rewritten to them), so each maps back to two ASCII dashes; the narrow
+ * hyphen-like variants substitute a single `-` and count as one. ASCII input
+ * keeps its count untouched, so `--y` / `-h` pass through, while a mangled
+ * `—y` recovers to `--y` — without this the `requireConfirm` gate on every
+ * destructive command loops the preview forever under a Feishu IME.
  *
  * Only tokens that begin with a dash-like char AND whose body starts with an
  * ASCII letter are touched, so path / URL / key values (which never lead with
@@ -51,8 +61,12 @@ export function canonicalizeFlagTokens(parts: string[]): string[] {
     // value that merely happens to start with a dash is left alone.
     if (!/^[A-Za-z]/.test(body)) return token
     if (body.length === 1) {
-      // Preserve dash count; only fold unicode dashes to ASCII.
-      return `${'-'.repeat(run.length)}${body}`
+      // Reconstruct the typed dash count (wide dashes came from `--`).
+      const typed = [...run].reduce(
+        (n, ch) => n + (ch === '–' || ch === '—' || ch === '―' ? 2 : 1),
+        0,
+      )
+      return `${'-'.repeat(typed)}${body}`
     }
     return `--${body}`
   })

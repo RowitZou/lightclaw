@@ -19,9 +19,10 @@ import {
 } from '../identity/paths.js'
 
 import { requireConfirm } from './confirm.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 
 export async function runFeishuWorkspaceCommand(rawArgs: string): Promise<string> {
-  const args = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const args = canonicalizeFlagTokens(rawArgs.trim().split(/\s+/).filter(Boolean))
   const sub = args[0] ?? 'status'
   switch (sub) {
     case 'status':

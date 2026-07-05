@@ -22,6 +22,7 @@ import {
   type MountShowRow,
 } from './card-specs.js'
 import { requireConfirm } from './confirm.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 import { runMountCommand } from './mount.js'
 import type { MountRebuildResult } from './mount-ops.js'
 import type { CommandListCardSpec } from './registry.js'
@@ -140,7 +141,10 @@ export async function runSystemCommand(
  * dependent endpoint(s) and performs no delete.
  */
 async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
-  const parts = rest.split(/\s+/).filter(Boolean)
+  // Dash-canonicalized tokens for verb detection + the --y gate only. The
+  // fall-through below hands the RAW `rest` to the secret runner so a
+  // dash-led secret value (`key set NAME -abc...`) is never rewritten.
+  const parts = canonicalizeFlagTokens(rest.split(/\s+/).filter(Boolean))
   const verb = (parts[0] ?? '').toLowerCase()
   // Structured card from the live secret store = the show output AND the usage
   // reference (saved keys + set/enable/disable/rm 子命令 + 示例). The secret
@@ -196,7 +200,7 @@ function endpointsReferencingKey(userId: string, name: string): string[] {
  * replied with, via the active runtime).
  */
 async function runDataNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
-  const parts = rest.split(/\s+/).filter(Boolean)
+  const parts = canonicalizeFlagTokens(rest.split(/\s+/).filter(Boolean))
   const verb = (parts[0] ?? '').toLowerCase()
   if (verb !== 'export' && verb !== 'import') {
     // Bare/unknown verb = the /system data overview → pure-operation card

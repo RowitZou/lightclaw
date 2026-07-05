@@ -296,6 +296,33 @@ describe('/system command', () => {
     assert.equal('API_KEY' in loadUserSecrets('alice'), false)
   })
 
+  it('key rm confirm gate accepts an IME-mangled em-dash `—y`', async () => {
+    const { setUserSecret } = await import('../secrets/store.js')
+    const { writeUserConfig } = await import('../config/user-override.js')
+    setUserSecret('alice', 'API_KEY', 'sk-real')
+    writeUserConfig('alice', { endpoints: { ep: { type: 'openai', apiKeyRef: 'API_KEY' } } })
+
+    // Feishu rewrites the typed `--y` to `—y`; the referenced-key rm gate
+    // must still confirm instead of looping the preview forever.
+    const done = await runSystemCommand('key rm API_KEY —y', { config: makeConfig(), userId: 'alice' })
+    assert.match(done, /removed/)
+    assert.equal('API_KEY' in loadUserSecrets('alice'), false)
+  })
+
+  it('data noun flags survive IME dash-mangling (—path / —y)', async () => {
+    const memDir = path.join(tmpHome, 'users', 'alice', 'memory')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(path.join(memDir, 'fact.md'), '# x', 'utf8')
+    const dest = path.join(tmpHome, 'gate.zip')
+    await runSystemCommand(`data export --path ${dest}`, { config: makeConfig(), userId: 'alice' })
+    assert.equal(existsSync(dest), true)
+
+    // `—path` must be recognized as the flag (not swallowed as a bare
+    // positional path) and `—y` must pass the confirm gate.
+    const done = await runSystemCommand(`data import —path ${dest} —y`, { config: makeConfig(), userId: 'alice' })
+    assert.match(done, /Imported/)
+  })
+
   it('data import requires --y (no --y = preview, no action)', async () => {
     // Build a real archive so the confirm gate (not the not-found path) is exercised.
     const memDir = path.join(tmpHome, 'users', 'alice', 'memory')

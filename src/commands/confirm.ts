@@ -1,4 +1,5 @@
 import { t } from '../i18n/index.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 
 /**
  * Shared two-step `--y` confirmation gate (PR5.9 B5, design F.3b).
@@ -26,7 +27,14 @@ export function requireConfirm(
   parts: string[],
   opts: { preview: string },
 ): ConfirmResult {
-  const idx = parts.indexOf('--y')
+  // Search for `--y` on a canonicalized VIEW of the tokens: Feishu / CJK IME
+  // smart punctuation rewrites the typed `--y` to `—y`, and an unconfirmable
+  // destructive command is a user-visible dead loop (preview forever). The
+  // gate is the last line of defense — callers' parsers may or may not have
+  // canonicalized already. Only the matched token is removed from `rest`;
+  // every other token reaches the caller verbatim so values are never
+  // rewritten here.
+  const idx = canonicalizeFlagTokens(parts).indexOf('--y')
   if (idx < 0) {
     return {
       confirmed: false,

@@ -95,6 +95,14 @@ describe('/feishu-workspace admin slash', () => {
     assert.equal(admin.status, 'confirmed')
   })
 
+  it('delete confirms with an IME-mangled em-dash `—y`', async () => {
+    await seedRoot('rootFld')
+    await seedUserWorkspace('alice', 'aliceFld', 'rootFld')
+    const done = await runFeishuWorkspaceCommand('delete alice —y')
+    assert.match(done, /Deleted Feishu workspace for "alice"/)
+    assert.deepEqual(driveState.deleted, ['aliceFld'])
+  })
+
   it('delete records a failed audit row when Feishu rejects the delete', async () => {
     await seedRoot('rootFld')
     await seedUserWorkspace('alice', 'aliceFld', 'rootFld')
