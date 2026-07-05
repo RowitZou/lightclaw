@@ -888,7 +888,10 @@ const LANE_BUCKET_KEYS = ['worker', 'system', 'image'] as const
 // otherwise leave a dangling binding that `resolveRoleModel` resolves to a name
 // no longer in the registry. (resolveUserConfig gained a matching read-time
 // guard; clearing here also keeps config.json honest.)
-function clearLaneBindings(obj: Record<string, unknown>, removedNames: string[]): string[] {
+// Shared with the admin registry removal paths (`/admin backend|endpoint rm`):
+// every model-registry delete entry point must reconcile through these two
+// helpers, whichever config object (user override / admin base) it operates on.
+export function clearLaneBindings(obj: Record<string, unknown>, removedNames: string[]): string[] {
   const lane = asRecord(obj.lane)
   const cleared: string[] = []
   for (const bucket of LANE_BUCKET_KEYS) {
@@ -909,7 +912,7 @@ function clearLaneBindings(obj: Record<string, unknown>, removedNames: string[])
 // registry reorders. When no BYO remains the override is left cleared so
 // `resolveUserConfig` falls back to the admin default (or the friendly no-model
 // state). Returns whether the default had been removed (drives the card line).
-function promoteDefaultAfterRemoval(
+export function promoteDefaultAfterRemoval(
   obj: Record<string, unknown>,
   remainingModels: Record<string, unknown>,
   removedNames: string[],

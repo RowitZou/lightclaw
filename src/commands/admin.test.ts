@@ -324,6 +324,71 @@ describe('/admin endpoint|backend connectivity gate (parity with /config)', () =
   })
 })
 
+describe('/admin backend|endpoint rm — removal cascade (admin registry)', () => {
+  // Mirrors the /config removal-cascade suite: deleting the deployment default
+  // must promote a survivor (pre-fix it was only deleted, dropping every
+  // no-BYO user into the no-model state), lane buckets bound to a removed
+  // model must be cleared, and the result card must announce both consequences.
+  function seedAdminRegistry(): void {
+    writeFileSync(configPath(), JSON.stringify({
+      endpoints: { ep1: { apiKey: 'K1' }, ep2: { apiKey: 'K2' } },
+      models: {
+        modelA: { endpoint: 'ep1', schema: 'openai', upstreamModel: 'up-a' },
+        modelB: { endpoint: 'ep2', schema: 'openai', upstreamModel: 'up-b' },
+      },
+      defaultModel: 'modelA',
+      lane: { worker: 'modelA', system: 'modelB' },
+    }), 'utf8')
+  }
+
+  it('backend rm promotes a surviving admin model to default and clears the dangling lane', async () => {
+    seedAdminRegistry()
+    const cfg = liveConfig()
+    const out = await runAdminCommand('backend rm modelA', { config: cfg, userId: 'admin' })
+
+    const persisted = readConfig()
+    const models = persisted.models as Record<string, unknown>
+    assert.equal('modelA' in models, false)
+    assert.ok('modelB' in models)
+    assert.equal(persisted.defaultModel, 'modelB')
+    const lane = persisted.lane as Record<string, unknown>
+    assert.equal('worker' in lane, false)
+    assert.equal(lane.system, 'modelB')
+    // Live config refreshed in place — effective without a daemon restart.
+    assert.equal(cfg.defaultModel, 'modelB')
+    // Card announces both consequences.
+    assert.match(out, /switched to "modelB"/)
+    assert.match(out, /reset to the default/)
+  })
+
+  it('backend rm of the last model clears the default and the card guides /admin reconfigure', async () => {
+    writeFileSync(configPath(), JSON.stringify({
+      endpoints: { ep1: { apiKey: 'K1' } },
+      models: { only: { endpoint: 'ep1', schema: 'openai', upstreamModel: 'up' } },
+      defaultModel: 'only',
+    }), 'utf8')
+    const out = await runAdminCommand('backend rm only', { config: liveConfig(), userId: 'admin' })
+
+    const persisted = readConfig()
+    assert.equal('defaultModel' in persisted, false)
+    assert.match(out, /\/admin endpoint/)
+  })
+
+  it('endpoint rm cascades models, promotes default off the surviving endpoint, resets dangling lane', async () => {
+    seedAdminRegistry()
+    const out = await runAdminCommand('endpoint rm ep1', { config: liveConfig(), userId: 'admin' })
+
+    const persisted = readConfig()
+    assert.equal('ep1' in (persisted.endpoints as Record<string, unknown>), false)
+    const models = persisted.models as Record<string, unknown>
+    assert.equal('modelA' in models, false)
+    assert.ok('modelB' in models)
+    assert.equal(persisted.defaultModel, 'modelB')
+    assert.equal((persisted.lane as Record<string, unknown>).worker, undefined)
+    assert.match(out, /switched to "modelB"/)
+  })
+})
+
 describe('write-back validation (boot safety)', () => {
   it('aborts a write that would produce a schema-invalid config (no file mutation)', async () => {
     // Seed a model whose endpoint exists. Then `endpoint rm ep` would cascade

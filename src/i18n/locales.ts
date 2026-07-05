@@ -194,6 +194,7 @@ export const LOCALES = {
     'admin.proxy.cleared': '已清除公共代理。未单独配置代理的模型服务恢复直接连接。',
     'admin.proxy.invalid': '错误：代理地址无效（{detail}）；未写入。',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
+    'admin.removal.defaultCleared': '原默认模型已删除，且公共注册表已无可用模型；未自行配置模型的用户将处于无模型状态，请用 `/admin endpoint` + `/admin backend` 重新配置。',
 
     // ---- /admin version update (self-update + supervised restart) ----
     'admin.update.inProgress': '已有一次更新正在进行中（拉取/构建/重启排程），本次请求已忽略。',
@@ -1249,6 +1250,7 @@ export const LOCALES = {
     'admin.proxy.cleared': 'Public proxy cleared. Model services without their own proxy connect directly again.',
     'admin.proxy.invalid': 'Error: invalid proxy URL ({detail}); not written.',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
+    'admin.removal.defaultCleared': 'The previous default model was deleted and no models remain in the public registry; users without their own model config are left in the no-model state — reconfigure with `/admin endpoint` + `/admin backend`.',
 
     // ---- /admin version update (self-update + supervised restart) ----
     'admin.update.inProgress': 'An update is already in progress (pull/build/restart pending); this request was ignored.',

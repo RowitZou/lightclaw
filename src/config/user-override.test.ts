@@ -159,6 +159,17 @@ describe('resolveUserConfig', () => {
     assert.equal(resolved.lane.worker, undefined)
   })
 
+  it('lane membership guard: a dangling user bucket falls through to a valid admin bucket', () => {
+    // "Falls through" as documented: a user bucket that cannot resolve is as
+    // good as unset, so the admin's still-valid bucket takes over before the
+    // defaultModel fallback. Pre-fix the dangling user value occupied the slot
+    // and the bucket resolved to unset even though admin had a valid binding.
+    const base = makeBase({ defaultModel: 'm', models: MODELS, lane: { worker: 'm' } })
+    writeUserConfigJson('alice', { lane: { worker: 'ghost-deleted' } })
+    const resolved = resolveUserConfig('alice', base)
+    assert.equal(resolved.lane.worker, 'm')
+  })
+
   it('lang override: user lang wins, else base lang', () => {
     const base = makeBase({ defaultModel: 'm', models: MODELS, lang: 'cn' })
     writeUserConfigJson('alice', { lang: 'en' })

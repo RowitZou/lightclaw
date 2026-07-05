@@ -397,21 +397,23 @@ export function resolveUserConfig(
   // `removeEndpoint` also clear dangling buckets at write time; this read-time
   // guard backstops already-broken config.json files and the admin-deletes-a-
   // model-a-user-lane-points-at case.
+  // The guard applies per candidate: a dangling USER bucket falls through to
+  // the admin bucket (checked against the same registry) before giving up to
+  // the defaultModel fallback — not straight to unset.
   const mergedModels = { ...base.models, ...userModels }
   const mergeLaneBucket = (
     bucket: 'worker' | 'system' | 'image',
   ): string | undefined => {
     const userValue = override.lane?.[bucket]?.trim()
-    const chosen = userValue || base.lane[bucket]
-    if (chosen && mergedModels[chosen]) {
-      return chosen
-    }
+    if (userValue && mergedModels[userValue]) return userValue
+    const adminValue = base.lane[bucket]
+    if (adminValue && mergedModels[adminValue]) return adminValue
     return undefined
   }
-  const lane = {
-    ...(mergeLaneBucket('worker') !== undefined ? { worker: mergeLaneBucket('worker') } : {}),
-    ...(mergeLaneBucket('system') !== undefined ? { system: mergeLaneBucket('system') } : {}),
-    ...(mergeLaneBucket('image') !== undefined ? { image: mergeLaneBucket('image') } : {}),
+  const lane: { worker?: string; system?: string; image?: string } = {}
+  for (const bucket of ['worker', 'system', 'image'] as const) {
+    const value = mergeLaneBucket(bucket)
+    if (value !== undefined) lane[bucket] = value
   }
 
   const resolved: LightClawConfig = {

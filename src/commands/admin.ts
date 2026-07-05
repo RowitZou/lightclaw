@@ -43,11 +43,13 @@ import {
 } from './card-specs.js'
 import {
   backendDetails,
+  clearLaneBindings,
   endpointDetails,
   entryResultCard,
   parseEndpointType,
   probeEndpointModels,
   probeModelConnectivity,
+  promoteDefaultAfterRemoval,
   type EndpointProbeResult,
 } from './config.js'
 import { requireConfirm } from './confirm.js'
@@ -449,7 +451,7 @@ async function runAdminEndpoint(
         return (await setAdminEndpoint(rest, config, ctx)) ?? usageCard()
       case 'rm':
       case 'remove':
-        return removeAdminEndpoint(rest, config) ?? usageCard()
+        return removeAdminEndpoint(rest, config, ctx) ?? usageCard()
       default:
         return usageCard()
     }
@@ -661,7 +663,11 @@ async function setAdminEndpoint(
   )
 }
 
-function removeAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
+function removeAdminEndpoint(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): string | null {
   const [alias] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -680,15 +686,24 @@ function removeAdminEndpoint(parts: string[], config: LightClawConfig): string |
       removed.push(name)
     }
   }
-  if (typeof cfg.defaultModel === 'string' && removed.includes(cfg.defaultModel)) {
-    delete cfg.defaultModel
-  }
   cfg.endpoints = endpoints
   cfg.models = models
+  // Reconcile dangling references at the delete action (mirrors /config's
+  // removal cascade): re-promote the deployment default off a surviving model
+  // and clear lane buckets bound to a removed one. Deleting the admin default
+  // affects every user without a BYO override, so leaving it unset while other
+  // models remain would drop them all into the no-model state.
+  const defaultRemoved = promoteDefaultAfterRemoval(cfg, models, removed)
+  const clearedLanes = clearLaneBindings(cfg, removed)
   const err = commitAdminConfig(cfg, config)
   if (err) return err
   const note = removed.length ? t('config.endpoint.removedModels', { models: removed.join(', ') }) : ''
-  return `${t('config.endpoint.removed', { name: alias, models: note })}\n`
+  return entryResultCard(
+    ctx,
+    t('config.endpoint.removed', { name: alias, models: note }),
+    adminRemainingModelsDetails(cfg),
+    adminRemovalConsequenceLines(cfg, defaultRemoved, clearedLanes),
+  )
 }
 
 // ── /admin backend ───────────────────────────────────────────────────────────
@@ -733,7 +748,7 @@ async function runAdminBackend(
         return (await checkAdminBackend(rest)) ?? usageCard()
       case 'rm':
       case 'remove':
-        return removeAdminBackend(rest, config) ?? usageCard()
+        return removeAdminBackend(rest, config, ctx) ?? usageCard()
       default:
         return usageCard()
     }
@@ -937,7 +952,11 @@ async function checkAdminBackend(parts: string[]): Promise<string | null> {
     : `${t('config.model.checkFail', { detail: probe.detail })}\n`
 }
 
-function removeAdminBackend(parts: string[], config: LightClawConfig): string | null {
+function removeAdminBackend(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): string | null {
   const [displayName] = parts
   if (!displayName) return null
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
@@ -947,10 +966,52 @@ function removeAdminBackend(parts: string[], config: LightClawConfig): string | 
   }
   delete models[displayName]
   cfg.models = models
-  if (cfg.defaultModel === displayName) delete cfg.defaultModel
+  // Reconcile dangling references at the delete action — see removeAdminEndpoint.
+  const defaultRemoved = promoteDefaultAfterRemoval(cfg, models, [displayName])
+  const clearedLanes = clearLaneBindings(cfg, [displayName])
   const err = commitAdminConfig(cfg, config)
   if (err) return err
-  return `${t('config.backend.removed', { name: displayName })}\n`
+  return entryResultCard(
+    ctx,
+    t('config.backend.removed', { name: displayName }),
+    adminRemainingModelsDetails(cfg),
+    adminRemovalConsequenceLines(cfg, defaultRemoved, clearedLanes),
+  )
+}
+
+// Admin-registry flavors of config.ts's removal-consequence card sections. The
+// post-write `cfg` object IS the effective admin registry (no per-user overlay
+// to re-resolve), so both read it directly.
+function adminRemainingModelsDetails(cfg: Record<string, unknown>): string {
+  const models = asRecord(cfg.models)
+  const names = Object.keys(models)
+  if (!names.length) return t('config.removal.noModelsLeft')
+  return names
+    .map(name => {
+      const entry = asRecord(models[name])
+      const marker = name === cfg.defaultModel ? t('config.removal.defaultMarker') : ''
+      return `${name}${marker} (${String(entry.endpoint)} -> ${String(entry.upstreamModel)})`
+    })
+    .join('\n')
+}
+
+function adminRemovalConsequenceLines(
+  cfg: Record<string, unknown>,
+  defaultRemoved: boolean,
+  clearedLanes: string[],
+): string[] {
+  const lines: string[] = []
+  if (defaultRemoved) {
+    lines.push(
+      typeof cfg.defaultModel === 'string' && cfg.defaultModel
+        ? t('config.removal.defaultSwitched', { model: cfg.defaultModel })
+        : t('admin.removal.defaultCleared'),
+    )
+  }
+  if (clearedLanes.length) {
+    lines.push(t('config.removal.laneReset', { buckets: clearedLanes.join(', ') }))
+  }
+  return lines
 }
 
 // ── /admin lane ──────────────────────────────────────────────────────────────
