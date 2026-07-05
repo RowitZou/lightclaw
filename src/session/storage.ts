@@ -10,6 +10,7 @@ import path from 'node:path'
 
 import { resolveSessionsDir } from '../config.js'
 import { usersRoot } from '../identity/paths.js'
+import { serializeByKey } from '../memory/serialize-by-key.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import {
   getCompactionCount,
@@ -226,10 +227,14 @@ export async function loadMetaFromDir(
     const raw = await readFile(getMetaPathIn(sessionsDir, sessionId), 'utf8')
     return JSON.parse(raw) as SessionMeta
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      // A torn / corrupt meta.json degrades to null; the next mutateMeta then
+      // rebuilds from defaults, silently dropping todos / pendingTurn — make
+      // that visible instead of eating it as a phantom "new session".
+      console.error(
+        `[session-meta] failed to read meta for ${sessionId}: ${String(error)}`,
+      )
     }
-
     return null
   }
 }
@@ -238,8 +243,44 @@ export async function saveMeta(
   sessionId: string,
   meta: SessionMeta,
 ): Promise<void> {
-  await ensureSessionDir(sessionId)
-  await writeFile(getMetaPath(sessionId), `${JSON.stringify(meta, null, 2)}\n`, 'utf8')
+  const sessionDir = await ensureSessionDir(sessionId)
+  // tmp + rename so a concurrent reader / a crash mid-write never observes a
+  // torn meta.json (same pattern as rewriteTranscript above). Concurrent
+  // writers do not race the shared tmp path: every in-process meta write is
+  // serialized per sessionId through mutateMeta.
+  const tempPath = path.join(sessionDir, 'meta.json.tmp')
+  await writeFile(tempPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8')
+  await rename(tempPath, getMetaPath(sessionId))
+}
+
+/**
+ * The single read-modify-write entry for meta.json. Every meta writer that
+ * derives the next state from the current one MUST go through this — a bare
+ * `loadMeta` + `saveMeta` pair is a lost-update race: all writers pass
+ * through fields they do not own (`pendingTurn`, `todos`, watermarks), so a
+ * writer holding a stale snapshot resurrects whatever a concurrent writer
+ * just changed (2026-07-01 prod: a memory-extraction write that loaded
+ * before the runner's clearPendingTurn landed re-persisted the cleared
+ * pendingTurn marker, arming a fake crash-resume). The lock key is
+ * namespaced per sessionId and deliberately distinct from the
+ * `session-memory:` chain — the session-memory writer performs its own meta
+ * update inside its critical section and would self-deadlock on a shared
+ * key.
+ *
+ * The mutator receives the current on-disk meta (null when absent) and
+ * returns the full next meta, or null to skip the write.
+ */
+export async function mutateMeta(
+  sessionId: string,
+  mutate: (current: SessionMeta | null) => SessionMeta | null,
+): Promise<void> {
+  await serializeByKey(`session-meta:${sessionId}`, async () => {
+    const current = await loadMeta(sessionId)
+    const next = mutate(current)
+    if (next !== null) {
+      await saveMeta(sessionId, next)
+    }
+  })
 }
 
 export async function touchMeta(
@@ -247,8 +288,7 @@ export async function touchMeta(
   messageCount: number,
 ): Promise<void> {
   const now = Date.now()
-  const current = await loadMeta(sessionId)
-  await saveMeta(sessionId, {
+  await mutateMeta(sessionId, current => ({
     sessionId,
     model: current?.model ?? getModel(),
     cwd: current?.cwd ?? getCwd(),
@@ -262,17 +302,15 @@ export async function touchMeta(
     permissionMode: getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
     pendingTurn: current?.pendingTurn,
-  })
+  }))
 }
 
 export async function updateMetaLastExtractedAt(
   sessionId: string,
   lastExtractedAt: number,
 ): Promise<void> {
-  const current = await loadMeta(sessionId)
   const now = Date.now()
-
-  await saveMeta(sessionId, {
+  await mutateMeta(sessionId, current => ({
     sessionId,
     model: current?.model ?? getModel(),
     cwd: current?.cwd ?? getCwd(),
@@ -286,17 +324,15 @@ export async function updateMetaLastExtractedAt(
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
     pendingTurn: current?.pendingTurn,
-  })
+  }))
 }
 
 export async function updateMetaSessionMemoryAt(
   sessionId: string,
   sessionMemoryUpdatedAt: number,
 ): Promise<void> {
-  const current = await loadMeta(sessionId)
   const now = Date.now()
-
-  await saveMeta(sessionId, {
+  await mutateMeta(sessionId, current => ({
     sessionId,
     model: current?.model ?? getModel(),
     cwd: current?.cwd ?? getCwd(),
@@ -310,17 +346,15 @@ export async function updateMetaSessionMemoryAt(
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
     pendingTurn: current?.pendingTurn,
-  })
+  }))
 }
 
 export async function updateMetaTodos(
   sessionId: string,
   todos: TodoItem[],
 ): Promise<void> {
-  const current = await loadMeta(sessionId)
   const now = Date.now()
-
-  await saveMeta(sessionId, {
+  await mutateMeta(sessionId, current => ({
     sessionId,
     model: current?.model ?? getModel(),
     cwd: current?.cwd ?? getCwd(),
@@ -334,7 +368,7 @@ export async function updateMetaTodos(
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
     pendingTurn: current?.pendingTurn,
-  })
+  }))
 }
 
 /**
@@ -345,9 +379,8 @@ export async function updateMetaTodos(
  * existing count and only refreshes `startedAt`.
  */
 export async function markPendingTurn(sessionId: string): Promise<void> {
-  const current = await loadMeta(sessionId)
   const now = Date.now()
-  await saveMeta(sessionId, {
+  await mutateMeta(sessionId, current => ({
     sessionId,
     model: current?.model ?? getModel(),
     cwd: current?.cwd ?? getCwd(),
@@ -364,7 +397,7 @@ export async function markPendingTurn(sessionId: string): Promise<void> {
       startedAt: now,
       resumeAttempts: current?.pendingTurn?.resumeAttempts ?? 0,
     },
-  })
+  }))
 }
 
 /**
@@ -373,11 +406,12 @@ export async function markPendingTurn(sessionId: string): Promise<void> {
  * when there is no marker (e.g. a slash-only message, or no meta yet).
  */
 export async function clearPendingTurn(sessionId: string): Promise<void> {
-  const current = await loadMeta(sessionId)
-  if (!current?.pendingTurn) {
-    return
-  }
-  await saveMeta(sessionId, { ...current, pendingTurn: undefined })
+  await mutateMeta(sessionId, current => {
+    if (!current?.pendingTurn) {
+      return null
+    }
+    return { ...current, pendingTurn: undefined }
+  })
 }
 
 /**
@@ -387,14 +421,16 @@ export async function clearPendingTurn(sessionId: string): Promise<void> {
  * there is no marker.
  */
 export async function incrementResumeAttempts(sessionId: string): Promise<number> {
-  const current = await loadMeta(sessionId)
-  if (!current?.pendingTurn) {
-    return 0
-  }
-  const next = current.pendingTurn.resumeAttempts + 1
-  await saveMeta(sessionId, {
-    ...current,
-    pendingTurn: { ...current.pendingTurn, resumeAttempts: next },
+  let next = 0
+  await mutateMeta(sessionId, current => {
+    if (!current?.pendingTurn) {
+      return null
+    }
+    next = current.pendingTurn.resumeAttempts + 1
+    return {
+      ...current,
+      pendingTurn: { ...current.pendingTurn, resumeAttempts: next },
+    }
   })
   return next
 }

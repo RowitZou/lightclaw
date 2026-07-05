@@ -62,8 +62,8 @@ import {
   loadMeta,
   loadTranscript,
   markPendingTurn,
+  mutateMeta,
   rewriteTranscript,
-  saveMeta,
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import {
@@ -3398,8 +3398,7 @@ function appendLine(text: string, line: string): string {
 
 async function persistMeta(createdAt: number, messageCount: number): Promise<void> {
   const sessionId = getSessionId()
-  const existingMeta = await loadMeta(sessionId)
-  const meta: SessionMeta = {
+  await mutateMeta(sessionId, existingMeta => ({
     sessionId,
     model: getModel(),
     cwd: path.resolve(getCwd()),
@@ -3415,6 +3414,5 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     // (post-query, failure path); without this it would clobber the marker
     // markPendingTurn set, and a later crash would not be resumable.
     pendingTurn: existingMeta?.pendingTurn,
-  }
-  await saveMeta(sessionId, meta)
+  }))
 }

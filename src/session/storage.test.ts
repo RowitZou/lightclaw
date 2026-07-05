@@ -4,7 +4,19 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { appendMessage, appendMessages, loadTranscript } from './storage.js'
+import { mkdirSync, writeFileSync } from 'node:fs'
+
+import {
+  appendMessage,
+  appendMessages,
+  clearPendingTurn,
+  loadMeta,
+  loadTranscript,
+  markPendingTurn,
+  mutateMeta,
+  touchMeta,
+  updateMetaLastExtractedAt,
+} from './storage.js'
 import { createUserMessage } from '../messages.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
@@ -105,5 +117,80 @@ describe('getSessionDir ambient-context mismatch guard', () => {
       () => appendMessages(sid, [createUserMessage('hi', null)]),
     )
     assert.ok(existsSync(path.join(bobSessions, sid, 'transcript.jsonl')))
+  })
+})
+
+describe('meta.json write serialization (per-session mutateMeta lock)', () => {
+  // Production shape (2026-07-01, family): the runner's end-of-turn
+  // clearPendingTurn raced a delayed memory-extraction meta write. Both were
+  // load-modify-write with no lock; the extraction side loaded meta before
+  // the clear landed and wrote after it, re-persisting the cleared
+  // pendingTurn marker — arming a fake crash-resume for a turn that had
+  // completed normally. Same lost-update shape threatens todos and both
+  // watermarks. All meta writers now serialize per sessionId via mutateMeta.
+  const inCtx = <T>(fn: () => Promise<T>): Promise<T> =>
+    runWithSessionContext(
+      createEmptySessionContext({
+        sessionsDir: path.join(tmpHome, 'sessions'),
+      }),
+      fn,
+    )
+
+  it('a concurrent watermark write cannot resurrect a cleared pendingTurn marker', async () => {
+    await inCtx(async () => {
+      for (let i = 0; i < 25; i++) {
+        const sid = `feishu:dm:race-${i}`
+        await markPendingTurn(sid)
+        // Alternate launch order across iterations so either interleaving
+        // direction of the old unlocked write pair would have been caught.
+        const clear = (): Promise<void> => clearPendingTurn(sid)
+        const extract = (): Promise<void> =>
+          updateMetaLastExtractedAt(sid, 1000 + i)
+        await Promise.all(i % 2 === 0 ? [clear(), extract()] : [extract(), clear()])
+        const meta = await loadMeta(sid)
+        assert.ok(meta, `iteration ${i}: meta missing`)
+        assert.equal(
+          meta.pendingTurn,
+          undefined,
+          `iteration ${i}: pendingTurn resurrected by a concurrent meta write`,
+        )
+        assert.equal(
+          meta.lastExtractedAt,
+          1000 + i,
+          `iteration ${i}: lastExtractedAt lost to a concurrent meta write`,
+        )
+      }
+    })
+  })
+
+  it('concurrent mutateMeta calls never lose updates', async () => {
+    await inCtx(async () => {
+      const sid = 'feishu:dm:counter'
+      await touchMeta(sid, 0)
+      await Promise.all(
+        Array.from({ length: 50 }, () =>
+          mutateMeta(sid, current =>
+            current === null
+              ? null
+              : { ...current, messageCount: current.messageCount + 1 },
+          ),
+        ),
+      )
+      const meta = await loadMeta(sid)
+      assert.equal(meta?.messageCount, 50)
+    })
+  })
+
+  it('loadMeta degrades a corrupt meta.json to null instead of throwing', async () => {
+    await inCtx(async () => {
+      const sid = 'feishu:dm:corrupt'
+      const sessionDir = path.join(tmpHome, 'sessions', sid)
+      mkdirSync(sessionDir, { recursive: true })
+      writeFileSync(path.join(sessionDir, 'meta.json'), '{"torn', 'utf8')
+      assert.equal(await loadMeta(sid), null)
+      // The next full write recovers the file.
+      await touchMeta(sid, 3)
+      assert.equal((await loadMeta(sid))?.messageCount, 3)
+    })
   })
 })
