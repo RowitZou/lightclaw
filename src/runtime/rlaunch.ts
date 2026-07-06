@@ -14,7 +14,7 @@ import type {
   RuntimeFs,
   RuntimeStat,
 } from './types.js'
-import { LayeredDataPlane } from './data-plane/layered.js'
+import { LayeredDataPlane, STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.js'
 import { withByteBudget } from './byte-budget.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { agentExecEnv } from './exec-home.js'
@@ -637,6 +637,9 @@ export class RlaunchRuntime implements Runtime {
       }
       const result = await this.exec({
         command: `cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
+        // Byte transfer up to maxExecRelayBytes over virtiofs+GPFS — the 30s
+        // control-plane default SIGTERMs a legitimate multi-hundred-MB copy.
+        timeoutMs: STAGING_COPY_TIMEOUT_MS,
       })
       if (result.exitCode !== 0) {
         throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
@@ -662,6 +665,7 @@ export class RlaunchRuntime implements Runtime {
       }
       const result = await this.exec({
         command: `cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
+        timeoutMs: STAGING_COPY_TIMEOUT_MS,
       })
       if (result.exitCode !== 0) {
         throw new Error(`createReadStream ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
@@ -690,6 +694,7 @@ export class RlaunchRuntime implements Runtime {
           command:
             `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
             `cp -- ${shellQuote(stageContainer)} ${shellQuote(containerPath)}`,
+          timeoutMs: STAGING_COPY_TIMEOUT_MS,
         })
         if (result.exitCode !== 0) {
           throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)

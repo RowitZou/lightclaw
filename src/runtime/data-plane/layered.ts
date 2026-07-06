@@ -1,6 +1,15 @@
 import type { DataPlane, DataPlaneKind, PathPolicy, RuntimeStat } from '../types.js'
 import type { Readable } from 'node:stream'
 
+/** Timeout for exec-relay byte-transfer execs (staging `cp` between the target
+ *  and the host-visible scratch dir; docker's base64-stdin write). These carry
+ *  payloads up to maxExecRelayBytes (1 GiB on rlaunch), and a multi-hundred-MB
+ *  cp over virtiofs+GPFS legitimately runs minutes — the 30s control-plane
+ *  DEFAULT_TIMEOUT_MS SIGTERMs it mid-copy and reports a misleading "timed
+ *  out". Any new exec that moves file bytes (as opposed to control-shape
+ *  stat/chmod/mkdir) must pass this instead of inheriting the default. */
+export const STAGING_COPY_TIMEOUT_MS = 600_000
+
 export class DataPlaneNotApplicableError extends Error {
   constructor(message: string) {
     super(message)

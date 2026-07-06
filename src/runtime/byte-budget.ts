@@ -9,7 +9,14 @@ type Waiter = {
   reject: (error: Error) => void
 }
 
-/** Process-wide accounting primitive for whole-buffer filesystem IO. */
+/** Process-wide accounting primitive for whole-buffer filesystem IO.
+ *
+ *  The waiter queue is strict FIFO (drain only inspects the head), so a queued
+ *  large request briefly blocks smaller ones behind it. That head-of-line
+ *  window is bounded by whole-buffer read/write durations (seconds): streams
+ *  reserve only STREAM_RESERVATION_BYTES, never their full file size, so no
+ *  reservation is held across a long-lived stream (see withByteBudget). Do not
+ *  add small-request bypass without a starvation guard for large requests. */
 export class ByteBudget {
   private limit: number
   private used = 0
@@ -78,6 +85,15 @@ export class ByteBudget {
 const DEFAULT_IO_BUDGET_BYTES = 3072 * 1024 * 1024
 const globalByteBudget = new ByteBudget(DEFAULT_IO_BUDGET_BYTES)
 
+/** A streaming read holds ~one buffer of daemon memory at a time (backpressure),
+ *  never the whole file, so it reserves only this constant slice of the budget —
+ *  enough to keep concurrent-stream accounting visible. Reserving stat().size
+ *  would (1) hard-reject any file larger than the whole budget even though the
+ *  reader never buffers it, and (2) park the full amount for the stream's entire
+ *  lifetime (a multi-minute chunked cloud upload), starving unrelated
+ *  whole-buffer IO behind the FIFO waiter queue. */
+export const STREAM_RESERVATION_BYTES = 4 * 1024 * 1024
+
 export function configureGlobalByteBudget(limitBytes: number): ByteBudget {
   globalByteBudget.setLimit(limitBytes)
   return globalByteBudget
@@ -112,8 +128,10 @@ export function withByteBudget(
     ...(inner.createReadStream
       ? {
           createReadStream: async (pathname: string): Promise<Readable> => {
+            // stat is kept so a missing file still throws here (ENOENT at open
+            // time) instead of surfacing as an async stream 'error' event.
             const info = await inner.stat(pathname)
-            const release = await budget.acquire(info.size)
+            const release = await budget.acquire(Math.min(info.size, STREAM_RESERVATION_BYTES))
             try {
               const stream = await inner.createReadStream!(pathname)
               let settled = false

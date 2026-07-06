@@ -21,6 +21,7 @@ import {
   type RlaunchRuntimeConfig,
 } from './rlaunch.js'
 import type { ExecInput, ExecResult } from './types.js'
+import { STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.js'
 import {
   deleteWorkerRecord,
   lookupWorkerRecord,
@@ -665,6 +666,48 @@ describe('RlaunchRuntime three-plane data path', () => {
     await runtime.fs.writeFile('/tmp/out.txt', payload)
     assert.ok(stagedContent, 'cp must have seen a staged file')
     assert.equal(Buffer.compare(stagedContent, payload), 0)
+  })
+
+  it('staging cp execs carry the byte-transfer timeout, not the 30s control default', async () => {
+    // Regression (0.4.x review §3.7c): the relay byte cap is 1 GiB but the
+    // staging `cp` inherited DEFAULT_TIMEOUT_MS=30s — a multi-hundred-MB copy
+    // over virtiofs+GPFS was SIGTERMed mid-transfer and misreported as a
+    // generic exec timeout. All three byte-moving relay ops (readFile /
+    // createReadStream / writeFile) must pass STAGING_COPY_TIMEOUT_MS.
+    const payload = Buffer.from('sized for the timeout assertion\n')
+    const cpInputs: ExecInput[] = []
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
+      if (input.command.startsWith("stat -c '%s|%F|%Y' ")) {
+        return { stdout: `${payload.length}|regular file|0`, stderr: '', exitCode: 0 }
+      }
+      const cp = input.command.match(/cp -- '(.+)' '(.+)'$/)
+      if (cp) {
+        cpInputs.push(input)
+        const dstHost = runtime.paths.toHostPath(cp[2])
+        if (dstHost) {
+          mkdirSync(path.dirname(dstHost), { recursive: true })
+          writeFileSync(dstHost, payload)
+        }
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: `unexpected: ${input.command}`, exitCode: 1 }
+    }
+
+    await runtime.fs.readFile('/tmp/staged.bin')
+    const stream = await runtime.fs.createReadStream!('/tmp/staged.bin')
+    for await (const _chunk of stream) {
+      // drain so the scratch copy is cleaned up
+    }
+    await runtime.fs.writeFile('/tmp/staged-out.bin', payload)
+
+    assert.equal(cpInputs.length, 3, 'readFile + createReadStream + writeFile each stage via cp')
+    for (const input of cpInputs) {
+      assert.equal(
+        input.timeoutMs,
+        STAGING_COPY_TIMEOUT_MS,
+        `staging cp must not inherit the control-plane default: ${input.command}`,
+      )
+    }
   })
 
   it('folds `..` traversal via normalize before staging the read', async () => {

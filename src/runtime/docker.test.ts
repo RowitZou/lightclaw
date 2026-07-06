@@ -1,5 +1,8 @@
 import test, { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import {
   buildDockerCreateArgs,
@@ -10,6 +13,8 @@ import {
   type DockerRuntimeSecurity,
 } from './docker.js'
 import { ImageReadinessTracker } from './image-readiness.js'
+import { STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.js'
+import type { ExecInput, ExecResult } from './types.js'
 
 const DEFAULT_SECURITY: DockerRuntimeSecurity = {
   capDrop: ['ALL'],
@@ -236,6 +241,54 @@ test('parseDockerInspect tolerates id-only and blank output without fabricating 
   assert.deepEqual(parseDockerInspect('abc123'), { id: 'abc123', state: 'unknown' })
   assert.deepEqual(parseDockerInspect(''), { id: null, state: 'unknown' })
   assert.deepEqual(parseDockerInspect('   '), { id: null, state: 'unknown' })
+})
+
+test('docker exec-relay byte transfers carry the staging timeout, not the 30s control default', async () => {
+  // Regression (0.4.x review §3.7c, docker leg): the exec-relay staging cp
+  // (readFile) and the base64-stdin write inherited DEFAULT_TIMEOUT_MS=30s —
+  // a transfer near the 32 MiB relay cap on a loaded daemon host could be
+  // SIGTERMed mid-copy. Both byte-moving relay ops must pass
+  // STAGING_COPY_TIMEOUT_MS; control-shape execs (stat) keep the default.
+  const hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-docker-relay-test-'))
+  try {
+    const runtime = new DockerRuntime(makeConfig({ workspaceHostPath: hostRoot }), new ImageReadinessTracker())
+    const payload = Buffer.from('docker relay timeout probe\n')
+    const byteTransferInputs: ExecInput[] = []
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
+      if (input.command.startsWith("stat -c '%s|%F|%Y' ")) {
+        return { stdout: `${payload.length}|regular file|0`, stderr: '', exitCode: 0 }
+      }
+      const cp = input.command.match(/cp -- '(.+)' '(.+)'$/)
+      if (cp) {
+        byteTransferInputs.push(input)
+        const dstHost = runtime.paths.toHostPath(cp[2])
+        assert.ok(dstHost, `staging path must be host-visible: ${cp[2]}`)
+        mkdirSync(path.dirname(dstHost), { recursive: true })
+        writeFileSync(dstHost, payload)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      if (input.stdin !== undefined) {
+        byteTransferInputs.push(input)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: `unexpected: ${input.command}`, exitCode: 1 }
+    }
+
+    const got = await runtime.fs.readFile('/tmp/staged.bin')
+    assert.equal(Buffer.compare(got, payload), 0)
+    await runtime.fs.writeFile('/tmp/staged-out.bin', payload)
+
+    assert.equal(byteTransferInputs.length, 2, 'readFile cp + writeFile stdin exec')
+    for (const input of byteTransferInputs) {
+      assert.equal(
+        input.timeoutMs,
+        STAGING_COPY_TIMEOUT_MS,
+        `byte transfer must not inherit the control-plane default: ${input.command}`,
+      )
+    }
+  } finally {
+    rmSync(hostRoot, { recursive: true, force: true })
+  }
 })
 
 test('DockerRuntime.currentGeneration is null before any container is inspected', () => {

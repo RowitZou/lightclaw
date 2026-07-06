@@ -20,7 +20,7 @@ import {
 } from './image-readiness.js'
 import { BindMountData } from './data-plane/bind-mount.js'
 import { withByteBudget } from './byte-budget.js'
-import { LayeredDataPlane } from './data-plane/layered.js'
+import { LayeredDataPlane, STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.js'
 import { agentExecEnv } from './exec-home.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
@@ -368,6 +368,9 @@ export class DockerRuntime implements Runtime {
       const stageHost = path.join(this.cfg.workspaceHostPath, '.lightclaw', 'exec', `${id}.read`)
       const result = await this.exec({
         command: `mkdir -p ${shellQuote(path.posix.dirname(stageContainer))} && cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
+        // Byte transfer up to the relay cap — must not inherit the 30s
+        // control-plane default (see STAGING_COPY_TIMEOUT_MS).
+        timeoutMs: STAGING_COPY_TIMEOUT_MS,
       })
       if (result.exitCode !== 0) {
         throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
@@ -387,6 +390,7 @@ export class DockerRuntime implements Runtime {
         command,
         stdin: buffer.toString('base64'),
         maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+        timeoutMs: STAGING_COPY_TIMEOUT_MS,
       })
       if (result.exitCode !== 0) {
         throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
