@@ -1879,8 +1879,11 @@ export class ChannelRunner {
    * work is still queued (a not-yet-drained interjection or a pending write
    * slash means another turn is imminent — leave it to Feature B / the next
    * turn's own refresh). The core early-returns "clean" on a non-dirty session,
-   * so this only spends an LLM write when there is genuinely new work; its
-   * writer serializes per-session, so it cannot race the mid-turn kicks.
+   * so this only spends an LLM write when there is genuinely new work; the
+   * core's watermark read/advance runs inside the per-session critical section,
+   * so racing the fire-and-forget end-turn flush cannot double-summarize the
+   * same batch — the later trigger sees the advanced watermark and returns
+   * clean.
    */
   private maybeIdleRefreshSessionMemory(
     sessionId: string,

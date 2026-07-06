@@ -201,13 +201,12 @@ export type SessionMemoryUpdateInput = {
   config: LightClawConfig
 }
 
-// Serialize session-memory writes per session. The end-turn flush is now
-// fire-and-forget (query.ts) so it can outlive its turn; without this a
-// lingering flush from turn N could run read→merge→write concurrently with
-// turn N+1's writes and clobber the shared `${target}.tmp` file. Per-sessionId
-// chaining guarantees in-order, non-overlapping writes (the later-enqueued,
-// newer snapshot always lands last) while different sessions never block each
-// other — mirrors Claude Code's `sequential(extractSessionMemory)` wrapper.
+// Standalone serialized write-core entry (direct/test callers). Production
+// refreshes go through `updateSessionMemoryForSession`, which holds the SAME
+// `session-memory:<sessionId>` key around its whole read→write→advance section
+// and calls the unlocked inner core — so a direct call here still serializes
+// against any in-flight refresh, and neither entry ever nests the key (the
+// serializeByKey promise chain is not reentrant; nesting would deadlock).
 export function updateSessionMemory(
   input: SessionMemoryUpdateInput,
 ): Promise<{ updated: boolean }> {
@@ -252,19 +251,22 @@ async function updateSessionMemoryInner(
 }
 
 // The write-core seam (read existing SM + LLM rewrite + atomic file write).
-// Defaults to `updateSessionMemory` (the per-session serialized writer above).
-// Tests replace it via `setSessionMemoryWriterForTest` to observe the message
-// batch handed to each update and control write timing without a real LLM call.
+// Defaults to the UNLOCKED `updateSessionMemoryInner` — the caller
+// (`updateSessionMemoryForSession`) already holds the per-session key around
+// the whole refresh, and serializeByKey is not reentrant, so pointing the seam
+// at the locked `updateSessionMemory` would self-deadlock. Tests replace it via
+// `setSessionMemoryWriterForTest` to observe the message batch handed to each
+// update and control write timing without a real LLM call.
 type SessionMemoryCoreWriter = (
   input: SessionMemoryUpdateInput,
 ) => Promise<{ updated: boolean }>
 
-let sessionMemoryWriter: SessionMemoryCoreWriter = updateSessionMemory
+let sessionMemoryWriter: SessionMemoryCoreWriter = updateSessionMemoryInner
 
 export function setSessionMemoryWriterForTest(
   impl: SessionMemoryCoreWriter | null,
 ): void {
-  sessionMemoryWriter = impl ?? updateSessionMemory
+  sessionMemoryWriter = impl ?? updateSessionMemoryInner
 }
 
 export type UpdateSessionMemoryForSessionInput = {
@@ -299,10 +301,10 @@ export async function updateSessionMemoryForSession(
   // exactly as the pre-refactor inline query.ts did. This ordering is
   // load-bearing: the mid-turn kick runs non-blocking, so the agent loop keeps
   // dispatching tools (bumping the accumulators) while this update is in flight.
-  // If the reset were deferred until after `await loadMeta`, the tool-call
-  // boundaries that fire during that await would be counted and then WIPED by
-  // the late reset, so the end-turn flush sees a zeroed counter, skips as
-  // below-threshold, and never runs — dropping the end-turn session-memory
+  // If the reset were deferred until after the lock/`await loadMeta`, the
+  // tool-call boundaries that fire during that await would be counted and then
+  // WIPED by the late reset, so the end-turn flush sees a zeroed counter, skips
+  // as below-threshold, and never runs — dropping the end-turn session-memory
   // refresh (and, in the single-flight test, hanging its `await` on a second
   // update that never fires, which surfaces under load as a "Promise still
   // pending" suite cancel). Resetting here leaves exactly the post-reset work
@@ -316,40 +318,53 @@ export async function updateSessionMemoryForSession(
   }
   resetSessionMemoryCounters(sessionId)
 
-  const meta = await loadMeta(sessionId)
-  const since = meta?.sessionMemoryUpdatedAt ?? 0
-  const newMessages = messages.filter(
-    message => message.type !== 'system' && message.timestamp > since,
-  )
-  if (newMessages.length === 0) {
-    // Nothing new since the last watermark — clean. `force` cannot conjure work
-    // out of an unchanged session, so it returns clean too. (The reset above
-    // already ran; a clean session's accumulators are correctly zeroed since
-    // there is nothing left un-summarized.)
-    return { updated: false, reason: 'clean' }
-  }
-
-  try {
-    const result = await sessionMemoryWriter({
-      sessionId,
-      sessionsDir,
-      newMessages,
-      config,
-    })
-    if (result.updated) {
-      // Watermark = the newest message actually summarized, NOT Date.now().
-      // Mid-turn updates are non-blocking, so the loop produces more messages
-      // during the rewrite window; a wall-clock watermark would jump past them
-      // and the next update's `timestamp > since` filter would permanently
-      // exclude every message created while this update ran.
-      const ts = Math.max(...newMessages.map(message => message.timestamp))
-      await updateMetaSessionMemoryAt(sessionId, ts)
-      incrementSessionMemoryUpdateCount()
+  // Watermark read, filter, LLM rewrite, and watermark advance run as ONE
+  // per-session critical section. The triggers overlap by construction — the
+  // end-turn flush is fire-and-forget and the Feature A idle refresh fires
+  // right after query() returns — so a lock around only the writer lets the
+  // second trigger read the watermark BEFORE the first write advances it,
+  // filter the SAME message batch, and queue a duplicate full LLM rewrite
+  // (observed as a stable 2x SM cost on every heavy turn). Inside the section
+  // the later trigger re-reads the advanced watermark and returns clean. The
+  // gate/reset above stays OUTSIDE the lock (must be synchronous, see comment),
+  // and the seam calls the unlocked inner core — never the locked
+  // `updateSessionMemory`, which would nest the key and deadlock.
+  return serializeByKey(`session-memory:${sessionId}`, async () => {
+    const meta = await loadMeta(sessionId)
+    const since = meta?.sessionMemoryUpdatedAt ?? 0
+    const newMessages = messages.filter(
+      message => message.type !== 'system' && message.timestamp > since,
+    )
+    if (newMessages.length === 0) {
+      // Nothing new since the last watermark — clean. `force` cannot conjure
+      // work out of an unchanged session, so it returns clean too. (The reset
+      // above already ran; a clean session's accumulators are correctly zeroed
+      // since there is nothing left un-summarized.)
+      return { updated: false, reason: 'clean' }
     }
-    return { updated: result.updated }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`[session-memory] ${message}`)
-    return { updated: false }
-  }
+
+    try {
+      const result = await sessionMemoryWriter({
+        sessionId,
+        sessionsDir,
+        newMessages,
+        config,
+      })
+      if (result.updated) {
+        // Watermark = the newest message actually summarized, NOT Date.now().
+        // Mid-turn updates are non-blocking, so the loop produces more messages
+        // during the rewrite window; a wall-clock watermark would jump past
+        // them and the next update's `timestamp > since` filter would
+        // permanently exclude every message created while this update ran.
+        const ts = Math.max(...newMessages.map(message => message.timestamp))
+        await updateMetaSessionMemoryAt(sessionId, ts)
+        incrementSessionMemoryUpdateCount()
+      }
+      return { updated: result.updated }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[session-memory] ${message}`)
+      return { updated: false }
+    }
+  })
 }

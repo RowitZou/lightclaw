@@ -1017,9 +1017,12 @@ export async function query(params: QueryParams): Promise<{
         // turn — and, on a channel, the in-flight marker that gates user
         // interjections — for a post-turn session-memory LLM write (observed
         // 40-60s on a reasoning sub-LLM). Mirrors Claude Code's
-        // `void executePostSamplingHooks`. updateSessionMemory serializes per
-        // session, so a flush that outlives this turn cannot race the next
-        // turn's write. registerBackgroundTask keeps it drainable at shutdown.
+        // `void executePostSamplingHooks`. The refresh core holds a per-session
+        // critical section around watermark read → write → watermark advance,
+        // so a flush that outlives this turn cannot race the next turn's write,
+        // and the runner's idle refresh firing right after query() returns
+        // dedups against this flush instead of re-summarizing the same batch.
+        // registerBackgroundTask keeps it drainable at shutdown.
         // Auto-compact (afterEndTurn) STAYS blocking below — the next turn
         // needs the compacted transcript (Claude Code awaits compaction too).
         registerBackgroundTask(flushSessionMemoryUpdate(extractionSnapshot))

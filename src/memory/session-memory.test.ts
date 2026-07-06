@@ -161,3 +161,98 @@ describe('updateSessionMemoryForSession force vs threshold (Feature A core)', ()
     assert.deepEqual(clean, { updated: false, reason: 'clean' })
   })
 })
+
+describe('concurrent refresh triggers dedup on the same work', () => {
+  // The production shape: query.ts fire-and-forgets the end-turn flush, then the
+  // runner immediately force-fires the Feature A idle refresh — the second
+  // trigger arrives while the first LLM rewrite (40-60s in prod) is still in
+  // flight. The watermark read/filter must happen inside the per-session
+  // critical section: the later trigger has to observe the earlier write's
+  // watermark advance and return clean, instead of filtering the SAME message
+  // batch against the stale watermark and queuing a second full LLM rewrite of
+  // work that is already summarized.
+  const raceSessionId = 'sm-race-test'
+  const raceConfig = {
+    memory: {
+      extractor: { enabled: true },
+      session: {
+        enabled: true,
+        idleRefresh: true,
+        updateTokenThreshold: 20_000,
+        updateToolCallThreshold: 5,
+      },
+    },
+  } as unknown as LightClawConfig
+
+  function raceCtx() {
+    return createSessionContext({
+      cwd: '/tmp/sm-race',
+      model: 'test-model',
+      sessionsDir,
+      memoryDir: path.join(tmpRoot, 'memory'),
+      sessionId: raceSessionId,
+      permissionMode: 'bypassPermissions',
+    })
+  }
+
+  it('a force refresh arriving during an in-flight write returns clean with no second LLM call', async () => {
+    await mkdir(path.join(sessionsDir, raceSessionId), { recursive: true })
+    let llmCalls = 0
+    let releaseFirst!: (body: string) => void
+    const firstCallGate = new Promise<string>(resolve => {
+      releaseFirst = resolve
+    })
+    let signalFirstStarted!: () => void
+    const firstStarted = new Promise<void>(resolve => {
+      signalFirstStarted = resolve
+    })
+    setRequestSessionMemoryUpdateForTest(async () => {
+      llmCalls += 1
+      if (llmCalls === 1) {
+        signalFirstStarted()
+        return firstCallGate
+      }
+      return 'SECOND-DUPLICATE-BODY'
+    })
+    const messages: Message[] = [createUserMessage('heavy turn just ended')]
+    resetSessionMemoryCounters(raceSessionId)
+
+    // Trigger 1 (the end-turn flush, here as force to skip counter priming) —
+    // its LLM rewrite blocks on the gate, holding the write in flight.
+    const flush = runWithSessionContext(raceCtx(), () =>
+      updateSessionMemoryForSession({
+        sessionId: raceSessionId,
+        sessionsDir,
+        messages,
+        config: raceConfig,
+        force: true,
+      }),
+    )
+    await firstStarted
+
+    // Trigger 2 (the idle refresh) fires while trigger 1's write is in flight.
+    const idleRefresh = runWithSessionContext(raceCtx(), () =>
+      updateSessionMemoryForSession({
+        sessionId: raceSessionId,
+        sessionsDir,
+        messages,
+        config: raceConfig,
+        force: true,
+      }),
+    )
+    releaseFirst('FIRST-WRITE-BODY')
+
+    const [flushResult, idleResult] = await Promise.all([flush, idleRefresh])
+    assert.deepEqual(flushResult, { updated: true })
+    // Pre-fix this was { updated: true } with llmCalls === 2: the idle refresh
+    // read the watermark before the flush advanced it, filtered the same batch,
+    // and queued a duplicate rewrite behind the per-session lock.
+    assert.deepEqual(idleResult, { updated: false, reason: 'clean' })
+    assert.equal(llmCalls, 1)
+    const written = await readFile(
+      path.join(sessionsDir, raceSessionId, SESSION_MEMORY_FILENAME),
+      'utf8',
+    )
+    assert.match(written, /FIRST-WRITE-BODY/)
+  })
+})

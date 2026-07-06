@@ -372,7 +372,9 @@ export async function runDispatchedAgent(
  * the worker's chain-leaf sessionId. Skips when auto-memory / SM / idle-refresh
  * is disabled; the caller already excludes internal roles (they never write SM).
  * The core early-returns "clean" on a non-dirty worker, so a re-run that added
- * nothing costs no LLM call; its writer serializes per-session.
+ * nothing costs no LLM call; the core's watermark read/advance runs inside the
+ * per-session critical section, so racing the worker query's own end-turn
+ * flush cannot double-summarize the same batch.
  */
 function maybeWorkerIdleRefreshSessionMemory(
   sessionId: string,
