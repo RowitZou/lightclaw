@@ -2117,6 +2117,10 @@ export class ChannelRunner {
         senderOpenId: 'recall',
         arrivedAt: Date.now(),
         synthetic: true,
+        // Turn-scoped advice: if the live turn ends before the next tool
+        // boundary drains this, unmarkInFlight drops it rather than letting
+        // the leftover rescue replay it as a context-free new turn.
+        ephemeral: true,
       })
       process.stderr.write(
         `${this.strategy.channelId}: recall ${recall.messageId} -> withdrawal note to in-flight ${drained.sessionId}\n`,

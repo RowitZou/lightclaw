@@ -51,8 +51,24 @@ export class InterjectionQueue {
     this.inFlightSessions.delete(sessionId)
     this.openerMessageBySession.delete(sessionId)
     this.drainedBySession.delete(sessionId)
-    const leftover = this.queueBySession.get(sessionId) ?? []
+    const queued = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
+    // Ephemeral entries (recall withdrawal notes) only advise the LIVE turn;
+    // with that turn over they are meaningless — rescuing one replays "This
+    // does NOT cancel the task… continue it" as the opener of a brand-new turn
+    // with no task in flight. Drop them here so EVERY rescuer (channel runner
+    // post-query replay, taskrun resume replay, any future caller) inherits
+    // the filter instead of each remembering to apply it.
+    const leftover = queued.filter(entry => entry.ephemeral !== true)
+    for (const entry of queued) {
+      if (entry.ephemeral === true) {
+        traceInterjection('ephemeral-dropped', {
+          session: sessionId,
+          msg: entry.messageId,
+          waitedMs: waitedMs(entry.arrivedAt),
+        })
+      }
+    }
     traceInterjection('inflight-clear', { session: sessionId, leftover: leftover.length })
     // Per-entry leftover trace: anything still queued at turn-end did NOT drain
     // in-turn — its waitedMs is the time it sat through the turn (incl. any

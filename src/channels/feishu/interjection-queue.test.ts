@@ -147,6 +147,28 @@ describe('InterjectionQueue', () => {
     assert.equal(queue.drainedInterjectionByMessageId('m2'), undefined)
   })
 
+  it('unmarkInFlight drops ephemeral entries instead of returning them as leftover', () => {
+    // Review §3.12a (2026-07-02): a recall withdrawal note pushed into a live
+    // turn only advises THAT turn. If the turn ends before the next tool
+    // boundary drains it, rescuing it as a fresh turn replays "This does NOT
+    // cancel the task… continue it" into a context with no task in flight.
+    // Ephemeral entries must vanish at unmarkInFlight; genuine interjections
+    // queued alongside must still come back (Bug 9 rescue unchanged).
+    const queue = new InterjectionQueue()
+    queue.markInFlight('s1')
+    queue.push('s1', { ...entry('recall:om_1', 'RECALLED note'), synthetic: true, ephemeral: true })
+    queue.push('s1', entry('m2', 'real follow-up'))
+
+    const leftover = queue.unmarkInFlight('s1')
+
+    assert.deepEqual(
+      leftover.map(e => e.messageId),
+      ['m2'],
+      'ephemeral withdrawal note is dropped; genuine interjection survives rescue',
+    )
+    assert.deepEqual(queue.drain('s1'), [])
+  })
+
   it('clears remembered drained interjections on unmarkInFlight', () => {
     const queue = new InterjectionQueue()
     queue.markInFlight('s1')

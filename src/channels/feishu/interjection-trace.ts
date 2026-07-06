@@ -12,6 +12,8 @@
 //   drained        a queued interjection reached the model at a tool boundary
 //   leftover       a turn ended with an interjection still queued (not drained)
 //   rescued        a leftover interjection was replayed as a fresh turn
+//   ephemeral-dropped  a turn-scoped entry (recall withdrawal note) was still
+//                  queued at turn end and dropped instead of rescued
 //   inflight-clear the session left in-flight (the turn — incl. its post-turn
 //                  session-memory flush / compact — fully wound down)
 //

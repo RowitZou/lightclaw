@@ -2066,6 +2066,34 @@ describe('ChannelRunner recall handling', () => {
     }
   })
 
+  it('a withdrawal note that outlives the turn is dropped, never rescued as a fresh turn', async () => {
+    // Review §3.12a (2026-07-02): the note is turn-scoped advice ("This does
+    // NOT cancel the task… continue it"). When the in-flight turn ends before
+    // the next tool boundary drains it, the leftover rescue used to replay it
+    // as the opener of a brand-new turn with no task in flight — the model got
+    // told to continue a task that does not exist. The note must be marked
+    // ephemeral and vanish at unmarkInFlight.
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_recall_leftover'
+    channelInterjectionQueue.markInFlight(sessionId)
+    channelInterjectionQueue.push(sessionId, {
+      messageId: 'om_drained_lo',
+      senderOpenId: 'ou_alice',
+      text: 'also check the logs',
+      arrivedAt: Date.now(),
+    })
+    channelInterjectionQueue.drain(sessionId) // the model has now seen it
+    await runner.handleRecall({ messageId: 'om_drained_lo', chatId: 'oc_recall_leftover' })
+    // The turn ends without another tool boundary — the note was never drained.
+    const leftover = channelInterjectionQueue.unmarkInFlight(sessionId)
+    assert.deepEqual(
+      leftover,
+      [],
+      'the undrained withdrawal note must not surface as rescuable leftover',
+    )
+  })
+
   it('surfaces a recalled-root signal to main and does NOT hard-abort the opener turn', async () => {
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')

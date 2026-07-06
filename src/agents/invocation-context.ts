@@ -38,6 +38,15 @@ export type InterjectionEntry = {
   /** Root TaskRun behind a background-task entry; the rescue replay carries
    *  it onto the synthetic turn so its narration lands on the task card. */
   taskCardRoot?: { owner: string; rootRunId: string }
+  /** True when this entry is only meaningful to the in-flight turn it was
+   *  pushed into (e.g. a recall withdrawal note advising the LIVE turn that an
+   *  already-injected interjection was retracted). If the turn ends before the
+   *  next tool boundary drains it, the entry is dropped by `unmarkInFlight`
+   *  instead of being rescued as a fresh turn — replayed standalone it would
+   *  open a new turn with "continue the current task" and no task in flight.
+   *  Distinct from `synthetic`: bg-result / taskrun wakes are synthetic but
+   *  carry real deliveries and MUST be rescued. */
+  ephemeral?: boolean
 }
 
 /**

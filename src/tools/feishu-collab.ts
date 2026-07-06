@@ -1789,14 +1789,15 @@ export async function requireFeishuWriteConfirmation(input: {
 
   // Honor identity-level "always allow" rules for grantable Feishu virtual
   // confirms. Without this short-circuit, FeishuCreateFile / WriteDoc /
-  // WriteSheet / CreateFolder / Upload / table-edit / move always render an
-  // approval card even after the user already picked "以后都允许" on a prior
-  // ask — requireFeishuWriteConfirmation called approver.ask directly,
-  // bypassing requestPermission's evaluatePermission gate that every other
-  // write tool routes through. Destructive one-shot confirms intentionally
-  // never short-circuit: delete / whole-doc replace / whole-sheet-delete
-  // operations are high-risk per CLAUDE.md; isHighRiskAsk hides the
-  // 以后都允许 button on the card, and this is defense-in-depth.
+  // WriteSheet / CreateFolder / Upload / table-edit / move / replace-doc /
+  // delete-sheet always render an approval card even after the user already
+  // picked "以后都允许" on a prior ask — requireFeishuWriteConfirmation called
+  // approver.ask directly, bypassing requestPermission's evaluatePermission
+  // gate that every other write tool routes through. Only trash deletion
+  // (`delete`, the sole one-shot op per isOneShotFeishuOperation) intentionally
+  // never short-circuits: it removes the whole resource with no in-place
+  // recovery, is high-risk per CLAUDE.md, and isHighRiskAsk hides the
+  // 以后都允许 button on its card — this is defense-in-depth.
   if (!isOneShotFeishuOperation(input.operation)) {
     const userId = getCurrentUserId()
     if (userId) {
