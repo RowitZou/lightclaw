@@ -118,7 +118,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
-  startRlaunchPreheatIfNeeded(resolvedConfig)
+  await startRlaunchPreheatIfNeeded(resolvedConfig)
   startInboxAgingIfNeeded()
   return { config: resolvedConfig, sessionContext }
 }
@@ -162,8 +162,11 @@ function startImagePrefetchIfNeeded(config: LightClawConfig): void {
 
 /** Re-probe every paired user's saved rlaunch mounts against the daemon's
  *  current filesystem view, rewriting any whose scope (worker-only ↔ shared) or
- *  mode (ro ↔ rw) drifted since `mount add`. Best-effort and per-user isolated:
- *  one user's unreadable store never blocks another's refresh or the preheat. */
+ *  mode (ro ↔ rw) drifted since `mount add`. Resolves after the first pass
+ *  (upgrades applied; probes timeout-bounded); downgrade confirmations run
+ *  detached — see refreshUserRlaunchMountAccess. Best-effort and per-user
+ *  isolated: one user's unreadable store never blocks another's refresh or the
+ *  preheat. */
 async function refreshAllRlaunchMountAccess(): Promise<void> {
   let users: string[]
   try {
@@ -174,14 +177,21 @@ async function refreshAllRlaunchMountAccess(): Promise<void> {
     return
   }
   let corrected = 0
-  for (const userId of users) {
+  await Promise.all(users.map(async userId => {
     try {
-      if (refreshUserRlaunchMountAccess(userId).changed > 0) corrected += 1
+      const result = await refreshUserRlaunchMountAccess(userId)
+      if (result.changed > 0) corrected += 1
+      if (result.downgradeConfirmation) {
+        void result.downgradeConfirmation.catch(error => {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[rlaunch-mount-refresh] ${userId}: downgrade confirmation failed: ${detail}\n`)
+        })
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(`[rlaunch-mount-refresh] ${userId}: ${detail}\n`)
     }
-  }
+  }))
   if (corrected > 0) {
     process.stderr.write(
       `[rlaunch-mount-refresh] re-probed ${users.length} user(s); corrected mounts for ${corrected}\n`,
@@ -189,7 +199,7 @@ async function refreshAllRlaunchMountAccess(): Promise<void> {
   }
 }
 
-function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
+async function startRlaunchPreheatIfNeeded(config: LightClawConfig): Promise<void> {
   if (config.runtime.backend !== 'cluster') return
   const pool = getRuntimePool()
   // A restart is exactly when puyuclaw's storage permissions may have changed,
@@ -197,17 +207,21 @@ function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
   // ↔ shared, ro ↔ rw) and rewrite the store before preheat acquires workers —
   // a corrected entry changes the mount fingerprint so the worker rebuilds onto
   // the right (often faster) path instead of staying stale until a manual re-add.
-  void (async () => {
-    await refreshAllRlaunchMountAccess()
-    if (config.runtime.clusterSettings.preheatOnStartup) {
+  // AWAITED (probes are timeout-bounded): channels start right after
+  // initializeApp returns, so without the await the first inbound message could
+  // acquire — and the pool would cache — a runtime built from the stale store.
+  // Downgrade confirmations detach inside refreshAllRlaunchMountAccess.
+  await refreshAllRlaunchMountAccess()
+  if (config.runtime.clusterSettings.preheatOnStartup) {
+    void (async () => {
       try {
         await runRlaunchStartupPreheat(pool, config)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(`[rlaunch-preheat] aborted: ${detail}\n`)
       }
-    }
-  })()
+    })()
+  }
   workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.clusterSettings.healthCheckIntervalMs)
   workerHealthChecker.start()
 }

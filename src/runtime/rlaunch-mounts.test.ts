@@ -173,51 +173,144 @@ describe('findWorkspaceMountConflict', () => {
 })
 
 describe('probeDaemonMountAccess', () => {
-  it('reports worker-only for a path the daemon cannot stat', () => {
-    assert.deepEqual(probeDaemonMountAccess('/no/such/path/xyz'), { scope: 'worker-only', mode: 'ro' })
+  it('reports worker-only for a path the daemon cannot stat', async () => {
+    assert.deepEqual(
+      await probeDaemonMountAccess('/no/such/path/xyz'),
+      { kind: 'ok', scope: 'worker-only', mode: 'ro' },
+    )
   })
 
-  it('reports shared rw for a daemon-writable directory', () => {
+  it('reports shared rw for a daemon-writable directory', async () => {
     const d = path.join(gpfsRoot, 'probe-rw')
     mkdirSync(d, { recursive: true })
-    assert.deepEqual(probeDaemonMountAccess(d), { scope: 'shared', mode: 'rw' })
+    assert.deepEqual(await probeDaemonMountAccess(d), { kind: 'ok', scope: 'shared', mode: 'rw' })
+  })
+
+  it('resolves inconclusive instead of hanging when the filesystem stalls', async () => {
+    // Regression (review §3.8c): the old sync statSync probe blocked the whole
+    // event loop for as long as a hung gpfs kept the syscall pending.
+    const never = new Promise<never>(() => {})
+    const result = await probeDaemonMountAccess('/hung/gpfs/path', {
+      timeoutMs: 20,
+      fs: { stat: () => never, access: () => never },
+    })
+    assert.equal(result.kind, 'inconclusive')
   })
 })
 
 describe('refreshUserRlaunchMountAccess', () => {
-  it('flips a worker-only mount to shared/rw once the daemon can see and write it', () => {
+  const ok = (scope: 'shared' | 'worker-only', mode: 'ro' | 'rw') =>
+    ({ kind: 'ok', scope, mode }) as const
+
+  it('flips a worker-only mount to shared/rw once the daemon can see and write it', async () => {
     const data = path.join(gpfsRoot, 'now-visible')
     mkdirSync(data, { recursive: true })
     setUserRlaunchMount('alice', data, 'ro', 'worker-only')
-    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 1)
+    const result = await refreshUserRlaunchMountAccess('alice')
+    assert.equal(result.changed, 1)
+    // upgrades apply on the FIRST pass — no confirmation round needed
+    assert.equal(result.downgradeConfirmation, null)
     // scope dropped (no longer worker-only), mode upgraded to rw
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
   })
 
-  it('downgrades a shared rw mount to ro when the daemon loses write', { skip: process.getuid?.() === 0 }, () => {
+  it('does not persist a downgrade from a transient probe failure', async () => {
+    // Regression (review §3.8a): daemon restart racing gpfs mounting used to
+    // rewrite every shared/rw mount to worker-only/ro on ONE failed stat,
+    // flipping the fingerprint (full pod rebuild) and revoking Write/Edit.
+    const data = path.join(gpfsRoot, 'gpfs-late') // intentionally never created
+    setUserRlaunchMount('alice', data, 'rw')
+    let calls = 0
+    const result = await refreshUserRlaunchMountAccess('alice', {
+      confirmDelayMs: 5,
+      // first probe: gpfs not mounted yet; re-probes: it came up
+      probe: async () => (calls++ === 0 ? ok('worker-only', 'ro') : ok('shared', 'rw')),
+    })
+    assert.equal(result.changed, 0)
+    assert.ok(result.downgradeConfirmation, 'downgrade must enter confirmation, not persist')
+    assert.deepEqual(await result.downgradeConfirmation, { changed: 0 })
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
+  })
+
+  it('persists a downgrade only after every confirmation probe agrees', async () => {
+    const data = path.join(gpfsRoot, 'really-gone')
+    setUserRlaunchMount('alice', data, 'rw')
+    let calls = 0
+    const result = await refreshUserRlaunchMountAccess('alice', {
+      confirmDelayMs: 5,
+      probe: async () => {
+        calls += 1
+        return ok('worker-only', 'ro')
+      },
+    })
+    assert.equal(result.changed, 0)
+    // first pass persists nothing yet
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
+    assert.deepEqual(await result.downgradeConfirmation, { changed: 1 })
+    assert.equal(calls, 3) // DOWNGRADE_CONFIRM_PROBES total observations
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [
+      { path: data, mode: 'ro', scope: 'worker-only' },
+    ])
+  })
+
+  it('treats an inconclusive probe as no-information and keeps the store', async () => {
+    const data = path.join(gpfsRoot, 'hung') // never created: real probe would downgrade
+    setUserRlaunchMount('alice', data, 'rw')
+    const result = await refreshUserRlaunchMountAccess('alice', {
+      probe: async () => ({ kind: 'inconclusive', detail: 'probe timed out after 20ms' }),
+    })
+    assert.equal(result.changed, 0)
+    assert.equal(result.downgradeConfirmation, null)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
+  })
+
+  it('downgrades a shared rw mount to ro when the daemon durably loses write', { skip: process.getuid?.() === 0 }, async () => {
     const data = path.join(gpfsRoot, 'lost-write')
     mkdirSync(data, { recursive: true })
     setUserRlaunchMount('alice', data, 'rw')
     chmodSync(data, 0o500)
     try {
-      assert.equal(refreshUserRlaunchMountAccess('alice').changed, 1)
+      const result = await refreshUserRlaunchMountAccess('alice', { confirmDelayMs: 5 })
+      assert.equal(result.changed, 0)
+      assert.deepEqual(await result.downgradeConfirmation, { changed: 1 })
       assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'ro' }])
     } finally {
       chmodSync(data, 0o700)
     }
   })
 
-  it('is a no-op when nothing changed', () => {
+  it('leaves a mount alone when /mount rewrote it during the confirmation window', async () => {
+    const data = path.join(gpfsRoot, 'raced') // never created → probe reads worker-only
+    setUserRlaunchMount('alice', data, 'rw')
+    let confirmation: Promise<{ changed: number }> | null = null
+    const result = await refreshUserRlaunchMountAccess('alice', {
+      confirmDelayMs: 5,
+      probe: async () => ok('worker-only', 'ro'),
+    })
+    confirmation = result.downgradeConfirmation
+    assert.ok(confirmation)
+    // user re-adds the mount as ro while confirmation is pending — their
+    // explicit write wins over the stale first-pass observation
+    setUserRlaunchMount('alice', data, 'ro')
+    assert.deepEqual(await confirmation, { changed: 0 })
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'ro' }])
+  })
+
+  it('is a no-op when nothing changed', async () => {
     const data = path.join(gpfsRoot, 'stable')
     mkdirSync(data, { recursive: true })
     setUserRlaunchMount('alice', data, 'rw')
-    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 0)
+    const result = await refreshUserRlaunchMountAccess('alice')
+    assert.equal(result.changed, 0)
+    assert.equal(result.downgradeConfirmation, null)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'rw' }])
   })
 
-  it('keeps a still-invisible path worker-only without churn', () => {
+  it('keeps a still-invisible path worker-only without churn', async () => {
     setUserRlaunchMount('alice', '/remote-team/dataset', 'ro', 'worker-only')
-    assert.equal(refreshUserRlaunchMountAccess('alice').changed, 0)
+    const result = await refreshUserRlaunchMountAccess('alice')
+    assert.equal(result.changed, 0)
+    assert.equal(result.downgradeConfirmation, null)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: '/remote-team/dataset', mode: 'ro', scope: 'worker-only' },
     ])

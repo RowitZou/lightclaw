@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { constants as fsConstants, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { rlaunchMountsPath } from '../identity/paths.js'
@@ -218,6 +219,33 @@ export function findWorkspaceMountConflict(
   }
 }
 
+/** Per-probe wall budget. A hung gpfs stat must not stall daemon startup — the
+ *  probe resolves `inconclusive` instead and the saved mount state is kept. */
+export const MOUNT_PROBE_TIMEOUT_MS = 5_000
+/** Total consecutive probes (first pass + re-probes) that must all read as a
+ *  downgrade before it is persisted. Upgrades apply on the first probe. */
+export const DOWNGRADE_CONFIRM_PROBES = 3
+/** Delay between downgrade confirmation re-probes. The window (~20s at the
+ *  defaults) is sized for "daemon restarted before gpfs finished mounting". */
+export const DOWNGRADE_CONFIRM_DELAY_MS = 10_000
+
+export type DaemonMountAccess = { scope: RlaunchMountScope; mode: RlaunchMountMode }
+
+export type DaemonMountProbeResult =
+  | ({ kind: 'ok' } & DaemonMountAccess)
+  | { kind: 'inconclusive'; detail: string }
+
+type ProbeFsLike = {
+  stat: (p: string) => Promise<{ isDirectory(): boolean }>
+  access: (p: string, mode?: number) => Promise<void>
+}
+
+export type MountProbeOptions = {
+  timeoutMs?: number
+  /** Test seam: fs facade the probe runs against (default node:fs/promises). */
+  fs?: ProbeFsLike
+}
+
 /**
  * The daemon's CURRENT view of a mount path, used to refresh a saved mount
  * against present reality. `scope` = whether the daemon (= puyuclaw = the worker
@@ -226,22 +254,83 @@ export function findWorkspaceMountConflict(
  * the daemon can write it (observe-only: daemon access == worker mount mode).
  * Both are point-in-time facts about the environment, not user intent — a path
  * that was worker-only / ro at `mount add` time can become shared / rw after the
- * operator provisions puyuclaw and restarts the daemon. Sync (statSync/accessSync)
- * so it is callable from the startup scan without async plumbing.
+ * operator provisions puyuclaw and restarts the daemon.
+ *
+ * Async + timeout-bounded: the probe races a `MOUNT_PROBE_TIMEOUT_MS` timer so
+ * a hung gpfs (the exact environment this probe exists for) can neither block
+ * the event loop nor stall startup — it yields `inconclusive`, which callers
+ * must treat as "no new information", never as worker-only.
  */
-export function probeDaemonMountAccess(mountPath: string): { scope: RlaunchMountScope; mode: RlaunchMountMode } {
-  try {
-    const stat = statSync(mountPath)
-    if (!stat.isDirectory()) return { scope: 'worker-only', mode: 'ro' }
-    accessSync(mountPath, fsConstants.R_OK)
+export async function probeDaemonMountAccess(
+  mountPath: string,
+  options: MountProbeOptions = {},
+): Promise<DaemonMountProbeResult> {
+  const timeoutMs = options.timeoutMs ?? MOUNT_PROBE_TIMEOUT_MS
+  const fs = options.fs ?? { stat: fsp.stat, access: fsp.access }
+  let timer: NodeJS.Timeout | undefined
+  // The timer is refed on purpose (cleared on the normal path): with a hung
+  // filesystem it is the only thing guaranteed to resolve this call.
+  const timeout = new Promise<'timeout'>(resolve => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs)
+  })
+  const work = (async (): Promise<DaemonMountProbeResult> => {
     try {
-      accessSync(mountPath, fsConstants.W_OK)
-      return { scope: 'shared', mode: 'rw' }
+      const stat = await fs.stat(mountPath)
+      if (!stat.isDirectory()) return { kind: 'ok', scope: 'worker-only', mode: 'ro' }
+      await fs.access(mountPath, fsConstants.R_OK)
+      try {
+        await fs.access(mountPath, fsConstants.W_OK)
+        return { kind: 'ok', scope: 'shared', mode: 'rw' }
+      } catch {
+        return { kind: 'ok', scope: 'shared', mode: 'ro' }
+      }
     } catch {
-      return { scope: 'shared', mode: 'ro' }
+      return { kind: 'ok', scope: 'worker-only', mode: 'ro' }
     }
-  } catch {
-    return { scope: 'worker-only', mode: 'ro' }
+  })()
+  const result = await Promise.race([work, timeout])
+  clearTimeout(timer)
+  if (result === 'timeout') {
+    return { kind: 'inconclusive', detail: `probe timed out after ${timeoutMs}ms` }
+  }
+  return result
+}
+
+export type MountRefreshOptions = {
+  /** Test seam: probe implementation (default probeDaemonMountAccess). */
+  probe?: (mountPath: string) => Promise<DaemonMountProbeResult>
+  confirmProbes?: number
+  confirmDelayMs?: number
+}
+
+export type MountRefreshResult = {
+  /** Entries corrected by the first pass (upgrades only). */
+  changed: number
+  /**
+   * Non-null when the first pass saw downgrade candidates. Resolves after the
+   * background confirmation re-probes with how many downgrades were persisted.
+   * Callers on the startup path must NOT await it inline (it spans
+   * `confirmProbes × confirmDelayMs`); detach it and log the outcome.
+   */
+  downgradeConfirmation: Promise<{ changed: number }> | null
+}
+
+function isDowngrade(previous: UserRlaunchMount, probed: DaemonMountAccess): boolean {
+  const wasWorkerOnly = previous.scope === 'worker-only'
+  const nowWorkerOnly = probed.scope === 'worker-only'
+  return (!wasWorkerOnly && nowWorkerOnly) || (previous.mode === 'rw' && probed.mode === 'ro')
+}
+
+function sameAccess(previous: UserRlaunchMount, probed: DaemonMountAccess): boolean {
+  return previous.mode === probed.mode
+    && (previous.scope === 'worker-only') === (probed.scope === 'worker-only')
+}
+
+function toMountEntry(mountPath: string, probed: DaemonMountAccess): UserRlaunchMount {
+  return {
+    path: mountPath,
+    mode: probed.mode,
+    ...(probed.scope === 'worker-only' ? { scope: 'worker-only' as const } : {}),
   }
 }
 
@@ -252,24 +341,108 @@ export function probeDaemonMountAccess(mountPath: string): { scope: RlaunchMount
  * permissions may have changed). A changed entry flips `daemonVisible` / `mode`
  * in the runtime mount table, so `rlaunchMountFingerprint` differs and the next
  * worker acquire rebuilds with the corrected (often faster / correctly-gated)
- * path. Genuinely worker-only paths (daemon still can't stat them) and unchanged
- * mounts produce no churn. Returns how many entries changed.
+ * path.
+ *
+ * Direction-asymmetric by design (a mount downgrade is expensive AND a probe
+ * failure is ambiguous — "gpfs not mounted yet" and "genuinely worker-only"
+ * both read as stat errors):
+ * - UPGRADES (worker-only → shared, ro → rw) require a successful probe, so one
+ *   observation is trusted and persisted in the first pass.
+ * - DOWNGRADES (shared → worker-only, rw → ro) are persisted only after
+ *   `DOWNGRADE_CONFIRM_PROBES` consecutive probes spread over
+ *   `DOWNGRADE_CONFIRM_DELAY_MS` all read as a downgrade — a daemon restart
+ *   that races gpfs mounting therefore never rewrites shared/rw mounts to
+ *   worker-only/ro (which would flip every fingerprint, rebuild every pod, and
+ *   revoke Write/Edit until the next restart flipped it back).
+ * - `inconclusive` probes (timeout) are "no new information": keep saved state.
+ * Genuinely worker-only paths (daemon still can't stat them) and unchanged
+ * mounts produce no churn.
  */
-export function refreshUserRlaunchMountAccess(canonicalUser: string): { changed: number } {
+export async function refreshUserRlaunchMountAccess(
+  canonicalUser: string,
+  options: MountRefreshOptions = {},
+): Promise<MountRefreshResult> {
+  const probe = options.probe ?? ((mountPath: string) => probeDaemonMountAccess(mountPath))
+  const confirmProbes = options.confirmProbes ?? DOWNGRADE_CONFIRM_PROBES
+  const confirmDelayMs = options.confirmDelayMs ?? DOWNGRADE_CONFIRM_DELAY_MS
   const mounts = loadUserRlaunchMounts(canonicalUser)
-  if (mounts.length === 0) return { changed: 0 }
+  if (mounts.length === 0) return { changed: 0, downgradeConfirmation: null }
+  const probes = await Promise.all(mounts.map(mount => probe(mount.path)))
   let changed = 0
-  const next = mounts.map(mount => {
-    const probed = probeDaemonMountAccess(mount.path)
-    const wasWorkerOnly = mount.scope === 'worker-only'
-    const nowWorkerOnly = probed.scope === 'worker-only'
-    if (mount.mode === probed.mode && wasWorkerOnly === nowWorkerOnly) return mount
-    changed += 1
-    return {
-      path: mount.path,
-      mode: probed.mode,
-      ...(nowWorkerOnly ? { scope: 'worker-only' as const } : {}),
+  const candidates: { original: UserRlaunchMount; probed: DaemonMountAccess }[] = []
+  const next = mounts.map((mount, i) => {
+    const probed = probes[i]
+    if (!probed || probed.kind === 'inconclusive') {
+      if (probed) {
+        process.stderr.write(
+          `[rlaunch-mount-refresh] ${canonicalUser}: ${mount.path}: ${probed.detail}; keeping saved state\n`,
+        )
+      }
+      return mount
     }
+    if (sameAccess(mount, probed)) return mount
+    if (isDowngrade(mount, probed)) {
+      candidates.push({ original: mount, probed })
+      return mount
+    }
+    changed += 1
+    return toMountEntry(mount.path, probed)
+  })
+  if (changed > 0) saveUserRlaunchMounts(canonicalUser, next)
+  if (candidates.length === 0) return { changed, downgradeConfirmation: null }
+  return {
+    changed,
+    downgradeConfirmation: confirmMountDowngrades(
+      canonicalUser, candidates, probe, confirmProbes, confirmDelayMs,
+    ),
+  }
+}
+
+/** Deliberately NOT unref'd: awaiters (tests, the detached confirmation) rely
+ *  on the timer keeping the loop alive until it fires; daemon shutdown is an
+ *  explicit process.exit (cli.ts), so a pending confirmation never delays it. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function confirmMountDowngrades(
+  canonicalUser: string,
+  candidates: { original: UserRlaunchMount; probed: DaemonMountAccess }[],
+  probe: (mountPath: string) => Promise<DaemonMountProbeResult>,
+  confirmProbes: number,
+  confirmDelayMs: number,
+): Promise<{ changed: number }> {
+  // The first-pass probe already counts as one downgrade observation.
+  let remaining = candidates
+  for (let round = 1; round < confirmProbes && remaining.length > 0; round += 1) {
+    await sleep(confirmDelayMs)
+    const results = await Promise.all(remaining.map(c => probe(c.original.path)))
+    remaining = remaining.flatMap((candidate, i) => {
+      const probed = results[i]
+      // Recovered, changed shape, or inconclusive → discard: a real downgrade
+      // must read as one on EVERY consecutive probe.
+      if (!probed || probed.kind !== 'ok' || !isDowngrade(candidate.original, probed)) return []
+      return [{ original: candidate.original, probed }]
+    })
+  }
+  if (remaining.length === 0) return { changed: 0 }
+  // Reload before persisting: a `/mount` add/update during the confirmation
+  // window wins — only entries still byte-identical to what the first pass saw
+  // are downgraded.
+  const current = loadUserRlaunchMounts(canonicalUser)
+  let changed = 0
+  const next = current.map(mount => {
+    const hit = remaining.find(c => c.original.path === mount.path && sameAccess(mount, {
+      mode: c.original.mode,
+      scope: c.original.scope ?? 'shared',
+    }))
+    if (!hit) return mount
+    changed += 1
+    process.stderr.write(
+      `[rlaunch-mount-refresh] ${canonicalUser}: confirmed downgrade for ${mount.path} `
+      + `(${mount.scope ?? 'shared'}/${mount.mode} -> ${hit.probed.scope}/${hit.probed.mode})\n`,
+    )
+    return toMountEntry(mount.path, hit.probed)
   })
   if (changed > 0) saveUserRlaunchMounts(canonicalUser, next)
   return { changed }
