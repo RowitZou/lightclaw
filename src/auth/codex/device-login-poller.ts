@@ -64,13 +64,22 @@ type InFlight = { controller: AbortController }
 
 const inFlightByUser = new Map<string, InFlight>()
 
+/** Per-request cap for the three login HTTP calls. Without it, undici's
+ *  default headersTimeout (300s) is the only bound — and the slash handler
+ *  awaits step 1 inline, so a proxy blackhole held the user's `/config
+ *  endpoint add --login` reply hostage for up to 5 minutes. */
+const LOGIN_HTTP_TIMEOUT_MS = 30_000
+
 function buildHttp(proxy: string | undefined): HttpFn {
   const dispatcher = buildProxyDispatcher(proxy)
-  return async ({ url, body, headers }) => {
+  return async ({ url, body, headers, signal }) => {
     const res = await request(url, {
       method: 'POST',
       body,
       headers,
+      headersTimeout: LOGIN_HTTP_TIMEOUT_MS,
+      bodyTimeout: LOGIN_HTTP_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
       ...(dispatcher ? { dispatcher: dispatcher as Dispatcher } : {}),
     })
     const bodyText = await res.body.text()
@@ -89,35 +98,54 @@ async function runHandler(label: string, fn: () => Promise<void> | void): Promis
 }
 
 /**
- * Begin a device login for one canonical user. Awaits step 1 (usercode) so the
- * caller can report an inline error if the usercode request itself fails;
- * otherwise pushes the init card via `onStarted`, registers a single-flight
- * poller, spawns the detached poll/exchange/persist loop, and resolves `ok`.
- * The background loop fires exactly one terminal handler (success / expired /
- * failed), or none on abort.
+ * Begin a device login for one canonical user. Claims the single-flight slot
+ * synchronously (aborting any prior in-flight login), then awaits step 1
+ * (usercode) so the caller can report an inline error if the usercode request
+ * itself fails — the slot is released on that path; otherwise pushes the init
+ * card via `onStarted`, spawns the detached poll/exchange/persist loop, and
+ * resolves `ok`. The background loop fires exactly one terminal handler
+ * (success / expired / failed), or none on abort.
  */
 export async function startDeviceLogin(
   args: StartDeviceLoginArgs,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
   const http = args.http ?? buildHttp(args.proxy)
 
-  // Single-flight: abort any prior in-flight login for this user first.
+  // Single-flight: abort any prior in-flight login for this user, then claim
+  // the slot SYNCHRONOUSLY — before the first await. Registering after step 1
+  // (the old shape) let two near-simultaneous starts both read the same
+  // `prior`: neither aborted the other, the later `set` overwrote the earlier
+  // entry, and the overwritten controller became unreachable — two detached
+  // poll loops then ran to completion (double persist / a stray "expired"
+  // card 15 minutes later).
   const prior = inFlightByUser.get(args.canonicalUser)
   if (prior) prior.controller.abort()
+  const controller = new AbortController()
+  const entry: InFlight = { controller }
+  inFlightByUser.set(args.canonicalUser, entry)
+
+  const releaseSlot = () => {
+    if (inFlightByUser.get(args.canonicalUser) === entry) {
+      inFlightByUser.delete(args.canonicalUser)
+    }
+  }
 
   let userCode
   try {
-    userCode = await requestUserCode(http, { issuer: args.issuer })
+    userCode = await requestUserCode(http, { issuer: args.issuer, signal: controller.signal })
   } catch (error) {
+    releaseSlot()
     return {
       ok: false,
       detail: error instanceof Error ? error.message : String(error),
     }
   }
-
-  const controller = new AbortController()
-  const entry: InFlight = { controller }
-  inFlightByUser.set(args.canonicalUser, entry)
+  // A newer login (or shutdown) aborted us while step 1 was in flight — bow
+  // out before pushing an init card the superseding login makes meaningless.
+  if (controller.signal.aborted) {
+    releaseSlot()
+    return { ok: false, detail: 'Codex device login superseded by a newer attempt.' }
+  }
 
   await runHandler('onStarted', () =>
     args.handlers.onStarted({
@@ -144,12 +172,21 @@ export async function startDeviceLogin(
         code: poll.authorizationCode,
         codeVerifier: poll.codeVerifier,
         issuer: args.issuer,
+        signal: controller.signal,
       })
+      if (controller.signal.aborted) {
+        // Abort landed during the exchange round-trip — never persist a
+        // superseded login's tokens over the newer login's credential (or
+        // race a file write against daemon shutdown).
+        return
+      }
       const persisted = await args.persist(exchanged)
       await runHandler('onSuccess', () => args.handlers.onSuccess({ accountId: persisted.accountId }))
     } catch (error) {
-      if (error instanceof DeviceLoginError && error.reason === 'aborted') {
-        // Superseded by a newer login or daemon shutdown — stay silent.
+      if (controller.signal.aborted || (error instanceof DeviceLoginError && error.reason === 'aborted')) {
+        // Superseded by a newer login or daemon shutdown — stay silent. The
+        // signal check also swallows transport-level abort rejections from an
+        // http implementation that honors `signal` (undici in production).
         return
       }
       if (error instanceof DeviceLoginError && error.reason === 'timeout') {

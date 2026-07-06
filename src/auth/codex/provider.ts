@@ -74,11 +74,15 @@ type RefreshErrorResponse = {
 
 /** Pluggable HTTP for tests. Production uses undici with an optional
  *  ProxyAgent built from the `endpoints.codex.proxy` config value passed
- *  to `createCodexAuthProvider({ proxy })`. */
+ *  to `createCodexAuthProvider({ proxy })`. `signal` is optional and only
+ *  honored by implementations that support in-flight cancellation (the
+ *  device-login poller's http passes it to undici so a superseded login's
+ *  in-flight poll request is torn down instead of running to completion). */
 export type HttpFn = (input: {
   url: string
   body: string
   headers: Record<string, string>
+  signal?: AbortSignal
 }) => Promise<{ statusCode: number; bodyText: string }>
 
 function buildDefaultHttp(dispatcher: Dispatcher | undefined): HttpFn {

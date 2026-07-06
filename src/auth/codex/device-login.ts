@@ -124,7 +124,7 @@ function parseJson(bodyText: string): unknown {
  *  (404 = device login not enabled on this server) or a malformed body. */
 export async function requestUserCode(
   http: HttpFn,
-  opts: { clientId?: string; issuer?: string } = {},
+  opts: { clientId?: string; issuer?: string; signal?: AbortSignal } = {},
 ): Promise<UserCodeResult> {
   const issuer = resolveDeviceIssuer(opts.issuer)
   const clientId = opts.clientId ?? CODEX_OAUTH_CLIENT_ID
@@ -132,6 +132,7 @@ export async function requestUserCode(
     url: `${apiBase(issuer)}${CODEX_DEVICE_USERCODE_PATH}`,
     body: JSON.stringify({ client_id: clientId }),
     headers: { 'content-type': 'application/json', accept: 'application/json' },
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
   if (statusCode !== 200) {
     const hint =
@@ -232,7 +233,14 @@ export async function pollForToken(
       url,
       body: JSON.stringify({ device_auth_id: opts.deviceAuthId, user_code: opts.userCode }),
       headers: { 'content-type': 'application/json', accept: 'application/json' },
+      ...(opts.signal ? { signal: opts.signal } : {}),
     })
+    // Re-check after the round-trip: an abort that lands while the request is
+    // in flight must not let a 200 through — the caller would then exchange
+    // and persist a superseded login's tokens over the newer login's.
+    if (opts.signal?.aborted) {
+      throw new DeviceLoginError({ reason: 'aborted', message: 'Codex device login aborted.' })
+    }
     if (statusCode === 200) {
       const parsed = parseJson(bodyText) as
         | { authorization_code?: unknown; code_verifier?: unknown; code_challenge?: unknown }
@@ -286,6 +294,7 @@ export async function exchangeAuthCode(
     clientId?: string
     issuer?: string
     redirectUri?: string
+    signal?: AbortSignal
   },
 ): Promise<ExchangedTokens> {
   const issuer = resolveDeviceIssuer(opts.issuer)
@@ -305,6 +314,7 @@ export async function exchangeAuthCode(
       'content-type': 'application/x-www-form-urlencoded',
       accept: 'application/json',
     },
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
   if (statusCode !== 200) {
     const parsed = parseJson(bodyText) as { error?: unknown; error_description?: unknown } | null

@@ -221,4 +221,230 @@ describe('codex device-login poller (PR3)', () => {
     assert.equal(res.ok, false)
     assert.equal(inFlightDeviceLoginCount(), 0)
   })
+
+  // ── §3.6 regressions (2026-07-06): abort / registration ordering ──────────
+
+  const EXCHANGE_OK = {
+    statusCode: 200,
+    bodyText: JSON.stringify({ access_token: fakeJwt(4102444800), refresh_token: 'r' }),
+  }
+  const TOKEN_200 = {
+    statusCode: 200,
+    bodyText: JSON.stringify({ authorization_code: 'ac', code_verifier: 'cv' }),
+  }
+
+  // Regression (§3.6a): the single-flight slot must be claimed BEFORE the step-1
+  // await. Pre-fix, two near-simultaneous starts both read `prior === undefined`,
+  // neither aborted the other, and the overwritten first entry's controller was
+  // unreachable forever — two detached poll loops ran side by side.
+  it('two near-simultaneous starts: the first is superseded even while both are still in step 1', async () => {
+    const aUserGate = deferred()
+    const bUserGate = deferred()
+    const persisted: string[] = []
+    let aStarted = false
+    let aTerminal = false
+    const parkUntilAbort = (_ms: number, signal?: AbortSignal) =>
+      new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DeviceLoginError({ reason: 'aborted', message: 'aborted' })),
+          { once: true },
+        )
+      })
+    const gatedHttp = (userGate: Promise<void>, token: { statusCode: number; bodyText: string }): HttpFn =>
+      async ({ url }) => {
+        if (url.endsWith('/deviceauth/usercode')) {
+          await userGate
+          return USERCODE_OK
+        }
+        if (url.endsWith('/deviceauth/token')) return token
+        if (url.endsWith('/oauth/token')) return EXCHANGE_OK
+        throw new Error(`unexpected url ${url}`)
+      }
+
+    const aPromise = startDeviceLogin({
+      canonicalUser: 'alice',
+      http: gatedHttp(aUserGate.promise, { statusCode: 403, bodyText: '' }),
+      sleep: parkUntilAbort,
+      persist: () => {
+        persisted.push('a')
+        return { accountId: 'a' }
+      },
+      handlers: {
+        onStarted: () => {
+          aStarted = true
+        },
+        onSuccess: () => {
+          aTerminal = true
+        },
+        onExpired: () => {
+          aTerminal = true
+        },
+        onFailed: () => {
+          aTerminal = true
+        },
+      },
+    })
+    const onSuccessB = deferred()
+    const bPromise = startDeviceLogin({
+      canonicalUser: 'alice',
+      http: gatedHttp(bUserGate.promise, TOKEN_200),
+      sleep: async () => {},
+      persist: () => {
+        persisted.push('b')
+        return { accountId: 'b' }
+      },
+      handlers: {
+        onStarted: () => {},
+        onSuccess: () => onSuccessB.resolve(),
+        onExpired: () => {},
+        onFailed: () => {},
+      },
+    })
+
+    bUserGate.resolve()
+    const bRes = await bPromise
+    assert.deepEqual(bRes, { ok: true })
+    await onSuccessB.promise
+
+    aUserGate.resolve()
+    const aRes = await aPromise
+    assert.equal(aRes.ok, false, 'superseded first login must not report started')
+    assert.equal(aStarted, false, 'superseded first login must not push an init card')
+    await new Promise(r => setImmediate(r))
+    assert.equal(aTerminal, false)
+    assert.deepEqual(persisted, ['b'])
+    assert.equal(inFlightDeviceLoginCount(), 0)
+  })
+
+  // Regression (§3.6b): an abort landing while the token poll 200 is in flight
+  // must not fall through to exchange + persist + success card.
+  it('an abort during the in-flight poll 200 does not exchange, persist, or fire handlers', async () => {
+    const tokenGate = deferred()
+    const persisted: string[] = []
+    let terminal = false
+    const http: HttpFn = async ({ url }) => {
+      if (url.endsWith('/deviceauth/usercode')) return USERCODE_OK
+      if (url.endsWith('/deviceauth/token')) {
+        await tokenGate.promise
+        return TOKEN_200
+      }
+      if (url.endsWith('/oauth/token')) return EXCHANGE_OK
+      throw new Error(`unexpected url ${url}`)
+    }
+    const res = await startDeviceLogin({
+      canonicalUser: 'alice',
+      http,
+      sleep: async () => {},
+      persist: () => {
+        persisted.push('x')
+        return { accountId: 'x' }
+      },
+      handlers: {
+        onStarted: () => {},
+        onSuccess: () => {
+          terminal = true
+        },
+        onExpired: () => {
+          terminal = true
+        },
+        onFailed: () => {
+          terminal = true
+        },
+      },
+    })
+    assert.deepEqual(res, { ok: true })
+    // The detached loop is parked inside the token poll round-trip.
+    assert.equal(abortAllDeviceLogins(), 1)
+    tokenGate.resolve()
+    await new Promise(r => setImmediate(r))
+    await new Promise(r => setImmediate(r))
+    assert.deepEqual(persisted, [])
+    assert.equal(terminal, false)
+    assert.equal(inFlightDeviceLoginCount(), 0)
+  })
+
+  // Regression (§3.6b): same for an abort landing during the exchange
+  // round-trip — the tokens must not be persisted after the fact.
+  it('an abort during the in-flight exchange does not persist or fire handlers', async () => {
+    const exchangeGate = deferred()
+    const persisted: string[] = []
+    let terminal = false
+    const http: HttpFn = async ({ url }) => {
+      if (url.endsWith('/deviceauth/usercode')) return USERCODE_OK
+      if (url.endsWith('/deviceauth/token')) return TOKEN_200
+      if (url.endsWith('/oauth/token')) {
+        await exchangeGate.promise
+        return EXCHANGE_OK
+      }
+      throw new Error(`unexpected url ${url}`)
+    }
+    const res = await startDeviceLogin({
+      canonicalUser: 'alice',
+      http,
+      sleep: async () => {},
+      persist: () => {
+        persisted.push('x')
+        return { accountId: 'x' }
+      },
+      handlers: {
+        onStarted: () => {},
+        onSuccess: () => {
+          terminal = true
+        },
+        onExpired: () => {
+          terminal = true
+        },
+        onFailed: () => {
+          terminal = true
+        },
+      },
+    })
+    assert.deepEqual(res, { ok: true })
+    // The detached loop is parked inside the exchange round-trip.
+    assert.equal(abortAllDeviceLogins(), 1)
+    exchangeGate.resolve()
+    await new Promise(r => setImmediate(r))
+    await new Promise(r => setImmediate(r))
+    assert.deepEqual(persisted, [])
+    assert.equal(terminal, false)
+    assert.equal(inFlightDeviceLoginCount(), 0)
+  })
+
+  // Regression (§3.6c): the poller must hand its AbortSignal to every login
+  // HTTP call so an in-flight request is cancellable at the transport layer
+  // (production buildHttp passes it to undici alongside explicit timeouts).
+  it('all three login HTTP calls receive the abort signal', async () => {
+    const sawSignal: Record<string, boolean> = {}
+    const http: HttpFn = async ({ url, signal }) => {
+      if (url.endsWith('/deviceauth/usercode')) {
+        sawSignal.usercode = signal instanceof AbortSignal
+        return USERCODE_OK
+      }
+      if (url.endsWith('/deviceauth/token')) {
+        sawSignal.token = signal instanceof AbortSignal
+        return TOKEN_200
+      }
+      if (url.endsWith('/oauth/token')) {
+        sawSignal.exchange = signal instanceof AbortSignal
+        return EXCHANGE_OK
+      }
+      throw new Error(`unexpected url ${url}`)
+    }
+    const onSuccess = deferred()
+    await startDeviceLogin({
+      canonicalUser: 'alice',
+      http,
+      sleep: async () => {},
+      persist: () => ({ accountId: 'x' }),
+      handlers: {
+        onStarted: () => {},
+        onSuccess: () => onSuccess.resolve(),
+        onExpired: () => {},
+        onFailed: () => {},
+      },
+    })
+    await onSuccess.promise
+    assert.deepEqual(sawSignal, { usercode: true, token: true, exchange: true })
+  })
 })
