@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { after, before, describe, it } from 'node:test'
+import path from 'node:path'
 
 import { findShallowGpfsRoot, MIN_GPFS_PATH_DEPTH } from './gpfs-mount-rules.js'
 
@@ -74,5 +77,49 @@ describe('findShallowGpfsRoot per-rule minWorkspaceDepth', () => {
     }
     assert.equal(findShallowGpfsRoot('/mnt/a/x', cfg), null) // depth 1 ok under floor 1
     assert.equal(findShallowGpfsRoot('/mnt/b/x/y', cfg), '/mnt/b') // depth 2 under floor 3
+  })
+})
+
+describe('findShallowGpfsRoot symlink hardening', () => {
+  // Real fs: the guard must judge the RESOLVED path, not the lexical one — a
+  // lexically-deep symlink pointing at the mount root / a top-level share is
+  // exactly the accidental whole-share reference the guard exists to refuse.
+  let prefix: string
+  let cfg: { gpfsMounts: { hostPrefix: string; mountPrefix: string }[] }
+
+  before(() => {
+    prefix = mkdtempSync(path.join(tmpdir(), 'gpfs-guard-'))
+    cfg = { gpfsMounts: [{ hostPrefix: prefix, mountPrefix: 'gpfs://g' }] }
+    mkdirSync(path.join(prefix, 'team', 'deep', 'proj'), { recursive: true })
+    // depth-2 link that resolves to the mount root (depth 0)
+    symlinkSync(prefix, path.join(prefix, 'team', 'link-to-root'))
+    // depth-3 link that resolves to a top-level share (depth 1)
+    symlinkSync(path.join(prefix, 'team'), path.join(prefix, 'team', 'deep', 'link-to-share'))
+    // depth-2 link that resolves to a genuinely deep dir (depth 2)
+    mkdirSync(path.join(prefix, 'a'))
+    symlinkSync(path.join(prefix, 'team', 'deep'), path.join(prefix, 'a', 'deep-link'))
+  })
+
+  after(() => {
+    rmSync(prefix, { recursive: true, force: true })
+  })
+
+  it('flags a lexically-deep symlink that resolves to the mount root', () => {
+    assert.equal(findShallowGpfsRoot(path.join(prefix, 'team', 'link-to-root'), cfg), prefix)
+  })
+
+  it('flags a path that resolves to a top-level share through a mid-path symlink', () => {
+    assert.equal(findShallowGpfsRoot(path.join(prefix, 'team', 'deep', 'link-to-share'), cfg), prefix)
+  })
+
+  it('allows a symlink that resolves to a deep-enough target', () => {
+    assert.equal(findShallowGpfsRoot(path.join(prefix, 'a', 'deep-link'), cfg), null)
+  })
+
+  it('keeps the lexical verdict for a path that does not exist', () => {
+    // Nonexistent paths cannot be resolved; the command layer's existence
+    // probes after this guard reject them anyway.
+    assert.equal(findShallowGpfsRoot(path.join(prefix, 'team', 'ghost', 'x'), cfg), null)
+    assert.equal(findShallowGpfsRoot(path.join(prefix, 'ghost'), cfg), prefix)
   })
 })

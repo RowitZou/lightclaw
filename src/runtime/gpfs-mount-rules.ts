@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 
 import type { RlaunchGpfsMountRule, RlaunchRuntimeSettings } from '../config.js'
@@ -101,11 +102,61 @@ export function findShallowGpfsRoot(
   try {
     resolved = resolveGpfsMountRule(hostPathInput, rlaunchConfig)
   } catch {
-    return null
+    return findShallowGpfsRootViaSymlinks(hostPathInput, rlaunchConfig)
   }
   const minDepth = resolved.rule.minWorkspaceDepth ?? MIN_GPFS_PATH_DEPTH
   const segments = resolved.suffix.split('/').filter(Boolean)
-  return segments.length < minDepth ? resolved.rule.hostPrefix : null
+  if (segments.length < minDepth) {
+    return resolved.rule.hostPrefix
+  }
+  return findShallowGpfsRootViaSymlinks(hostPathInput, rlaunchConfig)
+}
+
+/**
+ * Symlink hardening for the depth guard: a lexically-deep path can still BE
+ * the mount root or a top-level share through a symlink
+ * (`<prefix>/team/link-to-root` resolves to `<prefix>`) — exactly the
+ * accidental whole-share reference the guard exists to refuse. Re-runs the
+ * depth check on the fully-resolved path; rule prefixes are resolved too so a
+ * symlinked prefix component does not un-match the rule. A path that cannot be
+ * resolved (does not exist yet) keeps the lexical verdict — the command-layer
+ * existence probes that follow this guard reject nonexistent paths anyway.
+ */
+function findShallowGpfsRootViaSymlinks(
+  hostPathInput: string,
+  rlaunchConfig: RlaunchGpfsMountConfig,
+): string | null {
+  const realHost = tryRealpath(normalizeHostPath(hostPathInput))
+  if (realHost === null) {
+    return null
+  }
+  let rules: RlaunchGpfsMountRule[]
+  try {
+    rules = normalizeGpfsMountRules(rlaunchConfig)
+  } catch {
+    return null
+  }
+  const matches = rules
+    .map(rule => ({ rule, realPrefix: tryRealpath(rule.hostPrefix) ?? rule.hostPrefix }))
+    .filter(({ realPrefix }) =>
+      realHost === realPrefix || realHost.startsWith(`${realPrefix}${path.sep}`),
+    )
+    .sort((a, b) => b.realPrefix.length - a.realPrefix.length)
+  const match = matches[0]
+  if (!match) {
+    return null
+  }
+  const minDepth = match.rule.minWorkspaceDepth ?? MIN_GPFS_PATH_DEPTH
+  const segments = realHost.slice(match.realPrefix.length).split(path.sep).filter(Boolean)
+  return segments.length < minDepth ? match.rule.hostPrefix : null
+}
+
+function tryRealpath(input: string): string | null {
+  try {
+    return fs.realpathSync(input)
+  } catch {
+    return null
+  }
 }
 
 export function normalizeGpfsMountRules(

@@ -33,7 +33,6 @@ export type RlaunchRuntimeMount = {
   mode: RlaunchMountMode
   requestedMode?: RlaunchMountMode
   fileset?: string
-  adminApproved?: boolean
   daemonVisible?: boolean
 }
 
@@ -469,7 +468,6 @@ export function rlaunchMountFingerprint(mounts: readonly RlaunchRuntimeMount[]):
       mode: mount.mode,
       requestedMode: mount.requestedMode,
       fileset: mount.fileset,
-      adminApproved: mount.adminApproved,
       daemonVisible: mount.daemonVisible,
     }))
     .sort((a, b) => a.hostPath.localeCompare(b.hostPath))

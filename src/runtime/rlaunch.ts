@@ -59,7 +59,6 @@ export type RlaunchRuntimeConfig = {
     mode: 'rw' | 'ro'
     requestedMode?: 'rw' | 'ro'
     fileset?: string
-    adminApproved?: boolean
     daemonVisible?: boolean
   }[]
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */

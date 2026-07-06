@@ -75,6 +75,13 @@ export class MountTablePathPolicy implements PathPolicy {
    * flag. Returning `false` here causes LayeredDataPlane.writeFile to throw
    * before any layer runs.
    *
+   * `daemonVisible: false` (worker-only) entries are exempt: they have no
+   * daemon-side byte path to gate (`toHostPath` skips them, so writes go
+   * through exec-relay INSIDE the worker where the cluster's real permission
+   * applies), and their recorded `ro` is only a probe placeholder — the
+   * daemon cannot observe the true mode. Enforcing the placeholder here
+   * blocked Write/Edit on paths Bash could legitimately write.
+   *
    * Phase 33 deliberately does NOT short-circuit `..` traversal here — each
    * backend's own path translation (`toContainerPath` in docker.ts /
    * rlaunch.ts) already throws `Path is not within {RuntimeKind}Runtime
@@ -88,7 +95,7 @@ export class MountTablePathPolicy implements PathPolicy {
     }
     const normalizedWorker = path.posix.normalize(workerPath)
     const mount = this.findMount(normalizedWorker)
-    if (mount?.mode === 'ro') {
+    if (mount?.mode === 'ro' && mount.daemonVisible !== false) {
       return false
     }
     return true

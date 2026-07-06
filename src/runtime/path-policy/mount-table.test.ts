@@ -40,6 +40,21 @@ test('MountTablePathPolicy rejects writes to read-only mounts only', () => {
   assert.equal(policy.isAllowed('/workspace/../etc/passwd', 'write'), true)
 })
 
+test('MountTablePathPolicy exempts worker-only mounts from the ro write gate', () => {
+  const policy = new MountTablePathPolicy([
+    { host: '/host/ro', worker: '/opt/ro', mode: 'ro' },
+    { host: '/mnt/gpfs/team/data', worker: '/mnt/gpfs/team/data', mode: 'ro', daemonVisible: false },
+  ])
+
+  // A worker-only entry has no daemon-side byte path to gate (toHostPath skips
+  // it — writes go through exec-relay inside the worker where the cluster's
+  // real permission applies), and its recorded ro is only a probe placeholder.
+  assert.equal(policy.toHostPath('/mnt/gpfs/team/data/file.txt'), null)
+  assert.equal(policy.isAllowed('/mnt/gpfs/team/data/file.txt', 'write'), true)
+  // Daemon-visible ro entries keep the gate.
+  assert.equal(policy.isAllowed('/opt/ro/file.txt', 'write'), false)
+})
+
 test('MountTablePathPolicy leaves out-of-mount paths for exec-relay', () => {
   const policy = new MountTablePathPolicy([
     { host: '/host/workspace/alice', worker: '/workspace', mode: 'rw' },
