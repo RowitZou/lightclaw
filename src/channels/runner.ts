@@ -30,7 +30,7 @@ import {
 } from '../identity/pairing.js'
 import {
   getAdmin,
-  getAdminFeishuOpenId,
+  getAdminFeishuOpenIds,
   getIdentity,
   getUserPermissionCeiling,
   isAdmin,
@@ -2648,9 +2648,14 @@ export class ChannelRunner {
       return approvedUser
     }
 
-    const adminFeishuOpenId = await getAdminFeishuOpenId()
+    // Card availability must mirror the coordinator's delivery set: the
+    // PairingCardCoordinator fans review cards out to EVERY admin with a
+    // Feishu binding, so the gate passes when ANY admin is reachable — not
+    // just admins[0] (a terminal-only primary admin must not force the text
+    // fallback while a Feishu-bound co-admin could receive the card).
+    const adminFeishuOpenIds = await getAdminFeishuOpenIds()
     const canRenderPairingCard = Boolean(
-      adminFeishuOpenId &&
+      adminFeishuOpenIds.length > 0 &&
       this.strategy.renderPairingApplicationCard &&
       this.strategy.renderPairingWaitingCard,
     )

@@ -1725,6 +1725,30 @@ describe('ChannelRunner pairing branch', () => {
     assert.equal(harness.notices.length, 0, 'no text fallback when card path is live')
   })
 
+  it('renders the application card when only a co-admin has a feishu binding (multi-admin)', async () => {
+    // 2026-07-02 review §3.9: the gate read the singular
+    // getAdminFeishuOpenId() — admins[0] only — while PairingCardCoordinator
+    // fans review cards out to ALL Feishu-bound admins. A terminal-only
+    // primary admin therefore forced the text fallback even though a
+    // Feishu-bound co-admin could receive and act on the card.
+    await createUser('admin')
+    const { setAdmin, addAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    // Primary admin intentionally has NO feishu binding (terminal-only).
+    await createUser('coadmin')
+    await addLink('coadmin', 'feishu:ou_coadmin')
+    await addAdmin('coadmin')
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+
+    assert.equal(harness.appCalls.length, 1, 'card path is live via the co-admin binding')
+    assert.equal(harness.appCalls[0].applicantOpenId, 'ou_user')
+    assert.equal(harness.notices.length, 0, 'no text fallback when a co-admin can receive the card')
+    assert.equal(harness.dmNotices.length, 0, 'no bootstrap DM notice — the card is the applicant surface')
+  })
+
   it('re-renders the waiting card when sender already has a pending entry', async () => {
     await createUser('admin')
     const { setAdmin } = await import('../identity/store.js')
