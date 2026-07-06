@@ -52,7 +52,10 @@ import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, clearProviderCache } from '../provider/index.js'
 import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
-import { clearReasoningSupport } from '../provider/reasoning-support.js'
+import {
+  clearReasoningSupport,
+  isReasoningKnownUnsupported,
+} from '../provider/reasoning-support.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
   appendIdentityRules,
@@ -1036,7 +1039,10 @@ async function runBackendSubcommand(
       .map(([name, m]) => ({
         name,
         isDefault: override.defaultModel === name,
-        details: backendDetails(m as Record<string, unknown>),
+        details: backendDetails(
+          m as Record<string, unknown>,
+          (override.endpoints ?? {}) as Record<string, unknown>,
+        ),
       }))
     const spec = configBackendCardSpec(rows)
     ctx.setCommandListCard?.(spec)
@@ -1456,7 +1462,10 @@ export function endpointDetails(ep: Record<string, unknown>): string {
   return parts.join(', ')
 }
 
-export function backendDetails(m: Record<string, unknown>): string {
+export function backendDetails(
+  m: Record<string, unknown>,
+  endpoints?: Record<string, unknown>,
+): string {
   const parts: string[] = []
   if (m.endpoint) parts.push(`endpoint=${String(m.endpoint)}`)
   if (m.upstreamModel) parts.push(`upstream=${String(m.upstreamModel)}`)
@@ -1467,7 +1476,25 @@ export function backendDetails(m: Record<string, unknown>): string {
   // to `medium` (api.ts `?? 'medium'`), maxTokens to the global `maxOutputTokens`.
   const reasoning =
     typeof m.reasoningEffort === 'string' && m.reasoningEffort ? m.reasoningEffort : undefined
-  parts.push(`reasoning=${reasoning ?? 'medium'}${reasoning ? '' : t('card.config.value.defaultSuffix')}`)
+  // Surface a wire-discovered reasoning-unsupported memo (review §3.11a): the
+  // strip-retry silently stops sending reasoning fields for this (baseUrl,
+  // upstreamModel), and this list line is the only place the user can SEE that
+  // degrade short of grepping stderr. Only computable when the caller has the
+  // endpoint registry in scope (the list faces); result cards omit it.
+  let reasoningMemoSuffix = ''
+  if (endpoints && typeof m.endpoint === 'string' && typeof m.upstreamModel === 'string') {
+    const ep = endpoints[m.endpoint]
+    const baseUrl =
+      ep && typeof ep === 'object' && typeof (ep as { baseUrl?: unknown }).baseUrl === 'string'
+        ? ((ep as { baseUrl?: string }).baseUrl as string)
+        : undefined
+    if (isReasoningKnownUnsupported(baseUrl, m.upstreamModel)) {
+      reasoningMemoSuffix = t('card.config.value.reasoningMemoUnsupported')
+    }
+  }
+  parts.push(
+    `reasoning=${reasoning ?? 'medium'}${reasoning ? '' : t('card.config.value.defaultSuffix')}${reasoningMemoSuffix}`,
+  )
   const maxSet = typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : undefined
   parts.push(
     `maxTokens=${maxSet ?? getConfig().maxOutputTokens}${

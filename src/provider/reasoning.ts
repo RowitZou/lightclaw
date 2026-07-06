@@ -41,6 +41,19 @@ export function anthropicEffort(
  * message names a reasoning field. 5xx / network / abort never match (those
  * are the global transient-retry path's job), and a 4xx about something else
  * (bad model id, auth) must NOT be silently swallowed into a reasoning strip.
+ *
+ * Two tiers of message matching, gated differently on `status` (review §3.11a):
+ * - Exact field names (`reasoning_effort` / `output_config` / …) are unambiguous
+ *   — a wrapped error without a numeric status still counts, since nothing but
+ *   a reasoning-field rejection ever names them.
+ * - The loose "field word + unsupported marker" tier REQUIRES a real numeric
+ *   4xx. A wrapped network/transport error has no numeric status and its text
+ *   ("unexpected error while processing reasoning…") can pattern-match by
+ *   accident; matching it here would — via the strip-retry succeeding on the
+ *   transient's clearance — permanently memo the endpoint as
+ *   reasoning-unsupported (the memo is only ever set ON). Same reason
+ *   'unexpected' is not a marker: proxies use it for generic transient
+ *   wrappers, not just parameter rejections.
  */
 export function isReasoningUnsupportedError(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status
@@ -62,6 +75,10 @@ export function isReasoningUnsupportedError(error: unknown): boolean {
   }
   // Looser phrasings: a complaint about `effort` / `thinking` / `reasoning`
   // paired with an unsupported / not-allowed / unknown-parameter marker.
+  // Only trusted when the error carries a genuine HTTP 4xx status.
+  if (typeof status !== 'number') {
+    return false
+  }
   const namesField =
     msg.includes('effort') ||
     msg.includes('thinking') ||
@@ -71,7 +88,6 @@ export function isReasoningUnsupportedError(error: unknown): boolean {
     msg.includes('not support') ||
     msg.includes('not allowed') ||
     msg.includes('unknown parameter') ||
-    msg.includes('unexpected') ||
     msg.includes('does not accept') ||
     msg.includes('not permitted')
   return namesField && unsupportedMarker

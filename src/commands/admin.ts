@@ -729,7 +729,7 @@ async function runAdminBackend(
       .map(([name, m]) => ({
         name,
         isDefault: cfg.defaultModel === name,
-        details: backendDetails(asRecord(m)),
+        details: backendDetails(asRecord(m), asRecord(cfg.endpoints)),
       }))
     const spec = adminBackendCardSpec(rows)
     ctx.setCommandListCard?.(spec)

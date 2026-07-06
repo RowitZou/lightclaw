@@ -397,6 +397,70 @@ describe('openai-auth: processResponseStream', () => {
     }
   })
 
+  // Review §3.11c: OpenAI guarantees output_item.added precedes done, but
+  // generic Responses gateways (LiteLLM / vLLM relays) have been observed to
+  // skip `added` or omit `item.id`. Pre-fix the done handler required a
+  // pending slot (`if (slot)`, no else) — the COMPLETE arguments carried on
+  // the done event were silently dropped, and a text-less turn finalized as a
+  // vacuous end_turn ("no reply").
+  it('synthesizes the tool_use from a done event whose added never arrived', async () => {
+    const events = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'function_call',
+          id: 'fc_1',
+          call_id: 'call_1',
+          name: 'Write',
+          arguments: '{"file_path":"/tmp/a.md","content":"hi"}',
+        },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 5 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.content.length, 1, 'done without added must still produce the tool_use')
+    const block = stop.content[0]
+    assert.equal(block.type, 'tool_use')
+    if (block.type === 'tool_use') {
+      assert.equal(block.id, 'call_1')
+      assert.equal(block.name, 'Write')
+      assert.deepEqual(block.input, { file_path: '/tmp/a.md', content: 'hi' })
+    }
+  })
+
+  it('synthesizes the tool_use from a done event that lacks item.id (call_id only)', async () => {
+    const events = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'function_call',
+          call_id: 'call_9',
+          name: 'Read',
+          arguments: '{"path":"/b"}',
+        },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 5 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.content.length, 1)
+    const block = stop.content[0]
+    assert.equal(block.type, 'tool_use')
+    if (block.type === 'tool_use') {
+      assert.equal(block.id, 'call_9')
+      assert.equal(block.name, 'Read')
+      assert.deepEqual(block.input, { path: '/b' })
+    }
+  })
+
   it('preserves text + multiple tool_use blocks in content order', async () => {
     const events = [
       { type: 'response.output_text.delta', delta: 'I will write the file. ' },

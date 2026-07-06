@@ -129,7 +129,13 @@ async function buildOwnerResumeContext(
   // model. resolveUserConfig is an idempotent union merge.
   const config = resolveUserConfig(ownerCanonicalUser, getConfig())
   const prefs = loadIdentityPreferences(ownerCanonicalUser)
-  const model = prefs.model ?? config.defaultModel
+  // Model comes straight from the resolved config: resolveUserConfig already
+  // folds prefs.model (back-compat) INTO defaultModel with a registry-
+  // membership guard, so re-applying the raw preference here would bypass
+  // that guard AND shadow a config.json defaultModel choice — the bg fire
+  // path (background-task/runner.ts) reads config.defaultModel the same way
+  // (review §3.11d, the "resume 半接" family).
+  const model = config.defaultModel
   const permissionMode = prefs.permissionMode ?? config.permissionMode
   const permissionCeiling = await getUserPermissionCeiling(ownerCanonicalUser)
   const cwd = path.resolve(workspaceFor(ownerCanonicalUser))

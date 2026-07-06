@@ -86,4 +86,41 @@ describe('reasoning: isReasoningUnsupportedError discrimination', () => {
       false,
     )
   })
+
+  // Review §3.11a regressions: the loose tier used to accept status-less
+  // wrapped transport errors and the generic 'unexpected' marker. A transient
+  // network error phrased like "unexpected error while processing reasoning"
+  // then triggered the strip-retry, and when the retry succeeded on the
+  // transient's clearance, (baseUrl, model) was PERMANENTLY memoed as
+  // reasoning-unsupported (the memo is only ever set ON) — a one-off blip
+  // silently disabled thinking forever.
+
+  it('loose tier does NOT match a wrapped error without a numeric status', () => {
+    assert.equal(
+      isReasoningUnsupportedError(
+        new Error('unsupported state: fetch failed while streaming reasoning tokens'),
+      ),
+      false,
+    )
+  })
+
+  it("loose tier does NOT match on 'unexpected' — proxies use it for generic transient wrappers", () => {
+    assert.equal(
+      isReasoningUnsupportedError(
+        Object.assign(new Error('unexpected error while processing reasoning request'), {
+          status: 400,
+        }),
+      ),
+      false,
+    )
+  })
+
+  it('exact field names still match WITHOUT a numeric status (unambiguous even when wrapped)', () => {
+    assert.equal(
+      isReasoningUnsupportedError(
+        new Error("request failed: Unsupported parameter: 'reasoning_effort'"),
+      ),
+      true,
+    )
+  })
 })

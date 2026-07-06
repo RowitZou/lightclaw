@@ -29,6 +29,11 @@ import {
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
+import { isReasoningUnsupportedError } from './reasoning.js'
+import {
+  isReasoningKnownUnsupported,
+  markReasoningUnsupported,
+} from './reasoning-support.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { extractProviderRetryAfterMs } from './retry-after.js'
 import type { ApiMessage, AttachmentKind, Provider, Schema, StreamChatParams } from './types.js'
@@ -680,21 +685,51 @@ export function createOpenAIAuthProvider(
       // a single ~1.5K block (2026-05-26 dogfood). Stickiness across
       // OpenAI's per-shard caches is anchored separately via the
       // `prompt_cache_key` field.
-      const body = buildResponsesRequestBody({
-        model: params.model,
-        instructions: params.system,
-        input,
-        tools,
-        reasoningEffort: params.reasoningEffort,
-        maxTokens: params.maxTokens,
-        includeMaxOutputTokens: apiKeyMode,
-        promptCacheKey: getSessionId(),
-      })
+      const buildBody = (withReasoning: boolean): ResponseCreateParamsStreaming =>
+        buildResponsesRequestBody({
+          model: params.model,
+          instructions: params.system,
+          input,
+          tools,
+          reasoningEffort: withReasoning ? params.reasoningEffort : undefined,
+          maxTokens: params.maxTokens,
+          includeMaxOutputTokens: apiKeyMode,
+          promptCacheKey: getSessionId(),
+        })
 
-      const stream = await requestWithAuthRetry(
-        'OpenAI Responses streamChat request failed',
-        client => client.responses.create(body, { signal: params.signal }),
-      )
+      // Skip the `reasoning` field once a prior strip-retry proved this
+      // (baseUrl, model) rejects it — mirrors anthropic.ts. The exposure is
+      // apiKey-mode generic /v1/responses gateways that implement the API
+      // shape but 400 on `reasoning`; the Codex backend always accepts it.
+      // Keyed on the RAW endpoint.baseUrl (undefined for the default Codex
+      // endpoint) so /config backend list can recompute the same key.
+      const wantsReasoning =
+        Boolean(params.reasoningEffort && params.reasoningEffort !== 'none') &&
+        !isReasoningKnownUnsupported(endpoint.baseUrl, params.model)
+
+      let stream: Awaited<ReturnType<OpenAI['responses']['create']>>
+      try {
+        stream = await requestWithAuthRetry(
+          'OpenAI Responses streamChat request failed',
+          client => client.responses.create(buildBody(wantsReasoning), { signal: params.signal }),
+        )
+      } catch (error) {
+        if (wantsReasoning && isReasoningUnsupportedError(error)) {
+          process.stderr.write(
+            `[openai-auth] model "${params.model}" rejected reasoning field; retrying without reasoning (skipping on future calls)\n`,
+          )
+          stream = await requestWithAuthRetry(
+            'OpenAI Responses streamChat request failed',
+            client => client.responses.create(buildBody(false), { signal: params.signal }),
+          )
+          // Memoize only after the no-reasoning retry succeeds — that success
+          // is what proves the reasoning field (not some other 4xx) was the
+          // cause. A failed retry propagates without marking.
+          markReasoningUnsupported(endpoint.baseUrl, params.model)
+        } else {
+          throw error
+        }
+      }
 
       yield* processResponseStream(
         stream as AsyncIterable<ResponseStreamEvent>,
@@ -776,7 +811,9 @@ export function createOpenAIAuthProvider(
               ],
             },
           ],
-          ...(params.reasoningEffort
+          // 'none' disables reasoning → omit the field entirely, matching
+          // buildResponsesRequestBody — a truthy 'none' on the wire would 400.
+          ...(params.reasoningEffort && params.reasoningEffort !== 'none'
             ? { reasoning: { effort: params.reasoningEffort } }
             : {}),
           stream: true,
@@ -877,8 +914,18 @@ export async function* processResponseStream(
       }
       case 'response.output_item.done': {
         const item = event.item as { id?: string; type?: string; name?: string; arguments?: string; call_id?: string }
-        if (item.type === 'function_call' && item.id) {
-          const slot = pending.get(item.id)
+        if (item.type === 'function_call') {
+          // OpenAI guarantees output_item.added precedes done, but generic
+          // Responses gateways (LiteLLM / vLLM relays) have been observed to
+          // skip `added` or omit `item.id` — pre-fix the missing slot dropped
+          // the COMPLETE arguments carried on the done event, and a
+          // text-less turn then finalized as a vacuous end_turn ("no reply").
+          // Synthesize the slot from the done item itself (review §3.11c);
+          // it needs at least one usable id to address the tool_result back.
+          const slot = (item.id ? pending.get(item.id) : undefined) ??
+            (item.call_id ?? item.id
+              ? { id: (item.call_id ?? item.id) as string, name: '', args: item.arguments ?? '' }
+              : undefined)
           if (slot) {
             if (item.arguments && slot.args.length === 0) {
               slot.args = item.arguments
@@ -899,7 +946,7 @@ export async function* processResponseStream(
               input: parsedInput,
               index: toolUseIndex++,
             }
-            pending.delete(item.id)
+            if (item.id) pending.delete(item.id)
           }
         }
         break

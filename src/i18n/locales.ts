@@ -66,6 +66,8 @@ export const LOCALES = {
     'card.subcommands': '子命令',
     'card.config.currentValues': '当前配置',
     'card.config.value.defaultSuffix': '（默认）',
+    'card.config.value.reasoningMemoUnsupported':
+      '（endpoint 已拒绝该字段，已停发；/config backend check <name> 可重探）',
     'card.config.value.publicProxy': '公共代理',
     'card.config.value.directProxy': '直连',
     'card.params': '参数',
@@ -1126,6 +1128,8 @@ export const LOCALES = {
     'card.subcommands': 'Subcommands',
     'card.config.currentValues': 'Current config',
     'card.config.value.defaultSuffix': ' (default)',
+    'card.config.value.reasoningMemoUnsupported':
+      ' (endpoint rejected the field, no longer sent; re-probe via /config backend check <name>)',
     'card.config.value.publicProxy': 'public proxy',
     'card.config.value.directProxy': 'direct',
     'card.params': 'Parameters',
