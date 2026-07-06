@@ -23,6 +23,7 @@ import {
   getRuntime,
   getSessionsDir,
   registerBackgroundTask,
+  resetSessionMemoryCounters,
 } from '../state.js'
 import { resolveDispatchedFireSecrets } from './dispatch-secrets.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
@@ -362,6 +363,20 @@ export async function runDispatchedAgent(
           process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
           return null
         })
+    }
+    // Drop any un-flushed SM accumulator entry for the worker's chain-leaf
+    // session. The decide-to-write reset inside the idle refresh above is the
+    // only other delete point, so without this a shift that never reaches it —
+    // idleRefresh disabled (Feature A rollback switch), or the query throwing —
+    // leaks one smCounters entry per fire, forever (workers use a fresh
+    // sessionId per fire). When the refresh DID run, its synchronous gate+reset
+    // already deleted the entry and this is a no-op. A later resumed shift
+    // starting from zero matches the default-path semantics (the force refresh
+    // resets at every shift end anyway). Internal roles never reach here (no
+    // chainState → no chainSessionId), and must not: they share the TRIGGERING
+    // session's id, whose accumulation is the host's to keep.
+    if (chainSessionId && params.role.kind !== 'internal') {
+      resetSessionMemoryCounters(chainSessionId)
     }
   }
 }

@@ -54,12 +54,16 @@ const abortControllerBySession = new Map<string, AbortController>()
 // turn), so the trailing short turns never re-crossed the tool_call threshold
 // and SM froze mid-task. Keying by sessionId lets the double-threshold
 // (token AND tool_call) accumulate across a session's turns while keeping
-// concurrent users / sessions fully isolated. The map is self-limiting:
-// `resetSessionMemoryCounters` DELETES the entry on write, so it only ever
-// holds sessions with un-flushed accumulation (size = active-and-dirty
-// sessions), and the next `add*` lazily recreates it — no TTL / eviction needed.
+// concurrent users / sessions fully isolated. The map is self-limiting via two
+// delete points: `resetSessionMemoryCounters` DELETES the entry at
+// decide-to-write time, and runDispatchedAgent's teardown deletes a worker's
+// chain-leaf entry when its run ends without a write (idleRefresh disabled, or
+// the query throwing) — so it only ever holds sessions with un-flushed
+// accumulation (size = active-and-dirty sessions), and the next `add*` lazily
+// recreates it. No TTL / eviction needed. Counting is additionally gated in
+// query.ts on the same eligibility predicate as the SM write (SM enabled +
+// non-internal role): work that can never be flushed is never counted.
 const smCounters = new Map<string, { tokens: number; toolCalls: number }>()
-let sessionMemoryUpdateCount = 0
 // Phase 14 micro-compact counter. Module-level, reset on every resolved
 // SessionContext (a fresh session starts with zero MC actions). This is now the
 // ONLY counter resetSessionScopedCounters touches — the SM accumulators moved to
@@ -480,15 +484,6 @@ export function resetSessionMemoryCounters(sessionId: string): void {
   // dropping the entry keeps the map bounded to active-and-dirty sessions. The
   // next add* lazily recreates it.
   smCounters.delete(sessionId)
-}
-
-export function getSessionMemoryUpdateCount(): number {
-  return sessionMemoryUpdateCount
-}
-
-export function incrementSessionMemoryUpdateCount(): number {
-  sessionMemoryUpdateCount += 1
-  return sessionMemoryUpdateCount
 }
 
 export function getIdleMicroCompactCount(): number {

@@ -9,7 +9,6 @@ import { serializeByKey } from './serialize-by-key.js'
 import {
   getSessionMemoryToolCallsSinceUpdate,
   getSessionMemoryTokensSinceUpdate,
-  incrementSessionMemoryUpdateCount,
   resetSessionMemoryCounters,
 } from '../state.js'
 import { loadMeta, updateMetaSessionMemoryAt } from '../session/storage.js'
@@ -358,7 +357,6 @@ export async function updateSessionMemoryForSession(
         // permanently exclude every message created while this update ran.
         const ts = Math.max(...newMessages.map(message => message.timestamp))
         await updateMetaSessionMemoryAt(sessionId, ts)
-        incrementSessionMemoryUpdateCount()
       }
       return { updated: result.updated }
     } catch (err) {

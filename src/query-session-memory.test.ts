@@ -9,7 +9,12 @@ import {
   setTransientTurnRetryDelayForTest,
 } from './query.js'
 import { createSessionContext, runWithSessionContext } from './session-context.js'
-import { resetSessionScopedCounters } from './state.js'
+import {
+  getSessionMemoryTokensSinceUpdate,
+  getSessionMemoryToolCallsSinceUpdate,
+  resetSessionScopedCounters,
+} from './state.js'
+import { getConfig, type LightClawConfig } from './config.js'
 import { installTestConfigHome } from './test-support/config-fixture.js'
 import { buildTool } from './tool.js'
 import { createUserMessage } from './messages.js'
@@ -114,6 +119,7 @@ function runQuery(
   sessionId: string,
   tools: ReturnType<typeof buildTool>[],
   role: Role = TEST_ROLE,
+  config?: LightClawConfig,
 ) {
   const ctx = createSessionContext({
     cwd: '/tmp',
@@ -131,6 +137,7 @@ function runQuery(
       invocation: { systemPromptOverride: 'test system prompt' },
       messages: [createUserMessage('hello', null)],
       tools,
+      config,
     }),
   )
 }
@@ -380,6 +387,58 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
       updaterCalls,
       0,
       'an internal role must not write session-memory under the triggering session',
+    )
+  })
+
+  // Counting must be gated by the SAME eligibility predicate as the write.
+  // An internal role's ALS sessionId is the TRIGGERING turn's sessionId; the
+  // write side skips internal roles, but the counting side used to bump the
+  // host session's accumulators anyway — a curator/extractor pass's whole
+  // workload was attributed to the host session, pushing its SM threshold
+  // early (one spurious full rewrite per pass).
+  it('does not attribute internal-role work to the host session SM accumulators', async () => {
+    const sessionId = 'feishu:dm:internal-counter-attribution'
+    setSessionMemoryUpdaterForTest(() => Promise.resolve({ updated: true }))
+    fakeStreamChat([...Array.from({ length: 6 }, () => heavyToolUseTurn), endTurn])
+    await runQuery(sessionId, [makePingTool()], INTERNAL_ROLE)
+    assert.equal(
+      getSessionMemoryToolCallsSinceUpdate(sessionId),
+      0,
+      'internal-role tool calls must not count toward the host session',
+    )
+    assert.equal(
+      getSessionMemoryTokensSinceUpdate(sessionId),
+      0,
+      'internal-role tokens must not count toward the host session',
+    )
+  })
+
+  // With session-memory writes disabled, the decide-to-write reset — the only
+  // smCounters delete point on the query path — never runs. Counting under a
+  // disabled config therefore leaked one map entry per session, forever
+  // (`memory.session.idleRefresh=false` deployments hit the same shape via the
+  // worker path). Work that can never be flushed must not be counted at all.
+  it('does not accumulate SM counters when session-memory is disabled', async () => {
+    const sessionId = 'feishu:dm:sm-disabled-counter'
+    const base = getConfig()
+    const disabled: LightClawConfig = {
+      ...base,
+      memory: {
+        ...base.memory,
+        session: { ...base.memory.session, enabled: false },
+      },
+    }
+    fakeStreamChat([...Array.from({ length: 6 }, () => heavyToolUseTurn), endTurn])
+    await runQuery(sessionId, [makePingTool()], TEST_ROLE, disabled)
+    assert.equal(
+      getSessionMemoryToolCallsSinceUpdate(sessionId),
+      0,
+      'tool calls must not accumulate while SM writes are disabled',
+    )
+    assert.equal(
+      getSessionMemoryTokensSinceUpdate(sessionId),
+      0,
+      'tokens must not accumulate while SM writes are disabled',
     )
   })
 })

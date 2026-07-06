@@ -17,7 +17,11 @@ import { buildDispatchedInitialMessages, runDispatchedAgent } from './dispatched
 import { parseForkTranscriptFile } from './fork-transcript.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
 import type { Role, RoleResourceAllowlist } from './types.js'
-import { getCwd } from '../state.js'
+import {
+  getCwd,
+  getSessionMemoryTokensSinceUpdate,
+  getSessionMemoryToolCallsSinceUpdate,
+} from '../state.js'
 import {
   loadMeta,
   loadTranscript,
@@ -1153,6 +1157,92 @@ test('worker idle refresh honors the memory.session.idleRefresh off switch', asy
       role: roleWithTools([]),
     })
     assert.deepEqual(written, [])
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+// A dispatched worker session is one-shot per fire (a fresh chain-leaf
+// sessionId every fire). When a run ends without reaching the decide-to-write
+// reset — idleRefresh rolled back to off, or the query throwing — the
+// smCounters entry for that sessionId used to leak forever, one per fire.
+// Teardown must drop it on both paths.
+test('worker teardown drops un-flushed SM counter entries (idleRefresh off + throwing query)', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-sm-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeSessionMemoryConfig(tempDir, { idleRefresh: false })
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-sm-leak')
+    const chainSessionId = chainState.path.at(-1)!.sessionId
+
+    // Sub-threshold accumulation inside the worker's ALS scope (mirrors the
+    // query hot loop's counting), then a normal return. With idleRefresh off
+    // the refresh's decide-to-write reset never runs.
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'accumulate below threshold',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_test-worker',
+      queryImpl: async params => {
+        const state = await import('../state.js')
+        state.addSessionMemoryTokens(1_000)
+        state.addSessionMemoryToolCall()
+        return {
+          messages: params.messages,
+          assistantText: 'done',
+          finalReplyText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+    assert.equal(
+      getSessionMemoryToolCallsSinceUpdate(chainSessionId),
+      0,
+      'normal return: the chain-leaf counter entry is dropped at teardown',
+    )
+    assert.equal(getSessionMemoryTokensSinceUpdate(chainSessionId), 0)
+
+    // Throw path: the error must still propagate AND the entry must not leak.
+    await assert.rejects(
+      runWithSessionContext(ctx, async () => runDispatchedAgent({
+        dispatchPrompt: 'accumulate then crash',
+        role: roleWithTools([]),
+        tools: [],
+        config,
+        canonicalUser: 'alice',
+        chainState: makeChainState('dispatch-sm-leak-throw'),
+        label: 'subagent_test-worker',
+        queryImpl: async () => {
+          const state = await import('../state.js')
+          state.addSessionMemoryTokens(1_000)
+          state.addSessionMemoryToolCall()
+          throw new Error('boom')
+        },
+      })),
+      /boom/,
+    )
+    assert.equal(
+      getSessionMemoryToolCallsSinceUpdate(chainSessionId),
+      0,
+      'throwing query: the chain-leaf counter entry is dropped at teardown',
+    )
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })

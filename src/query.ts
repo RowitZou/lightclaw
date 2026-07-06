@@ -354,6 +354,29 @@ export async function query(params: QueryParams): Promise<{
     usage: UsageStats
   }> {
 
+  // SessionMemory eligibility — ONE predicate shared by the write side
+  // (maybeUpdateSessionMemory below) and the counting side (the
+  // addSessionMemory* calls in the hot loop). Counting when the write side
+  // would skip is a slow leak twice over: (a) the decide-to-write reset is the
+  // ONLY smCounters delete point, so with SM writes disabled the per-session
+  // entries accumulate forever; (b) framework-internal roles (memoryExtractor
+  // / memoryCurator / skillCurator / skillConsolidator) are post-turn
+  // maintenance passes with no chainState, so their ALS sessionId falls back
+  // to the TRIGGERING turn's sessionId (dispatched-agent.ts) — counting their
+  // tokens/tool calls attributes a curator pass's whole workload to the host
+  // session and pushes its SM threshold early (one spurious full SM rewrite
+  // per pass). The internal-role write skip itself exists because writing
+  // session-memory under that shared id clobbers the triggering session's own
+  // working-memory file (observed: an auto-dream skillCurator pass overwrote a
+  // still-monitoring background watcher's session-memory.md); these runs are
+  // one-shot, fresh-context, and never resumed, so their SM is never read
+  // back. (A rare mid-run compaction falls back to the compaction summary
+  // itself for context.)
+  const sessionMemoryEligible =
+    config.memory.extractor.enabled
+    && config.memory.session.enabled
+    && rolePolicy.kind !== 'internal'
+
   // SessionMemory write — runs the threshold check and, when both the token
   // and tool_call accumulators have crossed, the LLM rewrite. Driven by the
   // two wrappers below: kickSessionMemoryUpdate (non-blocking, mid-turn tool
@@ -361,22 +384,7 @@ export async function query(params: QueryParams): Promise<{
   // prompt build / a compaction boundary sees the fresh file). Failures are
   // logged, never raised.
   const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
-    if (
-      !config.memory.extractor.enabled
-      || !config.memory.session.enabled
-      // Framework-internal roles (memoryExtractor / memoryCurator / skillCurator
-      // / skillConsolidator) are post-turn maintenance passes with no chainState,
-      // so childCtx.sessionId falls back to the triggering turn's sessionId
-      // (dispatched-agent.ts). Writing session-memory under that shared id
-      // clobbers the triggering session's own working-memory file — observed
-      // when an auto-dream skillCurator pass overwrote a still-monitoring
-      // background watcher's session-memory.md. These runs are one-shot,
-      // fresh-context, and never resumed, so their session-memory is never read
-      // back across runs; skip the write entirely rather than corrupt the
-      // triggering session. (A rare mid-run compaction falls back to the
-      // compaction summary itself for context.)
-      || rolePolicy.kind === 'internal'
-    ) {
+    if (!sessionMemoryEligible) {
       return
     }
     // The mid-turn (kick) and end-turn (flush) paths are the threshold-gated
@@ -876,9 +884,11 @@ export async function query(params: QueryParams): Promise<{
         cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
       }).catch(() => {})
     }
-    addSessionMemoryTokens(
-      (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
-    )
+    if (sessionMemoryEligible) {
+      addSessionMemoryTokens(
+        (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
+      )
+    }
     stopReason = stopEvent.stopReason
     // Skip empty turns (model often ends a turn with no text after a closing
     // tool_use's tool_result is processed). Accumulating only non-empty text
@@ -1084,14 +1094,18 @@ export async function query(params: QueryParams): Promise<{
           for (let k = 0; k < batch.length; k += 1) {
             completed.add(batch[k].id)
             toolResults.push(results[k])
-            addSessionMemoryToolCall()
+            if (sessionMemoryEligible) {
+              addSessionMemoryToolCall()
+            }
           }
           throwIfAborted(signal)
         } else {
           const result = await dispatchToolCall(head, dispatchCtx)
           completed.add(head.id)
           toolResults.push(result)
-          addSessionMemoryToolCall()
+          if (sessionMemoryEligible) {
+            addSessionMemoryToolCall()
+          }
           i += 1
           throwIfAborted(signal)
         }
