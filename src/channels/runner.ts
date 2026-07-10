@@ -858,11 +858,14 @@ export class ChannelRunner {
       // mapped back to mainSessionId and abort the turn it kicked off.
       channelInterjectionQueue.markInFlight(mainSessionId, message.messageId)
     }
-    // Crash-resume: tracks whether this handleMessage actually started a turn
-    // (set the pendingTurn marker). The finally clears the marker only when
-    // set, so slash-only messages that return before the marker don't touch
-    // an unrelated session's marker.
-    let didMarkPendingTurn = false
+    // Crash-resume: non-null iff this handleMessage actually started a turn
+    // (set the pendingTurn marker), holding the sessions dir the mark wrote
+    // under. The finally clears the marker only when set, so slash-only
+    // messages that return before the marker don't touch an unrelated
+    // session's marker — and the clear reuses THIS dir, because the finally
+    // runs outside the per-turn SessionContext scope where an ambient
+    // re-resolution can land on another identity's directory.
+    let markedPendingTurnDir: string | null = null
     try {
     await this.locks.runExclusive(sessionId, async () => {
       // In-flight typing indicator: fire BEFORE any work so the user sees
@@ -1136,7 +1139,7 @@ export class ChannelRunner {
         // crash before the turn finishes leaves it set so the startup
         // crash-resume scan can continue this turn.
         await markPendingTurn(sessionId)
-        didMarkPendingTurn = true
+        markedPendingTurnDir = sessionContext.sessionsDir
         const messageCountBeforeQuery = messages.length
         // Count of transcript messages already persisted to disk. The
         // incremental persistMessages callback advances it as query() flushes
@@ -1799,15 +1802,32 @@ export class ChannelRunner {
       // idempotent backstop for a turn that never replied (park / error / card).
       // Crash-resume: clear the in-flight-turn marker now that the turn has
       // finished in-process (success, failure, slash-return, or abort). Only
-      // a hard daemon crash leaves it set for the startup resume scan.
-      if (didMarkPendingTurn) {
-        await clearPendingTurn(sessionId).catch(error => {
+      // a hard daemon crash leaves it set for the startup resume scan. The
+      // clear is pinned to the sessions dir captured at mark time — this
+      // finally runs OUTSIDE the per-turn SessionContext scope, and an
+      // ambient re-resolution here silently no-ops against the wrong
+      // directory (2026-07-07/10 prod: two completed turns kept armed
+      // crash-resume markers for days).
+      if (markedPendingTurnDir !== null) {
+        try {
+          const outcome = await clearPendingTurn(sessionId, {
+            sessionsDir: markedPendingTurnDir,
+          })
+          if (outcome === 'no-marker') {
+            // This turn marked, so an absent marker means another writer
+            // clobbered the meta mid-turn — loud, because a silent version
+            // of exactly this branch hid the residue bug for weeks.
+            process.stderr.write(
+              `${this.strategy.channelId}: clearPendingTurn found no marker for ${sessionId} despite this turn marking it\n`,
+            )
+          }
+        } catch (error) {
           process.stderr.write(
             `${this.strategy.channelId}: clearPendingTurn failed for ${sessionId}: ${
               error instanceof Error ? error.message : String(error)
             }\n`,
           )
-        })
+        }
       }
       // Always unmark in-flight when the lock body returns, regardless of
       // whether query() succeeded, slash-handled return early, threw, or

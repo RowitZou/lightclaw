@@ -11,11 +11,13 @@ import {
   appendMessages,
   clearPendingTurn,
   loadMeta,
+  loadMetaFromDir,
   loadTranscript,
   markPendingTurn,
   mutateMeta,
   touchMeta,
   updateMetaLastExtractedAt,
+  updateMetaSessionMemoryAt,
 } from './storage.js'
 import { createUserMessage } from '../messages.js'
 import { setLightclawHomeOverride } from '../paths.js'
@@ -143,7 +145,7 @@ describe('meta.json write serialization (per-session mutateMeta lock)', () => {
         await markPendingTurn(sid)
         // Alternate launch order across iterations so either interleaving
         // direction of the old unlocked write pair would have been caught.
-        const clear = (): Promise<void> => clearPendingTurn(sid)
+        const clear = (): Promise<unknown> => clearPendingTurn(sid)
         const extract = (): Promise<void> =>
           updateMetaLastExtractedAt(sid, 1000 + i)
         await Promise.all(i % 2 === 0 ? [clear(), extract()] : [extract(), clear()])
@@ -192,5 +194,80 @@ describe('meta.json write serialization (per-session mutateMeta lock)', () => {
       await touchMeta(sid, 3)
       assert.equal((await loadMeta(sid))?.messageCount, 3)
     })
+  })
+})
+
+describe('meta access outside the per-turn context (2026-07-07/10 prod pendingTurn residue)', () => {
+  // Production shape: markPendingTurn runs INSIDE the per-turn
+  // runWithSessionContext scope; the runner's clearing finally runs OUTSIDE
+  // it. Under a leaked or absent ambient context the old loadMeta read a
+  // phantom "no meta" from the wrong sessions dir, clearPendingTurn silently
+  // no-op'd, and the completed turn's crash-resume marker stayed armed —
+  // a daemon restart within RESUME_MAX_AGE would fake-resume the turn.
+  const userScoped = (user: string) => path.join(tmpHome, 'users', user, 'sessions')
+
+  const markUnder = async (sessionsDir: string, sid: string): Promise<void> => {
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir }),
+      async () => {
+        await touchMeta(sid, 5)
+        await markPendingTurn(sid)
+      },
+    )
+  }
+
+  it('clearPendingTurn finds a user-dir session even with no ambient context at all', async () => {
+    const sid = 'feishu:dm:oc_residue_no_ctx'
+    const carol = userScoped('carol')
+    await markUnder(carol, sid)
+    // The runner finally resumed on a bare async chain — no context.
+    const outcome = await clearPendingTurn(sid)
+    assert.equal(outcome, 'cleared')
+    assert.equal((await loadMetaFromDir(carol, sid))?.pendingTurn, undefined)
+  })
+
+  it('clearPendingTurn with an explicit sessionsDir clears under a foreign ambient context', async () => {
+    const sid = 'feishu:dm:oc_residue_foreign_ctx'
+    const dave = userScoped('dave')
+    const bootstrap = userScoped('admin')
+    await markUnder(dave, sid)
+    const outcome = await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: bootstrap }),
+      () => clearPendingTurn(sid, { sessionsDir: dave }),
+    )
+    assert.equal(outcome, 'cleared')
+    assert.equal((await loadMetaFromDir(dave, sid))?.pendingTurn, undefined)
+    // Nothing materialized under the foreign identity's dir.
+    assert.equal(existsSync(path.join(bootstrap, sid)), false)
+  })
+
+  it('clearPendingTurn reports no-marker instead of silently no-opping', async () => {
+    const sid = 'feishu:dm:oc_no_marker'
+    const erin = userScoped('erin')
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: erin }),
+      () => touchMeta(sid, 1),
+    )
+    assert.equal(await clearPendingTurn(sid, { sessionsDir: erin }), 'no-marker')
+  })
+
+  it('a meta writer under a foreign ambient context updates the real meta instead of default-rebuilding it', async () => {
+    // Same unguarded-read class, worse consequence: a wrong-ctx mutateMeta
+    // writer sees current=null, rebuilds meta from defaults (messageCount 0,
+    // todos dropped), and saveMeta's guarded dir resolution then lands that
+    // hollow rebuild ON TOP of the real meta.
+    const sid = 'feishu:dm:oc_clobber'
+    const frank = userScoped('frank')
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: frank }),
+      () => touchMeta(sid, 7),
+    )
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: userScoped('admin') }),
+      () => updateMetaSessionMemoryAt(sid, 12345),
+    )
+    const meta = await loadMetaFromDir(frank, sid)
+    assert.equal(meta?.messageCount, 7)
+    assert.equal(meta?.sessionMemoryUpdatedAt, 12345)
   })
 })

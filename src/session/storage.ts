@@ -213,18 +213,30 @@ export async function rewriteTranscript(
 }
 
 export async function loadMeta(sessionId: string): Promise<SessionMeta | null> {
-  return loadMetaFromDir(
-    getCurrentSessionContext()?.sessionsDir ?? resolveSessionsDir(),
-    sessionId,
-  )
+  // Resolve through getSessionDir, NOT the raw ambient sessionsDir: the read
+  // side must apply the same ambient-context mismatch guard as the write side
+  // (saveMeta resolves through getSessionDir too). A reader running under a
+  // leaked or absent context — end-of-turn cleanup that resumed outside the
+  // per-turn scope, wake chains rooted in startup timers — would otherwise
+  // miss the on-disk meta entirely and see a phantom "new session"
+  // (2026-07-07/10 prod: clearPendingTurn read null from the wrong dir,
+  // no-op'd silently, and left a completed turn's crash-resume marker armed).
+  return readMetaFile(getMetaPath(sessionId), sessionId)
 }
 
 export async function loadMetaFromDir(
   sessionsDir: string,
   sessionId: string,
 ): Promise<SessionMeta | null> {
+  return readMetaFile(getMetaPathIn(sessionsDir, sessionId), sessionId)
+}
+
+async function readMetaFile(
+  metaPath: string,
+  sessionId: string,
+): Promise<SessionMeta | null> {
   try {
-    const raw = await readFile(getMetaPathIn(sessionsDir, sessionId), 'utf8')
+    const raw = await readFile(metaPath, 'utf8')
     return JSON.parse(raw) as SessionMeta
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -243,14 +255,18 @@ export async function saveMeta(
   sessionId: string,
   meta: SessionMeta,
 ): Promise<void> {
-  const sessionDir = await ensureSessionDir(sessionId)
+  await saveMetaIn(getSessionDir(sessionId), meta)
+}
+
+async function saveMetaIn(sessionDir: string, meta: SessionMeta): Promise<void> {
+  await mkdir(sessionDir, { recursive: true })
   // tmp + rename so a concurrent reader / a crash mid-write never observes a
   // torn meta.json (same pattern as rewriteTranscript above). Concurrent
   // writers do not race the shared tmp path: every in-process meta write is
   // serialized per sessionId through mutateMeta.
   const tempPath = path.join(sessionDir, 'meta.json.tmp')
   await writeFile(tempPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8')
-  await rename(tempPath, getMetaPath(sessionId))
+  await rename(tempPath, path.join(sessionDir, 'meta.json'))
 }
 
 /**
@@ -269,16 +285,31 @@ export async function saveMeta(
  *
  * The mutator receives the current on-disk meta (null when absent) and
  * returns the full next meta, or null to skip the write.
+ *
+ * `opts.sessionsDir` pins BOTH the read and the write to a caller-resolved
+ * sessions dir instead of re-resolving through the ambient context. Use it
+ * when the call site runs outside the scope that owns the session (e.g. the
+ * runner's turn-end cleanup pairs its clear with the dir captured at mark
+ * time). The serialize key stays the same either way, so pinned and ambient
+ * writers for one sessionId never interleave.
  */
 export async function mutateMeta(
   sessionId: string,
   mutate: (current: SessionMeta | null) => SessionMeta | null,
+  opts?: { sessionsDir?: string },
 ): Promise<void> {
+  const pinnedDir = opts?.sessionsDir
   await serializeByKey(`session-meta:${sessionId}`, async () => {
-    const current = await loadMeta(sessionId)
+    const current = pinnedDir
+      ? await loadMetaFromDir(pinnedDir, sessionId)
+      : await loadMeta(sessionId)
     const next = mutate(current)
     if (next !== null) {
-      await saveMeta(sessionId, next)
+      if (pinnedDir) {
+        await saveMetaIn(getSessionDirIn(pinnedDir, sessionId), next)
+      } else {
+        await saveMeta(sessionId, next)
+      }
     }
   })
 }
@@ -403,15 +434,32 @@ export async function markPendingTurn(sessionId: string): Promise<void> {
 /**
  * Clear the pendingTurn marker — called when a turn finishes in-process
  * (success or handled failure). A hard crash leaves the marker set. No-op
- * when there is no marker (e.g. a slash-only message, or no meta yet).
+ * when there is no marker (e.g. a slash-only message, or no meta yet) —
+ * `'no-marker'` is returned so a caller that KNOWS it marked this turn can
+ * surface the unexpected miss instead of letting it pass silently.
+ *
+ * Callers that run outside the session's own context scope (the runner's
+ * turn-end finally) must pass `opts.sessionsDir` captured at mark time so
+ * the clear reads the same directory the mark wrote — ambient re-resolution
+ * there lands on whatever identity leaked into the calling async chain.
  */
-export async function clearPendingTurn(sessionId: string): Promise<void> {
-  await mutateMeta(sessionId, current => {
-    if (!current?.pendingTurn) {
-      return null
-    }
-    return { ...current, pendingTurn: undefined }
-  })
+export async function clearPendingTurn(
+  sessionId: string,
+  opts?: { sessionsDir?: string },
+): Promise<'cleared' | 'no-marker'> {
+  let outcome: 'cleared' | 'no-marker' = 'no-marker'
+  await mutateMeta(
+    sessionId,
+    current => {
+      if (!current?.pendingTurn) {
+        return null
+      }
+      outcome = 'cleared'
+      return { ...current, pendingTurn: undefined }
+    },
+    opts,
+  )
+  return outcome
 }
 
 /**
