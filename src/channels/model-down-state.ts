@@ -31,8 +31,63 @@
 const userDown = new Set<string>()
 const adminDown = new Set<string>()
 
+// Framework-wake quarantine, keyed by `(canonicalUser, model)`. While a
+// user's model is known-dead (quota window exhausted / dead credentials /
+// gone endpoint), every FRAMEWORK-initiated query against it — a taskrun
+// reconcile wake, a bg-result idle wake, a scheduled worker resume — is
+// deterministically futile and each one burns a user-visible `query failed`
+// notice (2026-07-08 official: one BYO codex quota death → 7 reconcile
+// wakes → 7 failure cards on top of the 2 designed user-message ones).
+// The notice-dedup sets above only de-verbose the cards; this mark lets the
+// wake openers skip opening the query at all. USER messages never consult
+// it — fail-loud on the user path is the designed recovery notification.
+//
+// Keying by model name gives config-change recovery for free: a rebuilt
+// endpoint (`codex-device-login`) registers under a new model name → new
+// key → not quarantined. Same-name credential re-imports recover via the
+// success clear (the user's own next message bypasses the mark, succeeds,
+// and clears it). The TTL bounds the no-user-traffic worst case: one wake
+// per hour goes through as a heartbeat, fails, and re-arms the mark.
+export const MODEL_QUARANTINE_TTL_MS = 60 * 60 * 1000
+
+const quarantineUntil = new Map<string, number>()
+
 function userKey(sessionId: string, model: string): string {
   return `${sessionId} ${model}`
+}
+
+function quarantineKey(canonicalUser: string, model: string): string {
+  return `${canonicalUser} ${model}`
+}
+
+/** Mark `(canonicalUser, model)` dead for framework-initiated wakes. */
+export function markModelQuarantinedForUser(
+  canonicalUser: string,
+  model: string,
+  now = Date.now(),
+): void {
+  quarantineUntil.set(quarantineKey(canonicalUser, model), now + MODEL_QUARANTINE_TTL_MS)
+}
+
+/**
+ * True while a framework-initiated query for `(canonicalUser, model)` should
+ * be skipped. Expired marks are pruned on read.
+ */
+export function isModelQuarantinedForUser(
+  canonicalUser: string,
+  model: string,
+  now = Date.now(),
+): boolean {
+  const key = quarantineKey(canonicalUser, model)
+  const until = quarantineUntil.get(key)
+  if (until === undefined) {
+    return false
+  }
+  if (now >= until) {
+    quarantineUntil.delete(key)
+    return false
+  }
+  return true
 }
 
 /**
@@ -65,14 +120,24 @@ export function recordAdminModelDown(model: string): boolean {
 /**
  * A successful turn clears the session's down mark for `model` AND re-arms the
  * admin alert for that model (a model that just answered is healthy again).
+ * When the caller knows the canonical user, the framework-wake quarantine for
+ * `(canonicalUser, model)` clears too — same recovery signal.
  */
-export function clearModelDownOnSuccess(sessionId: string, model: string): void {
+export function clearModelDownOnSuccess(
+  sessionId: string,
+  model: string,
+  canonicalUser?: string,
+): void {
   userDown.delete(userKey(sessionId, model))
   adminDown.delete(model)
+  if (canonicalUser) {
+    quarantineUntil.delete(quarantineKey(canonicalUser, model))
+  }
 }
 
 /** Test-only: wipe all dedup state between cases. */
 export function _resetModelDownState(): void {
   userDown.clear()
   adminDown.clear()
+  quarantineUntil.clear()
 }

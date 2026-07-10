@@ -27,6 +27,11 @@ import type { AgentSignal } from '../signal-bus/types.js'
 import type { Runtime } from '../runtime/types.js'
 import { channelInterjectionQueue } from './feishu/interjection-queue.js'
 import type { InterjectionEntry } from './feishu/interjection-queue.js'
+import {
+  _resetModelDownState,
+  isModelQuarantinedForUser,
+  markModelQuarantinedForUser,
+} from './model-down-state.js'
 import { createRootTaskRun } from '../taskrun/store.js'
 import { recallRootIndex } from '../taskrun/recall-index.js'
 
@@ -548,6 +553,82 @@ describe('ChannelRunner mention gate', () => {
       0,
       'synthetic must short-circuit before the mention gate is consulted',
     )
+  })
+})
+
+describe('ChannelRunner framework-wake quarantine gate', () => {
+  // 2026-07-10 review §1.3: a BYO codex quota death (usage_limit_reached) →
+  // 7 taskrun-reconcile wakes each opened a query, walked the full retry
+  // ladder against the dead endpoint, and burned 7 user-visible `query
+  // failed` notices on top of the 2 designed user-message ones. While the
+  // user's main model is quarantined, a framework wake (frameworkText) must
+  // not open a query at all; user messages stay fail-loud (that IS the
+  // recovery notification) and a successful user turn clears the mark.
+  it('suppresses a framework wake while the user model is quarantined', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    let llmCalls = 0
+    setStreamChatForTest(async function* (): AsyncGenerator<StreamEvent> {
+      llmCalls += 1
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: 'text', text: 'ok' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+    markModelQuarantinedForUser('alice', 'fake')
+    try {
+      await runner.handleMessage({
+        ...makeFakeFeishuMessage({
+          sender: 'ou_alice',
+          text: '<taskrun-reconcile owner="alice">due findings</taskrun-reconcile>',
+        }),
+        synthetic: true,
+        frameworkText: true,
+      })
+      assert.equal(llmCalls, 0, 'a quarantined wake must not open a query')
+      assert.equal(strategy.replies.length, 0, 'no user-visible output for a suppressed wake')
+      assert.equal(strategy.notices.length, 0, 'no failure notice for a suppressed wake')
+    } finally {
+      setStreamChatForTest(null)
+      _resetModelDownState()
+    }
+  })
+
+  it('a user message bypasses the gate and its success clears the quarantine', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    let llmCalls = 0
+    setStreamChatForTest(async function* (): AsyncGenerator<StreamEvent> {
+      llmCalls += 1
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: 'text', text: 'hello back' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+    markModelQuarantinedForUser('alice', 'fake')
+    try {
+      await runner.handleMessage(makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'hi there',
+      }))
+      assert.equal(llmCalls, 1, 'user messages must reach the model even under quarantine')
+      assert.equal(
+        isModelQuarantinedForUser('alice', 'fake'),
+        false,
+        'a successful user turn clears the quarantine',
+      )
+    } finally {
+      setStreamChatForTest(null)
+      _resetModelDownState()
+    }
   })
 })
 

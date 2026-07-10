@@ -46,6 +46,8 @@ import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import {
   clearModelDownOnSuccess,
+  isModelQuarantinedForUser,
+  markModelQuarantinedForUser,
   recordAdminModelDown,
   recordUserModelDown,
 } from './model-down-state.js'
@@ -716,6 +718,25 @@ export class ChannelRunner {
         )
       }
       return
+    }
+    // Framework-wake circuit breaker (2026-07-10 review §1.3): while this
+    // user's main model is quarantined (quota window exhausted / dead
+    // credentials — recorded by surfaceQueryFailure below), a framework wake
+    // would only re-fail against the same dead endpoint and burn another
+    // user-visible `query failed` notice. Skip the turn silently: every wake
+    // source is level-triggered off durable state (taskrun ledger findings,
+    // delivered runs), so the same wake regenerates once the quarantine
+    // clears — nothing is lost by dropping this one. USER messages (and the
+    // crash-resume `resumeExisting` replay of a user turn) never take this
+    // gate: fail-loud on the user path is the designed recovery notification.
+    if (message.frameworkText) {
+      const quarantinedModel = this.resolveQuarantinedMainModel(userId)
+      if (quarantinedModel) {
+        process.stderr.write(
+          `${this.strategy.channelId}: framework wake suppressed for session ${mainSessionId}: model ${quarantinedModel} quarantined for ${userId}\n`,
+        )
+        return
+      }
     }
     // Slash commands carry user-to-system meta intent (e.g. /config mode, /config rule
     // allow, /admin endpoint add --type codex, /admin pairing approve, /admin sandbox prefetch). Wrapping them
@@ -1669,6 +1690,7 @@ export class ChannelRunner {
                 detail,
                 isTransient,
                 sessionId,
+                userId,
                 model: resolveRoleModel(getMainRole(), appConfig),
                 message: effectiveMessage,
               })
@@ -1724,7 +1746,7 @@ export class ChannelRunner {
         // A successful turn re-arms model-down notices: clear this session's
         // down mark for the model AND the admin alert (the model can talk
         // again). See model-down-state.ts.
-        clearModelDownOnSuccess(sessionId, resolveRoleModel(getMainRole(), appConfig))
+        clearModelDownOnSuccess(sessionId, resolveRoleModel(getMainRole(), appConfig), userId)
         // If onAssistantTurn streamed body text mid-query, the user already
         // saw it — sending result.assistantText here would just duplicate.
         // Only fall back to a final single-shot reply when nothing was
@@ -2546,6 +2568,27 @@ export class ChannelRunner {
    * sanitized dmPushFailed line in-chat, never the pairing-code payload.
    */
   /**
+   * The model a framework wake for `userId`'s main session would run on, if
+   * that model is currently quarantined; null when healthy / unresolvable.
+   * Mirrors the turn's own resolution (resolveUserConfig folds the identity
+   * model preference into defaultModel). Resolution failures return null so
+   * the wake falls through to the normal path's own error handling instead
+   * of being silently eaten by the gate.
+   */
+  private resolveQuarantinedMainModel(userId: string): string | null {
+    try {
+      const config = resolveUserConfig(userId, getConfig())
+      if (!config.defaultModel) {
+        return null
+      }
+      const model = resolveRoleModel(getMainRole(), config)
+      return isModelQuarantinedForUser(userId, model) ? model : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Surface a fatal query failure as a user notice, with owner-routed
    * model-down handling (no silent model substitution — fail loud):
    *  - non-model-down fatal (framework / protocol / tool): one card, unchanged.
@@ -2553,15 +2596,19 @@ export class ChannelRunner {
    *    healthy→down edge, a short "still unavailable" line on repeats. A PUBLIC
    *    (admin-owned) model also alerts the admin once per outage; a BYO model
    *    stays with the owner (the user) only.
+   *  Both the transient rate-limit branch and the model-down branch also mark
+   *  the `(user, model)` framework-wake quarantine so reconcile / bg-result
+   *  wakes and scheduled resumes stop opening queries against the dead model.
    */
   private async surfaceQueryFailure(input: {
     detail: string
     isTransient: boolean
     sessionId: string
+    userId: string
     model: string
     message: NormalizedChannelMessage
   }): Promise<void> {
-    const { detail, isTransient, sessionId, model, message } = input
+    const { detail, isTransient, sessionId, userId, model, message } = input
     // Transient rate-limit / quota exhaustion repeats for as long as the
     // window stays exhausted, and the taskrun watchdog re-wakes the session
     // every few minutes — without dedup that stacks one identical failure
@@ -2569,6 +2616,7 @@ export class ChannelRunner {
     // Reuse the model-down edge-trigger: full card on the first failure,
     // one short line per repeat, re-armed by any successful turn.
     if (isTransient && model && isRateLimitError(detail)) {
+      markModelQuarantinedForUser(userId, model)
       const phase = recordUserModelDown(sessionId, model)
       if (phase === 'repeat') {
         await this.sendNotice(message, 'info', t('channel.failure.rateRepeatBrief', { model }))
@@ -2588,6 +2636,7 @@ export class ChannelRunner {
     // A model is "public" when it is in the admin global base registry; a name
     // only in the user's BYO override is theirs to fix.
     const isPublic = !!getConfig().models?.[model]
+    markModelQuarantinedForUser(userId, model)
     const phase = recordUserModelDown(sessionId, model)
     if (phase === 'repeat') {
       await this.sendNotice(message, 'warning', t('channel.failure.repeatBrief', { model }))

@@ -72,6 +72,16 @@ export function scheduleResumeRunWithBlock(
           : await resumeRunnerImpl(runId, block, ownerCanonicalUser)
       if (result.ok) {
         lastFailureByRun.delete(runId)
+      } else if (result.reason === 'model-quarantined') {
+        // Not a resume failure — the owner's model is known-dead (quota /
+        // auth) and the shift was deferred before touching the ledger.
+        // Deliberately do NOT record it in lastFailureByRun: that map feeds
+        // the watchdog's dead-wake-source findings, and a quarantine defer
+        // must read as "no new information, retry on a later reconcile
+        // tick", not as a dead wake that escalates to main.
+        process.stderr.write(
+          `[taskrun-resume] scheduled resume deferred for ${runId}: ${result.message}\n`,
+        )
       } else {
         lastFailureByRun.set(runId, result.reason)
         process.stderr.write(

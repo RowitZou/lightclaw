@@ -6,6 +6,11 @@ import test, { afterEach, beforeEach } from 'node:test'
 
 import { initializeAgents } from '../agents/registry.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import {
+  _resetModelDownState,
+  isModelQuarantinedForUser,
+  markModelQuarantinedForUser,
+} from '../channels/model-down-state.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
 import type { Runtime } from '../runtime/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
@@ -29,6 +34,7 @@ beforeEach(() => {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-resume-'))
   setLightclawHomeOverride(tmpHome)
   initializeAgents()
+  _resetModelDownState()
 })
 
 afterEach(() => {
@@ -792,6 +798,110 @@ test('resume resolves the owner BYO model (per-user config), not the empty globa
   } finally {
     channelInterjectionQueue.unmarkInFlight('taskrun-resume-byo')
     channelInterjectionQueue.drain('taskrun-resume-byo')
+  }
+})
+
+test('a quarantined owner model defers the resume before touching the ledger', async () => {
+  // Framework-wake circuit breaker (2026-07-10 review §1.3): while the
+  // owner's model is quarantined (quota window exhausted / dead credentials),
+  // a resume shift can only re-fail against the same dead endpoint — and its
+  // failure would markDelivered(ok:false) a run that never got to work. The
+  // gate must return `model-quarantined` BEFORE any ledger / transcript
+  // mutation and never invoke the query.
+  writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+    autoMemory: false,
+    autoDream: { enabled: false },
+  }))
+  setUserSecret('alice', 'BYO_KEY', 'sk-byo')
+  writeUserConfig('alice', {
+    endpoints: { byo: { type: 'anthropic', apiKeyRef: 'BYO_KEY' } },
+    models: {
+      'byo-model': { endpoint: 'byo', schema: 'anthropic', upstreamModel: 'byo-model' },
+    },
+    defaultModel: 'byo-model',
+  })
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-quarantine',
+    chainId: 'chain-resume-quarantine',
+    dispatcherRole: 'main',
+  })
+  markModelQuarantinedForUser('alice', 'byo-model')
+  const ctx = createSessionContext({
+    cwd: tmpHome,
+    model: 'byo-model',
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+    runtime: fakeRuntime(tmpHome),
+  })
+  let queryInvoked = false
+  const result = await runWithSessionContext(ctx, () =>
+    resumeRunWithBlock(runId, {
+      via: 'watchdog',
+      reason: 'due wake',
+      body: '<taskrun-reconcile>due</taskrun-reconcile>',
+    }, 'alice', async () => {
+      queryInvoked = true
+      throw new Error('query must not run while the model is quarantined')
+    }),
+  )
+  assert.equal(result.ok, false)
+  assert.equal(!result.ok && result.reason, 'model-quarantined')
+  assert.equal(queryInvoked, false)
+  // No ledger mutation: the run is still waiting, not resumed / delivered.
+  assert.equal((await getTaskRun(runId, 'alice'))?.status, 'waiting')
+})
+
+test('a quota-class resume failure marks the owner model quarantined', async () => {
+  // The channel failure path records the quarantine for main turns; the
+  // resume path must record it too, or a death first observed by a scheduled
+  // shift never suppresses the follow-up wakes.
+  writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+    autoMemory: false,
+    autoDream: { enabled: false },
+  }))
+  setUserSecret('alice', 'BYO_KEY', 'sk-byo')
+  writeUserConfig('alice', {
+    endpoints: { byo: { type: 'anthropic', apiKeyRef: 'BYO_KEY' } },
+    models: {
+      'byo-model': { endpoint: 'byo', schema: 'anthropic', upstreamModel: 'byo-model' },
+    },
+    defaultModel: 'byo-model',
+  })
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-quota-fail',
+    chainId: 'chain-resume-quota-fail',
+    dispatcherRole: 'main',
+  })
+  const ctx = createSessionContext({
+    cwd: tmpHome,
+    model: 'byo-model',
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+    runtime: fakeRuntime(tmpHome),
+  })
+  try {
+    const result = await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(runId, {
+        via: 'watchdog',
+        reason: 'due wake',
+        body: '<taskrun-reconcile>due</taskrun-reconcile>',
+      }, 'alice', async () => {
+        // codex plan-quota exhaustion shape (matches RATE_LIMIT_PATTERN)
+        throw new Error('The usage limit has been reached (usage_limit_reached)')
+      }),
+    )
+    assert.equal(result.ok, false)
+    assert.equal(!result.ok && result.reason, 'query-failed')
+    assert.equal(isModelQuarantinedForUser('alice', 'byo-model'), true)
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-quota-fail')
+    channelInterjectionQueue.drain('taskrun-resume-quota-fail')
   }
 })
 

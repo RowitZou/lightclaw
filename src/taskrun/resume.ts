@@ -11,7 +11,16 @@ import { loadBackgroundTasks } from '../background-task/store.js'
 import { buildPromptForRole } from '../prompt.js'
 import { getConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
-import { ABORT_FAILURE_PATTERN } from '../transient-error.js'
+import {
+  ABORT_FAILURE_PATTERN,
+  isBillingError,
+  isCredentialError,
+  isRateLimitError,
+} from '../transient-error.js'
+import {
+  isModelQuarantinedForUser,
+  markModelQuarantinedForUser,
+} from '../channels/model-down-state.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
@@ -48,7 +57,7 @@ export type ResumeRunBlock = {
 
 export type ResumeRunResult =
   | { ok: true; run: TaskRunMeta; mode: 'resume' | 'rebuild' | 'interjection'; assistantText: string }
-  | { ok: false; reason: 'not-found' | 'no-role' | 'no-session-context' | 'no-transcript' | 'no-checkpoint' | 'query-failed'; message: string }
+  | { ok: false; reason: 'not-found' | 'no-role' | 'no-session-context' | 'no-transcript' | 'no-checkpoint' | 'model-quarantined' | 'query-failed'; message: string }
 
 export async function resumeRunWithBlock(
   runId: string,
@@ -121,6 +130,31 @@ export async function resumeRunWithBlock(
       ok: false,
       reason: 'query-failed',
       message: error instanceof Error ? error.message : String(error),
+    }
+  }
+  // Framework-wake circuit breaker (2026-07-10 review §1.3): while the run's
+  // role model is quarantined for this owner (quota window exhausted / dead
+  // credentials, recorded on the channel failure path and in the catch
+  // below), a resume shift would only re-fail against the same dead endpoint
+  // — and its failure would markDelivered(ok:false) a run that never got a
+  // chance to work. Defer BEFORE any ledger/transcript mutation: the caller
+  // (resume-schedule) treats this reason as "no new information", so the due
+  // wake stays standing and the level-triggered watchdog simply re-executes
+  // it after the quarantine clears. Resolution failures fall through — the
+  // normal path below produces its own actionable error.
+  {
+    let gateModel: string | null = null
+    try {
+      gateModel = resolveRoleModel(role, config)
+    } catch {
+      gateModel = null
+    }
+    if (gateModel && isModelQuarantinedForUser(run.ownerCanonicalUser, gateModel)) {
+      return {
+        ok: false,
+        reason: 'model-quarantined',
+        message: `TaskRun ${run.id} resume deferred: model ${gateModel} is quarantined for ${run.ownerCanonicalUser} after quota/auth failures.`,
+      }
     }
   }
   const now = Date.now()
@@ -392,6 +426,13 @@ export async function resumeRunWithBlock(
       if (parked.status === 'waiting') {
         return { ok: true, run: parked, mode, assistantText: '' }
       }
+    }
+    // Quota / auth-class failures mean the model is dead for every caller of
+    // this owner, not just this run — mark the framework-wake quarantine so
+    // reconcile wakes and further scheduled resumes stop opening queries
+    // against it (the entry gate above consumes this mark).
+    if (isBillingError(error) || isRateLimitError(error) || isCredentialError(error)) {
+      markModelQuarantinedForUser(run.ownerCanonicalUser, roleModel)
     }
     const failed = await markDelivered(run.id, { ok: false, error: message.slice(0, 500) }, Date.now(), run.ownerCanonicalUser)
     // A child-join parent must learn the run delivered-with-failure too; no
