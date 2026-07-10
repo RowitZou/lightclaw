@@ -7,9 +7,16 @@ import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { buildSystemNoticeCard } from '../channels/feishu/system-notice.js'
 import { wakeOrInterject } from '../channels/feishu/wake-or-interject.js'
-import { loadBackgroundTasks } from '../background-task/store.js'
+import {
+  appendCompletedTaskRecord,
+  loadBackgroundTasks,
+  removeBackgroundTask,
+} from '../background-task/store.js'
 import type { BackgroundTaskEntry } from '../background-task/types.js'
-import { getBackgroundTaskScheduler } from '../background-task/scheduler.js'
+import {
+  getBackgroundTaskScheduler,
+  notifyBackgroundTaskChanged,
+} from '../background-task/scheduler.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { t } from '../i18n/index.js'
 import {
@@ -17,6 +24,7 @@ import {
   getTaskRunEvents,
   listTaskRunOwners,
   listTaskRuns,
+  markCancelled,
 } from './store.js'
 import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
@@ -61,14 +69,27 @@ export type TaskRunReconcileResult = {
   delivery?: TaskRunReconcileDelivery
 }
 
+export type ExpiredUserStopCancellation = {
+  runId: string
+  rootRunId: string
+  rootTitle?: string
+  waitingAt: number
+  cancelledDescendantIds: string[]
+}
+
 export type ReconcileTaskRunsDeps = {
   now?: number
   deliveredGraceMs?: number
   waitingGraceMs?: number
   rootIdleGraceMs?: number
+  userStopTtlMs?: number
   budgetWindowMinutes?: number
   reportReArmMs?: number
   wakeBudgetReportLimit?: number
+  notifyUserStopExpired?: (
+    ownerCanonicalUser: string,
+    cancellations: ExpiredUserStopCancellation[],
+  ) => Promise<void>
   activeSessionIds?: Set<string>
   inFlightMainSessionIds?: Set<string>
   schedulerTaskRunIds?: Set<string>
@@ -100,9 +121,42 @@ export async function reconcileTaskRunsOnce(
   const deliveredGraceMs = deps.deliveredGraceMs ?? 60_000
   const waitingGraceMs = deps.waitingGraceMs ?? 21_600_000
   const rootIdleGraceMs = deps.rootIdleGraceMs ?? 60_000
-  const runs = deps.listRuns
+  const userStopTtlMs = deps.userStopTtlMs ?? 259_200_000
+  let runs = deps.listRuns
     ? await deps.listRuns(ownerCanonicalUser)
     : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+
+  // waiting{user-stop} has no wake descriptor, no timeout, and no self-revival
+  // path — every other wait state resolves on its own (timer fires, ask times
+  // out to its default, child-join wakes). Without a bound here a stopped tree
+  // the user never revisits is a permanent open obligation: the held finding
+  // re-arms on every state event its own escalation provokes (nag → main acts
+  // → the attempt fails or does not terminalize → new tree events → re-arm),
+  // 2026-07-10 prod tr_1f1f22bf. A hold the user has not resumed within the
+  // TTL is treated as abandoned and cancelled — honest terminal, and cheap to
+  // reverse (one chat message re-dispatches the work).
+  const expiredHolds = await cancelExpiredUserStopHoldsBestEffort(
+    ownerCanonicalUser,
+    runs,
+    now,
+    userStopTtlMs,
+  )
+  if (expiredHolds.length > 0) {
+    if (deps.notifyUserStopExpired) {
+      try {
+        await deps.notifyUserStopExpired(ownerCanonicalUser, expiredHolds)
+      } catch (error) {
+        process.stderr.write(
+          `[taskrun-watchdog] user-stop expiry notice failed for ${ownerCanonicalUser}: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        )
+      }
+    }
+    runs = deps.listRuns
+      ? await deps.listRuns(ownerCanonicalUser)
+      : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  }
   const eventsByRun = new Map<string, TaskRunEvent[]>()
   await Promise.all(runs.map(async run => {
     const events = deps.getEvents
@@ -557,6 +611,104 @@ async function executeDueWakesBestEffort(
   return failed
 }
 
+/** Cancel `waiting{user-stop}` holds the user never resumed within the TTL.
+ *  Runs in the same framework-mutation lane as due-wake execution: this is
+ *  bookkeeping the ledger owes itself, not a finding for main. An expired
+ *  NON-STANDING root takes its still-parked (queued / waiting) descendants
+ *  with it — /stop parked the whole tree, and a queued child left behind
+ *  would later fire into a cancelled root. Deliberately NOT cancelled:
+ *  running descendants (a descendant that resumed would already have flipped
+ *  the root back to running via reactivation), delivered descendants (a real
+ *  result awaiting one TaskUpdate verdict), and standing service roots (a
+ *  live schedule backs them; stopping a service is the cancel path's /
+ *  UpdateSchedule's business, never an expiry side-effect). Finite backing
+ *  dispatch entries are removed so the scheduler cannot re-fire a cancelled
+ *  run. Best-effort per tree; a cancelled hold is terminal, so the caller's
+ *  one-time user notice can never repeat. */
+async function cancelExpiredUserStopHoldsBestEffort(
+  ownerCanonicalUser: string,
+  runs: TaskRunMeta[],
+  now: number,
+  ttlMs: number,
+): Promise<ExpiredUserStopCancellation[]> {
+  if (ttlMs <= 0) return []
+  const expired = runs.filter(run =>
+    run.status === 'waiting' &&
+    run.waitReason === 'user-stop' &&
+    run.standing !== true &&
+    now - (run.waitingAt ?? run.updatedAt) > ttlMs,
+  )
+  if (expired.length === 0) return []
+  // Roots first: a root sweep cancels its parked descendants, so an expired
+  // descendant of an expired root is folded into the root's cancellation
+  // instead of producing its own notice entry.
+  expired.sort((a, b) =>
+    ((a.kind ?? 'dispatch') === 'root' ? 0 : 1) - ((b.kind ?? 'dispatch') === 'root' ? 0 : 1) ||
+    a.id.localeCompare(b.id),
+  )
+  const reason = `user-stop hold not resumed within ${Math.round(ttlMs / 3_600_000)}h — auto-cancelled by watchdog`
+  const backgroundEntries = loadBackgroundTasks(ownerCanonicalUser)
+  const removeFiniteBackingEntries = (runId: string) => {
+    for (const entry of backgroundEntries) {
+      if (entry.taskRunId !== runId || entry.standingRootRunId) continue
+      if (removeBackgroundTask(ownerCanonicalUser, entry.id)) {
+        notifyBackgroundTaskChanged(ownerCanonicalUser, entry.id)
+        appendCompletedTaskRecord(ownerCanonicalUser, {
+          id: entry.id,
+          outcome: 'cancelled',
+          completedAt: new Date(now).toISOString(),
+        })
+      }
+    }
+  }
+  const swept = new Set<string>()
+  const cancellations: ExpiredUserStopCancellation[] = []
+  for (const run of expired) {
+    if (swept.has(run.id)) continue
+    try {
+      const cancelledDescendantIds: string[] = []
+      if ((run.kind ?? 'dispatch') === 'root') {
+        for (const descendant of runs) {
+          if (descendant.rootRunId !== run.id || descendant.id === run.id) continue
+          if (descendant.status !== 'queued' && descendant.status !== 'waiting') continue
+          removeFiniteBackingEntries(descendant.id)
+          const cancelledChild = await markCancelled(descendant.id, reason, now, ownerCanonicalUser)
+          if (cancelledChild?.status === 'cancelled') {
+            cancelledDescendantIds.push(descendant.id)
+            swept.add(descendant.id)
+          }
+        }
+      }
+      removeFiniteBackingEntries(run.id)
+      const cancelled = await markCancelled(run.id, reason, now, ownerCanonicalUser)
+      if (cancelled?.status !== 'cancelled') continue
+      swept.add(run.id)
+      const root = runs.find(candidate => candidate.id === run.rootRunId)
+      cancellations.push({
+        runId: run.id,
+        rootRunId: run.rootRunId,
+        ...(root?.title ? { rootTitle: root.title } : {}),
+        waitingAt: run.waitingAt ?? run.updatedAt,
+        cancelledDescendantIds,
+      })
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun-watchdog] user-stop ttl cancel failed for ${run.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
+  }
+  if (cancellations.length > 0) {
+    process.stderr.write(
+      `[taskrun-watchdog] auto-cancelled ${cancellations.length} expired user-stop hold(s) for ${ownerCanonicalUser}: ${
+        cancellations.map(item => item.runId).join(', ')
+      }\n`,
+    )
+  }
+  return cancellations
+}
+
 async function deliverParentFirstFindings(input: {
   ownerCanonicalUser: string
   findings: TaskRunWatchdogFinding[]
@@ -776,6 +928,48 @@ async function sendTaskRunEscalationNotice(
     }),
   )
   return { ok: true, mode: 'synthetic' }
+}
+
+/** One-time owner DM when expired user-stop holds were auto-cancelled. Sent
+ *  directly (not via a main wake): the decision is already made — there is
+ *  nothing for main to act on, and waking main here would just seed the next
+ *  reconcile-interjection round this TTL exists to end. Best-effort: the
+ *  cancellation stands even when no sender / binding is available. */
+async function sendUserStopExpiredNotice(
+  ownerCanonicalUser: string,
+  cancellations: ExpiredUserStopCancellation[],
+  ttlMs: number,
+): Promise<void> {
+  const sender = getFeishuSender()
+  const identity = await getIdentity(ownerCanonicalUser).catch(() => null)
+  const ownerOpenId = identity?.channels.feishu[0]
+  if (!sender || !ownerOpenId) {
+    process.stderr.write(
+      `[taskrun-watchdog] user-stop expiry notice skipped for ${ownerCanonicalUser}: ${
+        sender ? 'no-feishu-open-id' : 'no-feishu-sender'
+      }\n`,
+    )
+    return
+  }
+  const lines = [
+    t('watchdog.userStopExpired', {
+      count: String(cancellations.length),
+      days: String(Math.max(1, Math.round(ttlMs / 86_400_000))),
+    }),
+    '',
+  ]
+  for (const item of cancellations) {
+    const stoppedOn = new Date(item.waitingAt).toISOString().slice(0, 10)
+    lines.push(`- ${item.rootTitle ?? item.runId} (${stoppedOn})`)
+  }
+  await sender.sendInteractiveCardToOpenId(
+    ownerOpenId,
+    buildSystemNoticeCard({
+      kind: 'info',
+      bodyFormat: 'plain_text',
+      content: lines.join('\n'),
+    }),
+  )
 }
 
 function formatTaskRunEscalationNotice(
@@ -1089,6 +1283,9 @@ export class TaskRunWatchdog {
       deliveredGraceMs: config.taskrun.watchdog.deliveredGraceMs,
       waitingGraceMs: config.taskrun.watchdog.waitingGraceMs,
       rootIdleGraceMs: config.taskrun.watchdog.rootIdleGraceMs,
+      userStopTtlMs: config.taskrun.watchdog.userStopTtlMs,
+      notifyUserStopExpired: (_owner, cancellations) =>
+        sendUserStopExpiredNotice(owner, cancellations, config.taskrun.watchdog.userStopTtlMs),
       budgetWindowMinutes: config.taskrun.watchdog.budgetWindowMinutes,
       activeSessionIds: getSignalRouter().getAllActiveSessionIds(),
       inFlightMainSessionIds: channelInterjectionQueue.getInflightSessionIds(),

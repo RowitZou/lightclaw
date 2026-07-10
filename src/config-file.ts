@@ -240,6 +240,7 @@ export type ConfigFileShape = {
       rootIdleGraceMs?: number
       budgetWindowMinutes?: number
       deliveryRetryMaxAttempts?: number
+      userStopTtlMs?: number
     }
   }
   dispatch?: {

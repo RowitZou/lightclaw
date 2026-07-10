@@ -725,6 +725,7 @@ describe('config: endpoints + models registry', () => {
       rootIdleGraceMs: 60_000,
       budgetWindowMinutes: 30,
       deliveryRetryMaxAttempts: 3,
+      userStopTtlMs: 259_200_000,
     })
   })
 
@@ -742,6 +743,7 @@ describe('config: endpoints + models registry', () => {
           rootIdleGraceMs: 23_456,
           budgetWindowMinutes: 9,
           deliveryRetryMaxAttempts: 4,
+          userStopTtlMs: 86_400_000,
         },
       },
     })
@@ -753,6 +755,7 @@ describe('config: endpoints + models registry', () => {
       rootIdleGraceMs: 23_456,
       budgetWindowMinutes: 9,
       deliveryRetryMaxAttempts: 4,
+      userStopTtlMs: 86_400_000,
     })
   })
 

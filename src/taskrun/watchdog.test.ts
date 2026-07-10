@@ -5,6 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { BackgroundTaskEntry } from '../background-task/types.js'
+import { addBackgroundTask, loadBackgroundTasks } from '../background-task/store.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
@@ -12,6 +13,7 @@ import {
   appendEvent,
   appendProgress,
   createRootTaskRun,
+  createStandingRootTaskRun,
   createTaskRun,
   getTaskRunEvents,
   markDelivered,
@@ -28,6 +30,7 @@ import {
   formatTaskRunReconcileBlock,
   reconcileTaskRunsOnce,
 } from './watchdog.js'
+import type { ExpiredUserStopCancellation } from './watchdog.js'
 import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
 describe('TaskRun watchdog', () => {
@@ -841,6 +844,155 @@ describe('TaskRun watchdog', () => {
       assert.equal(rearmed.reported, true)
       assert.equal(reports, 2)
       assert.equal(escalations, 1)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('auto-cancels an expired user-stop tree, removes finite backing entries, and notifies the owner once', async () => {
+    // §1.2 2026-07-10: waiting{user-stop} has no wake, no timeout, and no
+    // self-revival path — without the TTL sweep an abandoned /stop hold
+    // stays a permanent open obligation and feeds the held/escalate nag loop
+    // forever (prod tr_1f1f22bf).
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-userstop-ttl-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Long-running goal the user stopped.',
+        title: 'Stopped goal',
+        now: 100,
+      })
+      const queuedChild = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Queued follow-up.',
+        parentRunId: root.id,
+        chainId: 'chain-userstop',
+        depth: 1,
+        now: 200,
+      })
+      addBackgroundTask('alice', backgroundEntry('dispatch-userstop', queuedChild.id))
+      const deliveredChild = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'webSearcher',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Already delivered.',
+        parentRunId: root.id,
+        chainId: 'chain-userstop',
+        depth: 1,
+        now: 300,
+      })
+      await markStarted(deliveredChild.id, 'bg-delivered', 310, 'alice')
+      await markDelivered(deliveredChild.id, { ok: true, summary: 'done' }, 320, 'alice')
+      await markWaiting(root.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 1_000, 'alice')
+
+      const notices: ExpiredUserStopCancellation[][] = []
+      const result = await reconcileTaskRunsOnce('alice', {
+        now: 1_000 + 259_200_001,
+        deliveredGraceMs: Number.MAX_SAFE_INTEGER,
+        notifyUserStopExpired: async (_owner, cancellations) => {
+          notices.push(cancellations)
+        },
+      })
+
+      const { getTaskRun } = await import('./store.js')
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'cancelled')
+      assert.equal((await getTaskRun(queuedChild.id, 'alice'))?.status, 'cancelled')
+      // A delivered child is a real result awaiting one verdict — not swept.
+      assert.equal((await getTaskRun(deliveredChild.id, 'alice'))?.status, 'delivered')
+      // The finite backing entry is removed so the scheduler cannot re-fire
+      // the cancelled child later.
+      assert.equal(loadBackgroundTasks('alice').length, 0)
+      assert.equal(notices.length, 1)
+      assert.equal(notices[0]!.length, 1)
+      assert.equal(notices[0]![0]!.runId, root.id)
+      assert.equal(notices[0]![0]!.rootTitle, 'Stopped goal')
+      assert.deepEqual(notices[0]![0]!.cancelledDescendantIds, [queuedChild.id])
+      // The hold is terminal now — no held finding survives this reconcile.
+      assert.equal(result.findings.some(finding => finding.kind === 'held'), false)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves an unexpired user-stop hold on the held-nag path, and ttl=0 disables the sweep', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-userstop-hold-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Recently stopped goal.',
+        title: 'Fresh hold',
+        now: 100,
+      })
+      await markWaiting(root.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 1_000, 'alice')
+
+      const notices: ExpiredUserStopCancellation[][] = []
+      const underTtl = await reconcileTaskRunsOnce('alice', {
+        now: 1_000 + 3_600_000,
+        waitingGraceMs: 1,
+        reportFindings: async () => ({ ok: true, mode: 'queued' }),
+        notifyUserStopExpired: async (_owner, cancellations) => {
+          notices.push(cancellations)
+        },
+      })
+      const { getTaskRun } = await import('./store.js')
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'waiting')
+      assert.equal(notices.length, 0)
+      assert.deepEqual(
+        underTtl.findings.map(finding => [finding.runId, finding.kind]),
+        [[root.id, 'held']],
+      )
+
+      const disabled = await reconcileTaskRunsOnce('alice', {
+        now: 1_000 + 999_999_999_999,
+        userStopTtlMs: 0,
+        waitingGraceMs: 0,
+        notifyUserStopExpired: async (_owner, cancellations) => {
+          notices.push(cancellations)
+        },
+      })
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'waiting')
+      assert.equal(notices.length, 0)
+      assert.equal(disabled.findings.length, 0)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('never expires a standing service root parked at user-stop', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-userstop-standing-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const service = await createStandingRootTaskRun('alice', {
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        objective: 'Daily digest service.',
+        title: 'Daily digest',
+        chainId: 'chain-service',
+        now: 100,
+      })
+      await markWaiting(service.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 1_000, 'alice')
+
+      const notices: ExpiredUserStopCancellation[][] = []
+      await reconcileTaskRunsOnce('alice', {
+        now: 1_000 + 999_999_999,
+        waitingGraceMs: 0,
+        notifyUserStopExpired: async (_owner, cancellations) => {
+          notices.push(cancellations)
+        },
+      })
+      const { getTaskRun } = await import('./store.js')
+      assert.equal((await getTaskRun(service.id, 'alice'))?.status, 'waiting')
+      assert.equal(notices.length, 0)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

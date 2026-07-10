@@ -331,6 +331,7 @@ export const LOCALES = {
     // ---- taskrun watchdog escalation DM ----
     'watchdog.escalation.stalled': '任务看门狗：有 {count} 项委派工作经多次提醒仍未推进（指纹 {fingerprint}）。详情已记录在任务记录里；你可以直接给助手发消息让它处理，若此通知持续出现，请检查服务状态。',
     'watchdog.escalation.deliveryFailed': '任务看门狗：有 {count} 项委派工作卡住，且无法唤醒助手处理（指纹 {fingerprint}）。详情已记录在任务记录里，助手恢复后会自动接手；若此通知持续出现，请检查服务状态。',
+    'watchdog.userStopExpired': '你之前停止的 {count} 项任务已搁置超过 {days} 天未恢复，已自动关闭。如需继续其中任何一项，直接在对话里告诉助手重新安排即可。',
 
     // ---- /feedback ----
     'feedback.usage': '用法：/feedback <text>',
@@ -1388,6 +1389,7 @@ export const LOCALES = {
     // ---- taskrun watchdog escalation DM ----
     'watchdog.escalation.stalled': 'Task watchdog: {count} piece(s) of delegated work have not moved despite repeated reminders (fingerprint {fingerprint}). Details are on the task record; you can message the assistant directly to deal with them. If this notice keeps appearing, check the service.',
     'watchdog.escalation.deliveryFailed': 'Task watchdog: {count} piece(s) of delegated work are stuck and the assistant cannot be woken to handle them (fingerprint {fingerprint}). Details are on the task record; the assistant will pick them up automatically once it recovers. If this notice keeps appearing, check the service.',
+    'watchdog.userStopExpired': '{count} task(s) you stopped earlier sat unresumed for over {days} day(s) and have been closed automatically. To continue any of them, just ask the assistant in chat to schedule it again.',
 
     // ---- /feedback ----
     'feedback.usage': 'Usage: /feedback <text>',

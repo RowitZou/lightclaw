@@ -481,6 +481,7 @@ export type TaskRunWatchdogConfig = {
   rootIdleGraceMs: number
   budgetWindowMinutes: number
   deliveryRetryMaxAttempts: number
+  userStopTtlMs: number
 }
 
 export type TaskRunConfig = {
@@ -564,6 +565,14 @@ const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   rootIdleGraceMs: 60_000,
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
+  // waiting{user-stop} is the only wait state with neither a wake descriptor
+  // nor a timeout — without a bound it never terminalizes and feeds the
+  // watchdog held/escalate loop forever (2026-07-10 prod: tr_1f1f22bf nagged
+  // daily, escalation retries burned two failed dispatches). 72h of no resume
+  // means the user walked away; auto-cancel is honest and cheap to reverse
+  // (one chat message re-dispatches). Must stay well above waitingGraceMs so
+  // main gets its held-nudge window first. 0 disables.
+  userStopTtlMs: 259_200_000,
 }
 const DEFAULT_TASKRUN_RESUME_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
 // 15min, not 10 (2026-06-10): an undecided fork can escalate level by level
@@ -1992,6 +2001,7 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
   const rootIdleGraceRaw = Number(watchdog.rootIdleGraceMs)
   const budgetWindowRaw = Number(watchdog.budgetWindowMinutes)
   const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
+  const userStopTtlRaw = Number(watchdog.userStopTtlMs)
 
   return {
     resume: {
@@ -2046,6 +2056,12 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
         Math.floor(Number.isFinite(retryRaw)
           ? retryRaw
           : DEFAULT_TASKRUN_WATCHDOG.deliveryRetryMaxAttempts),
+      ),
+      userStopTtlMs: Math.max(
+        0,
+        Math.floor(Number.isFinite(userStopTtlRaw)
+          ? userStopTtlRaw
+          : DEFAULT_TASKRUN_WATCHDOG.userStopTtlMs),
       ),
     },
   }
