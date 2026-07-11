@@ -590,6 +590,13 @@ export const LOCALES = {
     'channel.welcome.try.example': '「帮我同时调研 〈主题 A〉 和 〈主题 B〉，各整理成一份要点」',
     'channel.welcome.helpHint': '想知道有哪些命令？发 `/help`，或者直接问我。',
     'channel.welcome.admin.helpHint': '想知道有哪些命令？发 `/help`，管理命令都在 `/admin` 下，或者直接问我。',
+    'channel.welcome.noModel.intro': '管理员已批准你的接入。',
+    'channel.welcome.noModel.admin.intro': '你的飞书已绑定为 LightClaw admin。',
+    'channel.welcome.noModel.steps':
+      '**开始前还差一步：接入你的模型**\n`/config endpoint` — 配置模型服务的地址与密钥\n`/config backend` — 把模型接入可用列表',
+    'channel.welcome.noModel.helpHint': '配置完成后直接发消息就能开始。想知道有哪些命令？发 `/help`。',
+    'channel.welcome.noModel.admin.helpHint':
+      '配置完成后直接发消息就能让我干活。想知道有哪些命令？发 `/help`，管理命令都在 `/admin` 下。',
     'card.adminGranted.title': '你已成为管理员',
     'card.adminGranted.body': '管理员已把你设为 LightClaw 管理员。你现在可以管理部署配置、审批配对申请、查看用量等。管理命令都在 `/admin` 下，发 `/help` 查看，或直接问我。',
     'card.adminRevoked.title': '管理员权限已调整',
@@ -1649,6 +1656,14 @@ export const LOCALES = {
     'channel.welcome.try.example': '“Research 〈topic A〉 and 〈topic B〉 for me, each as a short briefing”',
     'channel.welcome.helpHint': 'Want the command list? Send `/help`, or just ask me.',
     'channel.welcome.admin.helpHint': 'Want the command list? Send `/help` — admin commands are all under `/admin` — or just ask me.',
+    'channel.welcome.noModel.intro': 'Admin has approved your access.',
+    'channel.welcome.noModel.admin.intro': 'Your Feishu is now bound as the LightClaw admin.',
+    'channel.welcome.noModel.steps':
+      '**One step before you start: connect your model**\n`/config endpoint` — configure a model service (URL + key)\n`/config backend` — add a model to the usable list',
+    'channel.welcome.noModel.helpHint':
+      'Once configured, just send a message to begin. Want the command list? Send `/help`.',
+    'channel.welcome.noModel.admin.helpHint':
+      'Once configured, just send a message to put me to work. Want the command list? Send `/help` — admin commands are all under `/admin`.',
     'card.adminGranted.title': 'You are now an admin',
     'card.adminGranted.body': 'An admin has made you a LightClaw admin. You can now manage deployment config, approve pairing requests, view usage, and more. Admin commands are all under `/admin` — send `/help`, or just ask me.',
     'card.adminRevoked.title': 'Admin access updated',

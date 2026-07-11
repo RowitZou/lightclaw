@@ -9,7 +9,9 @@ import { t } from '../../i18n/index.js'
 import { classifyStartupReason } from './startup-reason.js'
 import { buildSystemNoticeCard } from './system-notice.js'
 
-export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Record<string, unknown> {
+export function buildApprovalWelcomeCard(
+  opts: { isAdmin?: boolean; noModel?: boolean } = {},
+): Record<string, unknown> {
   // Header is wathet (info) so it visually reads as a friendly notice rather
   // than a warning. Commands collapse to a single `/help` hint ("or just ask
   // me"), since a brand-new user gets no value from memorizing slash syntax up
@@ -19,6 +21,24 @@ export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Reco
   //     admin management commands. The "shared identity across Feishu/terminal"
   //     line was dropped — the terminal is a slash-only console, not a second
   //     conversation surface.
+  // `noModel` (BYO-only deployment, user has no usable model yet) swaps the
+  // "just send a message" framing for a two-step /config setup block — the
+  // one action that must happen before anything else works. Same info tone:
+  // it is still a welcome, the steps are guidance rather than an error.
+  if (opts.noModel) {
+    const lines = [
+      t(opts.isAdmin ? 'channel.welcome.noModel.admin.intro' : 'channel.welcome.noModel.intro'),
+      '',
+      t('channel.welcome.noModel.steps'),
+      '',
+      t(opts.isAdmin ? 'channel.welcome.noModel.admin.helpHint' : 'channel.welcome.noModel.helpHint'),
+    ]
+    return buildSystemNoticeCard({
+      kind: 'info',
+      title: t(opts.isAdmin ? 'channel.welcome.admin.title' : 'channel.welcome.title'),
+      content: lines.join('\n'),
+    })
+  }
   if (opts.isAdmin) {
     const lines = [
       t('channel.welcome.admin.intro'),

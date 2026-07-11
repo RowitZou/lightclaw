@@ -632,6 +632,81 @@ describe('ChannelRunner framework-wake quarantine gate', () => {
   })
 })
 
+describe('ChannelRunner no-model gate (07-10 review §1.9)', () => {
+  // A BYO-only deployment resolves defaultModel to '' for a user who hasn't
+  // configured an endpoint yet. The gate's notice only answers a human who
+  // just typed: framework-synthesized turns (post-approval replay, reconcile
+  // / bg-result wakes) drop silently, and repeat human messages inside the
+  // cooldown window don't stack duplicate cards (guoxu 07-07 onboarding: 3
+  // notices in 40s; wangrui 07-09: a rescued reconcile wake noticed a user
+  // mid-way through rebuilding credentials).
+  function writeNoModelConfig(): void {
+    writeFileSync(
+      path.join(tmpHome, 'config.json'),
+      JSON.stringify({
+        endpoints: {},
+        models: {},
+        autoMemory: false,
+        hooksEnabled: false,
+        mcpEnabled: false,
+        runtime: {
+          backend: 'docker',
+          docker: { image: 'lightclaw-test', autoPull: false },
+        },
+      }),
+    )
+  }
+
+  it('drops a framework-synthesized turn silently when no model is configured', async () => {
+    writeNoModelConfig()
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    await runner.handleMessage({
+      ...makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: '<taskrun-reconcile owner="alice">due findings</taskrun-reconcile>',
+      }),
+      synthetic: true,
+      frameworkText: true,
+    })
+
+    assert.equal(strategy.notices.length, 0, 'a framework wake must not surface a no-model notice')
+    assert.equal(strategy.replies.length, 0, 'no user-visible output for a dropped synthetic turn')
+  })
+
+  it('notices a real user message once, then suppresses repeats inside the cooldown', async () => {
+    writeNoModelConfig()
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: 'hello, are you there?',
+    }))
+    assert.equal(strategy.notices.length, 1, 'first human message gets the no-model notice')
+    assert.equal(strategy.notices[0]?.kind, 'warning')
+
+    await runner.handleMessage({
+      ...makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'why no reply?',
+      }),
+      eventId: 'event-ou_alice-2',
+      messageId: 'msg-ou_alice-2',
+    })
+    assert.equal(
+      strategy.notices.length,
+      1,
+      'a second message inside the cooldown must not stack another card',
+    )
+  })
+})
+
 describe('buildLeftoverReplayMessage synthetic-flag handling', () => {
   // Regression: a bg-result leftover interjection replayed through
   // handleMessage without `synthetic: true` carried its fake

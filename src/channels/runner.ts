@@ -537,6 +537,12 @@ export class ChannelRunner {
   // the follow-up) must not retire it — it stays up until the leftover-replay
   // turn actually answers the follow-up. See clearPendingAcks.
   private pendingAckTokens = new Map<string, { messageId: string; token: unknown }[]>()
+  // Last time the no-model notice was sent per sessionId. A first-time user
+  // on a BYO-only deployment tends to send several messages while working
+  // through `/config endpoint` + `/config backend`; without the cooldown each
+  // one stacked another identical warning card (07-10 review §1.9: 3 notices
+  // inside 40s during one onboarding).
+  private noModelNoticeAt = new Map<string, number>()
 
   constructor(private readonly strategy: ChannelRunnerStrategy) {}
 
@@ -1122,6 +1128,29 @@ export class ChannelRunner {
           // notice card pointing at the two-step `/config endpoint` + `/config
           // backend` flow. Deliberately NOT the `/config model` detail card:
           // its `set <name>` examples are meaningless with zero models.
+          //
+          // The notice only answers a HUMAN who just typed something.
+          // Framework-synthesized turns (post-approval replay, taskrun
+          // reconcile / bg-result wakes, crash-resume) reach this gate with
+          // the user having done nothing — a visible error card there is pure
+          // noise (07-10 review §1.9: a rescued reconcile wake pushed a "no
+          // model" notice at a user mid-way through rebuilding credentials).
+          // Drop those silently; the ledger/watchdog machinery behind them is
+          // level-triggered and re-fires once a model exists.
+          if (effectiveMessage.synthetic || effectiveMessage.frameworkText) {
+            process.stderr.write(
+              `${this.strategy.channelId}: no model configured for session ${sessionId}; dropped synthetic turn silently\n`,
+            )
+            return
+          }
+          const lastNoticeAt = this.noModelNoticeAt.get(sessionId) ?? 0
+          if (Date.now() - lastNoticeAt < NO_MODEL_NOTICE_COOLDOWN_MS) {
+            process.stderr.write(
+              `${this.strategy.channelId}: no model configured for session ${sessionId}; notice suppressed (cooldown)\n`,
+            )
+            return
+          }
+          this.noModelNoticeAt.set(sessionId, Date.now())
           await this.sendNotice(effectiveMessage, 'warning', t('model.none.noticeBody'))
           process.stderr.write(
             `${this.strategy.channelId}: no model configured for session ${sessionId}; replied notice\n`,
@@ -3153,6 +3182,12 @@ function isPairableChannel(channel: string): channel is ChannelKind {
 // exhausted. Transient-vs-fatal classification lives in src/transient-error.ts.
 const MAX_QUERY_RETRIES = 2
 const QUERY_RETRY_BASE_MS = 800
+
+// Per-session cooldown between "no model configured" notice cards. Repeat
+// real-user messages inside the window are dropped silently — the user
+// already holds the card with the two /config steps, and re-sending it for
+// every message during first-time setup is spam, not information.
+export const NO_MODEL_NOTICE_COOLDOWN_MS = 5 * 60_000
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))

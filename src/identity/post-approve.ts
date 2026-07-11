@@ -89,24 +89,6 @@ export async function drainPendingPreheats(timeoutMs = 60_000): Promise<void> {
   ])
 }
 
-/**
- * Whether to push the "no model configured" notice to a freshly-approved user.
- *
- * The runner's no-model gate (`runner.ts`) sits AFTER slash dispatch, so a
- * slash-shaped first message replays through the slash branch and returns
- * before that gate ever runs — a brand-new user on a no-model deployment is
- * welcomed but never told to configure a model. Surface it once here for
- * exactly that case. A non-slash first message DOES hit the runner gate on
- * replay, so we skip it then to avoid a duplicate card. `defaultModel` is the
- * user's resolved value ('' / undefined = no usable model).
- */
-export function shouldSurfaceNoModelOnApproval(
-  applicantText: string,
-  defaultModel: string | undefined,
-): boolean {
-  return !defaultModel && applicantText.trimStart().startsWith('/')
-}
-
 async function runApprovalPreheat(
   name: string,
   link: SenderKey,
@@ -210,8 +192,25 @@ async function runApprovalPreheat(
     `[preheat-on-approval] ${name}: runtime ready after ${elapsedSeconds}s; sending welcome card\n`,
   )
   const recipientIsAdmin = await isAdmin(name)
+  // On a BYO-only deployment a freshly-approved user has no usable model
+  // yet — the welcome card leads with the two-step /config setup in that
+  // case, and the pre-approval replay below is skipped (it would only die
+  // at the runner's no-model gate; the user re-asks after configuring).
+  // Resolution failure degrades to the normal welcome (never blocks the
+  // push).
+  let hasModel = true
+  try {
+    const { resolveUserConfig } = await import('../config/user-override.js')
+    hasModel = Boolean(resolveUserConfig(name, config).defaultModel)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[preheat-on-approval] ${name}: user config resolve failed: ${detail}\n`)
+  }
   const sendResult = await sender
-    .sendInteractiveCardToOpenId(openId, buildApprovalWelcomeCard({ isAdmin: recipientIsAdmin }))
+    .sendInteractiveCardToOpenId(
+      openId,
+      buildApprovalWelcomeCard({ isAdmin: recipientIsAdmin, noModel: !hasModel }),
+    )
     .catch(pushError => {
       const pd = pushError instanceof Error ? pushError.message : String(pushError)
       process.stderr.write(`[preheat-on-approval] ${name}: welcome push send failed: ${pd}\n`)
@@ -232,23 +231,11 @@ async function runApprovalPreheat(
   // contract; if any prerequisite is missing we log to stderr and stop.
   const applicantText = opts.applicantText?.trim() ?? ''
 
-  // A slash-first new user on a no-model deployment is welcomed but never
-  // reaches the runner's no-model gate (slash dispatch returns before it), so
-  // they're left not knowing a model must be configured. Push the same notice
-  // once here for that case. Best-effort, never blocks the replay below.
-  try {
-    const { resolveUserConfig } = await import('../config/user-override.js')
-    if (shouldSurfaceNoModelOnApproval(applicantText, resolveUserConfig(name, config).defaultModel)) {
-      const { buildSystemNoticeCard } = await import('../channels/feishu/system-notice.js')
-      const { t } = await import('../i18n/index.js')
-      await sender.sendInteractiveCardToOpenId(
-        openId,
-        buildSystemNoticeCard({ kind: 'warning', content: t('model.none.noticeBody') }),
-      )
-    }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[preheat-on-approval] ${name}: no-model notice push failed: ${detail}\n`)
+  if (!hasModel) {
+    process.stderr.write(
+      `[preheat-on-approval] ${name}: no model configured; skipping pre-approval replay\n`,
+    )
+    return
   }
 
   const replayChatId = opts.applicantChatId ?? sendResult?.chatId
