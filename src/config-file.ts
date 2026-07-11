@@ -343,6 +343,7 @@ export type ConfigFileShape = {
       healthCheckIntervalMs?: number
       preheatOnStartup?: boolean
       preheatOnApproval?: boolean
+      preheatIdleTtlDays?: number
       env?: Record<string, string>
     }
     network?: {

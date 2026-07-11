@@ -88,6 +88,10 @@ export type RlaunchRuntimeSettings = {
   healthCheckIntervalMs: number
   preheatOnStartup: boolean
   preheatOnApproval: boolean
+  /** Skip startup preheat for users with no session activity in this many
+   *  days (their worker then also stays out of the health-checker keepalive
+   *  sweep). 0 disables the exemption and preheats every paired user. */
+  preheatIdleTtlDays: number
   env: Record<string, string>
 }
 
@@ -2187,6 +2191,7 @@ function resolveClusterSettings(
     healthCheckIntervalMs: Math.max(10_000, Math.floor(Number(fileConfig.healthCheckIntervalMs ?? 300_000))),
     preheatOnStartup: fileConfig.preheatOnStartup ?? true,
     preheatOnApproval: fileConfig.preheatOnApproval ?? true,
+    preheatIdleTtlDays: clampNumber(Number(fileConfig.preheatIdleTtlDays ?? 7), 0, 365),
     env: fileConfig.env && typeof fileConfig.env === 'object' ? fileConfig.env : {},
   }
 }

@@ -19,6 +19,7 @@ import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './
 import { loadEnabledSecrets } from './secrets/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
+import { partitionUsersBySessionActivity } from './session/activity.js'
 import type { PermissionMode } from './permission/types.js'
 import { NetworkBridge } from './runtime/network-bridge.js'
 import { brainppDockerImageProbe } from './runtime/image-readiness.js'
@@ -249,6 +250,31 @@ async function runRlaunchStartupPreheat(
   if (users.length === 0) {
     process.stderr.write(`[rlaunch-preheat] no paired users — nothing to preheat\n`)
     return
+  }
+  // Idle exemption: a paired-but-dormant user (no session activity within the
+  // TTL) is skipped, which also keeps their runtime out of the pool — the
+  // WorkerHealthChecker only sweeps pool members, so a skipped user's pod is
+  // never resurrected after cluster GC. Their first real message (or bg fire)
+  // acquires a runtime on demand, paying one cold start. preheat-on-approval
+  // is untouched: a fresh approval is a genuine imminent-use signal.
+  const idleTtlDays = config.runtime.clusterSettings.preheatIdleTtlDays
+  if (idleTtlDays > 0) {
+    const cutoffMs = Date.now() - idleTtlDays * 24 * 60 * 60 * 1000
+    const { active, idle } = await partitionUsersBySessionActivity(
+      users,
+      cutoffMs,
+      userSessionsRoot,
+    )
+    if (idle.length > 0) {
+      process.stderr.write(
+        `[rlaunch-preheat] skipping ${idle.length} idle user(s) (no session activity in ${idleTtlDays}d): ${idle.join(', ')}\n`,
+      )
+    }
+    users = active
+    if (users.length === 0) {
+      process.stderr.write(`[rlaunch-preheat] no recently-active users — nothing to preheat\n`)
+      return
+    }
   }
   process.stderr.write(
     `[rlaunch-preheat] preheating ${users.length} paired user(s): ${users.join(', ')}\n`,
