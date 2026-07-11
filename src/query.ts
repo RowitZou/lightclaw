@@ -761,7 +761,7 @@ export async function query(params: QueryParams): Promise<{
             if (!ttfbLogged) {
               ttfbLogged = true
               process.stderr.write(
-                `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
+                `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} upstream=${mainRoute.entry.upstreamModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
               )
             }
             if (event.type === 'keepalive') {

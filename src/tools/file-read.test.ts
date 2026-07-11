@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 
+import { _resetCacheForTests, writeCacheEntry } from '../provider/capability-cache.js'
 import { LocalRuntime } from '../runtime/local.js'
 import { installTestConfigHome } from '../test-support/config-fixture.js'
 import type { ToolCallContext } from '../tool.js'
@@ -275,6 +276,106 @@ Image.new("RGB", (8, 8), color=(0, 0, 0)).save(out, "PNG")
     // Pillow rejects non-PNG-magic input; we just want a graceful error
     // shape (string output, isError set).
     assert.equal(typeof result.output, 'string')
+  })
+})
+
+describe('Read (PDF inline-document budget)', () => {
+  // The inline-PDF path is gated on mainTurnRouting + a pdf@inToolResult
+  // capability-cache entry; install a test home and precharge that entry
+  // so the branch is reachable without a real provider probe.
+  let restoreConfigHome: () => void
+  before(() => {
+    restoreConfigHome = installTestConfigHome()
+    _resetCacheForTests()
+    writeCacheEntry({
+      endpoint: 'test',
+      baseUrl: undefined,
+      upstreamModel: 'test-upstream',
+      kind: 'pdf',
+      position: 'inToolResult',
+      entry: { enabled: true, failures: 0 },
+    })
+  })
+  after(() => {
+    restoreConfigHome()
+    _resetCacheForTests()
+  })
+
+  function contextWithPdfInlineRouting(): ToolCallContext {
+    return {
+      ...context(),
+      mainTurnRouting: {
+        provider: { name: 'anthropic' },
+        schema: 'anthropic',
+        endpoint: 'test',
+        endpointBaseUrl: undefined,
+        upstreamModel: 'test-upstream',
+      } as unknown as NonNullable<ToolCallContext['mainTurnRouting']>,
+    }
+  }
+
+  async function createTwoPagePdfFixture(
+    filePath: string,
+    opts: { noisyFirstPage: boolean },
+  ): Promise<void> {
+    const result = await runtime.exec({
+      command: 'python3 -c "$LIGHTCLAW_FIXTURE_SCRIPT"',
+      env: {
+        OUT: path.join(tmp, filePath),
+        NOISY: opts.noisyFirstPage ? '1' : '0',
+        LIGHTCLAW_FIXTURE_SCRIPT: `
+import os
+from PIL import Image
+out = os.environ["OUT"]
+if os.environ["NOISY"] == "1":
+    # Incompressible noise: the resulting single page is >1MB even after
+    # pdfseparate, exceeding the 1MB/page inline budget.
+    first = Image.frombytes("RGB", (1600, 1600), os.urandom(1600 * 1600 * 3))
+else:
+    first = Image.new("RGB", (64, 64), (255, 255, 255))
+second = Image.new("RGB", (64, 64), (0, 0, 0))
+first.save(out, "PDF", save_all=True, append_images=[second], resolution=72)
+`,
+      },
+    })
+    assert.equal(result.exitCode, 0, result.stderr)
+  }
+
+  it('falls back to page images when the sliced page exceeds the per-page inline budget', async () => {
+    await createTwoPagePdfFixture('noisy.pdf', { noisyFirstPage: true })
+    const result = await fileReadTool.call(
+      { file_path: 'noisy.pdf', pages: '1', visual: true },
+      contextWithPdfInlineRouting(),
+    )
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadVisualOutput
+    assert.equal(output.kind, 'visual')
+    assert.equal(output.format, 'pdf')
+    const types = output.toolResultContent.map(b => b.type)
+    assert.ok(!types.includes('document'), `expected no inline document block, got: ${types.join(',')}`)
+    assert.ok(types.includes('image'), `expected rendered page images, got: ${types.join(',')}`)
+    assert.match(
+      (output.toolResultContent[0] as { text: string }).text,
+      /inline PDF skipped: \d+ bytes for 1 page\(s\) exceeds/,
+    )
+  })
+
+  it('still inlines a page slice that fits the per-page budget', async () => {
+    await createTwoPagePdfFixture('plain.pdf', { noisyFirstPage: false })
+    const result = await fileReadTool.call(
+      { file_path: 'plain.pdf', pages: '1', visual: true },
+      contextWithPdfInlineRouting(),
+    )
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadVisualOutput
+    assert.equal(output.kind, 'visual')
+    assert.equal(output.format, 'pdf')
+    const types = output.toolResultContent.map(b => b.type)
+    assert.ok(types.includes('document'), `expected an inline document block, got: ${types.join(',')}`)
+    assert.match(
+      (output.toolResultContent[0] as { text: string }).text,
+      /mode: inline PDF document/,
+    )
   })
 })
 

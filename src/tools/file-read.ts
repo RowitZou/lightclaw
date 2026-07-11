@@ -52,6 +52,15 @@ function resolveMaxChars(requested: number | undefined): { maxChars: number; cla
 }
 const MAX_OFFICE_BYTES = 20 * 1024 * 1024
 const MAX_INLINE_PDF_BYTES = 20 * 1024 * 1024
+/** Per-page byte budget for inline PDF output. `pdfseparate` copies every
+ *  shared resource (fonts, image XObjects) into each extracted page, so a
+ *  "1 page of 31" slice can come out as large as the whole document (prod:
+ *  a 4.49MB/31-page arXiv PDF sliced to page 30 produced a 4.6MB slice
+ *  that then lived in the transcript forever, re-uploaded every turn).
+ *  1MB/page × MAX_PAGES_PER_READ (20) meets MAX_INLINE_PDF_BYTES at the
+ *  limit; over budget we fall back to the pdftoppm image path, which has
+ *  its own resize budget. */
+const MAX_INLINE_PDF_BYTES_PER_PAGE = 1 * 1024 * 1024
 
 /**
  * Extensions Read should reject up-front (not a text file, no special
@@ -773,10 +782,25 @@ async function maybeReadPdfVisualAsInlineDocument(input: {
   })
   if (entry?.enabled !== true) return null
 
+  const pagesInRange = input.range.lastPage - input.range.firstPage + 1
+  const inlineBudgetBytes = Math.min(
+    MAX_INLINE_PDF_BYTES,
+    pagesInRange * MAX_INLINE_PDF_BYTES_PER_PAGE,
+  )
+  // Mutating range.warnings is deliberate: the caller's pdftoppm fallback
+  // copies it into the image-mode header, so the agent learns why it got
+  // page images instead of an inline PDF.
+  const fallBackOverBudget = (actualBytes: number): null => {
+    input.range.warnings.push(
+      `inline PDF skipped: ${actualBytes} bytes for ${pagesInRange} page(s) exceeds the ${inlineBudgetBytes}-byte inline budget; pages rendered as images instead`,
+    )
+    return null
+  }
+
   let pdfBuffer: Buffer
   let cleanupDir: string | undefined
   if (input.range.firstPage === 1 && input.pageCount !== undefined && input.range.lastPage === input.pageCount) {
-    if (input.statSize > MAX_INLINE_PDF_BYTES) return null
+    if (input.statSize > inlineBudgetBytes) return fallBackOverBudget(input.statSize)
     pdfBuffer = await input.context.runtime.fs.readFile(input.filePath)
   } else {
     const slice = buildPdfSliceOutputPath(input.context.runtime.workspaceRoot)
@@ -789,9 +813,9 @@ async function maybeReadPdfVisualAsInlineDocument(input: {
       lastPage: input.range.lastPage,
     })
     const sliceStat = await input.context.runtime.fs.stat(slice.outputPath)
-    if (sliceStat.size > MAX_INLINE_PDF_BYTES) {
+    if (sliceStat.size > inlineBudgetBytes) {
       await cleanupPdfSliceDir(input.context, cleanupDir).catch(() => undefined)
-      return null
+      return fallBackOverBudget(sliceStat.size)
     }
     pdfBuffer = await input.context.runtime.fs.readFile(slice.outputPath)
   }
