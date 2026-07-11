@@ -65,7 +65,7 @@ function isTopicCreateRefused(err: unknown): err is TopicCreateRefusedError {
 // `example {om_da5****dfe}`). Framework-minted placeholders (`replay-<uuid>`,
 // `taskrun-ask-<uuid>`, ...) are never addressable by im.message.reply — see
 // FeishuSender.replyTargetFor for why this is the sender-side backstop.
-function isReplyableMessageId(id: string): boolean {
+export function isReplyableMessageId(id: string): boolean {
   return id.startsWith('om_')
 }
 

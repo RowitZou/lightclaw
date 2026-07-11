@@ -152,6 +152,20 @@ export type ChannelRunnerStrategy = {
     openId: string,
     mentionNames?: ReadonlyMap<string, string>,
   ): Promise<string>
+  /**
+   * Resolve the reply anchor for a framework-minted (synthetic) turn that
+   * settles a TaskRun: the platform message id of that run's task card, so
+   * the turn's chat output reply-quotes the card and the user can jump from
+   * the bubble to the ticket it belongs to. Called once per synthetic turn
+   * at the handleMessage chokepoint — every downstream send (streamed
+   * blocks, end-of-query fallback, notices, leftover-rescue replays)
+   * inherits the anchor from the message. Returns undefined when no safe
+   * anchor exists (no card binding, card lives in a different chat/topic,
+   * non-replyable id); the message then keeps its existing anchor.
+   */
+  resolveTaskCardReplyAnchor?(
+    message: NormalizedChannelMessage,
+  ): Promise<string | undefined>
   /** Reply with the LLM's natural-language output. Plain text. */
   sendReply(
     message: NormalizedChannelMessage,
@@ -672,6 +686,29 @@ export class ChannelRunner {
 
     const mainSessionId = this.strategy.resolveSessionId(message, userId)
     const sessionId = mainSessionId
+    // A framework-minted turn that settles a TaskRun reply-quotes that run's
+    // task card, so the user can jump from the chat bubble to the ticket it
+    // came from. Resolved ONCE here — the single entry every synthetic turn
+    // passes through (idle wakes from wakeOrInterject, leftover-rescue
+    // replays, and any future mint path) — and stamped onto the message, so
+    // every downstream send (streamed blocks, end-of-query fallback, chunked
+    // follow-ups, notices) inherits the anchor with no per-send wiring. The
+    // card anchor deliberately OVERRIDES the routing-only inbound anchor: the
+    // resolver only returns an id in the same chat/topic, so topic routing is
+    // preserved while the quote gains provenance. Real user turns are
+    // untouched — their replies keep quoting the user's own message.
+    if (message.synthetic && message.taskCardRoot && this.strategy.resolveTaskCardReplyAnchor) {
+      try {
+        const cardAnchor = await this.strategy.resolveTaskCardReplyAnchor(message)
+        if (cardAnchor) {
+          message.replyAnchorMessageId = cardAnchor
+        }
+      } catch (error) {
+        process.stderr.write(
+          `${this.strategy.channelId}: task-card reply anchor resolve failed for ${message.messageId}: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+      }
+    }
     const effectiveMessage = message
     assertSessionIdShape(mainSessionId)
     // Interim narration (blocks the model emits between tool calls)

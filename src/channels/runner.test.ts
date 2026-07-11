@@ -2781,3 +2781,121 @@ describe('ChannelRunner framework-wake in-flight guard', () => {
     }
   })
 })
+
+describe('ChannelRunner synthetic-turn task-card reply anchor', () => {
+  // A framework wake that settles a TaskRun must reply-quote that run's task
+  // card so the user can jump from the chat bubble to the ticket. The anchor
+  // is resolved ONCE at the handleMessage chokepoint and stamped onto the
+  // message, so every downstream send inherits it — streamed blocks, the
+  // end-of-query fallback, and leftover-rescue replays alike.
+  function fakeStreamReply(text: string): void {
+    setStreamChatForTest(async function* (): AsyncGenerator<StreamEvent> {
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: 'text', text }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+  }
+
+  it('stamps the resolved card message id on the reply anchor for a synthetic wake', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const resolvedRoots: string[] = []
+    strategy.resolveTaskCardReplyAnchor = async message => {
+      resolvedRoots.push(message.taskCardRoot?.rootRunId ?? '(none)')
+      return 'om_task_card'
+    }
+    const replyAnchors: Array<string | undefined> = []
+    const baseSendReply = strategy.sendReply
+    strategy.sendReply = async (message, text) => {
+      replyAnchors.push(message.replyAnchorMessageId)
+      await baseSendReply(message, text)
+    }
+    const runner = new ChannelRunner(strategy)
+    fakeStreamReply('工单已完成，结果如下。')
+    try {
+      await runner.handleMessage({
+        ...makeFakeFeishuMessage({
+          sender: 'ou_alice',
+          text: '<background-task-result taskRunId="tr_anchor">done</background-task-result>',
+        }),
+        synthetic: true,
+        frameworkText: true,
+        userFacingWake: true,
+        taskCardRoot: { owner: 'alice', rootRunId: 'tr_anchor' },
+      })
+      assert.deepEqual(resolvedRoots, ['tr_anchor'], 'resolver runs once with the wake root')
+      assert.ok(replyAnchors.length >= 1, 'a user-facing wake must produce a chat reply')
+      assert.ok(
+        replyAnchors.every(anchor => anchor === 'om_task_card'),
+        `every reply must quote the task card, got ${JSON.stringify(replyAnchors)}`,
+      )
+    } finally {
+      setStreamChatForTest(null)
+    }
+  })
+
+  it('keeps the existing anchor when no safe card anchor resolves', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveTaskCardReplyAnchor = async () => undefined
+    const replyAnchors: Array<string | undefined> = []
+    const baseSendReply = strategy.sendReply
+    strategy.sendReply = async (message, text) => {
+      replyAnchors.push(message.replyAnchorMessageId)
+      await baseSendReply(message, text)
+    }
+    const runner = new ChannelRunner(strategy)
+    fakeStreamReply('工单已完成。')
+    try {
+      await runner.handleMessage({
+        ...makeFakeFeishuMessage({
+          sender: 'ou_alice',
+          text: '<background-task-result taskRunId="tr_anchor">done</background-task-result>',
+        }),
+        synthetic: true,
+        frameworkText: true,
+        userFacingWake: true,
+        taskCardRoot: { owner: 'alice', rootRunId: 'tr_anchor' },
+        replyAnchorMessageId: 'om_inbound_anchor',
+      })
+      assert.ok(replyAnchors.length >= 1, 'a user-facing wake must produce a chat reply')
+      assert.ok(
+        replyAnchors.every(anchor => anchor === 'om_inbound_anchor'),
+        `an unresolved card anchor must fall back to the inbound anchor, got ${JSON.stringify(replyAnchors)}`,
+      )
+    } finally {
+      setStreamChatForTest(null)
+    }
+  })
+
+  it('a resolver failure never blocks the turn', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveTaskCardReplyAnchor = async () => {
+      throw new Error('binding read exploded')
+    }
+    const runner = new ChannelRunner(strategy)
+    fakeStreamReply('工单已完成。')
+    try {
+      await runner.handleMessage({
+        ...makeFakeFeishuMessage({
+          sender: 'ou_alice',
+          text: '<background-task-result taskRunId="tr_anchor">done</background-task-result>',
+        }),
+        synthetic: true,
+        frameworkText: true,
+        userFacingWake: true,
+        taskCardRoot: { owner: 'alice', rootRunId: 'tr_anchor' },
+      })
+      assert.ok(strategy.replies.length >= 1, 'the wake reply must still land')
+    } finally {
+      setStreamChatForTest(null)
+    }
+  })
+})

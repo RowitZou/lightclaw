@@ -14,6 +14,7 @@ import {
 import type { FeishuSender } from './sender.js'
 import { createSenderNameResolver } from './sender-name.js'
 import { buildCommandListCard, buildSystemNoticeCard } from './system-notice.js'
+import { resolveTaskCardReplyAnchor } from './task-card-reply-anchor.js'
 import { fetchFeishuMediaPayload, materializeFeishuMedia } from './media.js'
 import {
   createFeishuTypingReaction,
@@ -99,6 +100,15 @@ export function createFeishuStrategy(
         chatId: message.chatId,
       })
     },
+    resolveTaskCardReplyAnchor: message =>
+      message.taskCardRoot
+        ? resolveTaskCardReplyAnchor({
+            owner: message.taskCardRoot.owner,
+            rootRunId: message.taskCardRoot.rootRunId,
+            chatId: message.chatId,
+            ...(message.threadId ? { threadId: message.threadId } : {}),
+          })
+        : Promise.resolve(undefined),
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendMarkdownText(message, text),
     sendFile: (message, file) => sender.sendFile(message, file),
