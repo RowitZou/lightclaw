@@ -67,6 +67,18 @@ describe('classifyFeishuError', () => {
     })).kind, 'already-exists')
   })
 
+  // 2026-07-10 prod: drive move rejected our malformed request with
+  // code=1061002 "params error." and the old blanket /^1061\d{3}$/ rule
+  // dressed it up as already-exists ("treat as success") — agents chased
+  // phantom name conflicts instead of seeing a request-shape bug. 1061xxx
+  // is the whole drive error space, not an already-exists family.
+  it('classifies drive params error 1061002 as validation-failed, never already-exists', () => {
+    assert.equal(classifyFeishuError(axiosLike({
+      status: 400,
+      data: { code: 1061002, msg: 'params error.' },
+    })).kind, 'validation-failed')
+  })
+
   it('classifies not-found', () => {
     assert.equal(classifyFeishuError(axiosLike({
       status: 404,

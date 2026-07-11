@@ -62,6 +62,16 @@ const RATE_LIMIT_CODES = new Set([99991400, 99991403, 1000004, 1000005, 11232, 1
 // skip the reply, fall back to im.message.create.
 const WITHDRAWN_TARGET_CODES = new Set([230011, 231003, 99992354])
 const NOT_FOUND_CODES = new Set([1002, 600, 11244, 18066, 90304, 90305, 91005, 91205, 95007, 1069304, 95006, 91402, 99992355, 99992375, 99992379])
+// 1061xxx is the WHOLE drive submodule error space, not an already-exists
+// family: 1061002 is drive's generic "params error." (request-shape bug on
+// our side). The old blanket /^1061\d{3}$/ → already-exists rule dressed
+// every drive 400 up as "idempotent, treat as success" — 2026-07-10 prod:
+// FeishuMove's malformed move request looped agents through phantom
+// name-conflict recovery. Collaborator already-exists codes are matched
+// explicitly here plus the msg pattern below; when a new one shows up in
+// logs, add the code (see the wiki error-code table).
+const PARAMS_ERROR_CODES = new Set([1061002])
+const ALREADY_EXISTS_CODES = new Set([1061004])
 const PERMISSION_DENIED_CODES = new Set([91002, 91204, 95008, 95009, 90213, 91003, 91004, 1069303, 11201, 11202, 11208, 99991679])
 const INTERNAL_SERVER_CODES = new Set([1500, 1503, 1665, 1668, 2200, 5000, 45500, 55001, 95001, 95003, 95005, 95010, 95011, 105001, 1000003, 90203, 90242, 90228])
 
@@ -87,9 +97,9 @@ export function classifyFeishuError(error: unknown): FeishuErrorClassification {
     kind = 'rate-limited'
   } else if (code !== undefined && WITHDRAWN_TARGET_CODES.has(code)) {
     kind = 'withdrawn-target'
-  } else if ((code !== undefined && /^99992\d{3}$/.test(String(code))) || envelope.fieldViolations.length > 0) {
+  } else if ((code !== undefined && (/^99992\d{3}$/.test(String(code)) || PARAMS_ERROR_CODES.has(code))) || envelope.fieldViolations.length > 0) {
     kind = 'validation-failed'
-  } else if ((code !== undefined && /^1061\d{3}$/.test(String(code))) || /already exist|already been added|been added|duplicate|repeat/i.test(msg ?? '')) {
+  } else if ((code !== undefined && ALREADY_EXISTS_CODES.has(code)) || /already exist|already been added|been added|duplicate|repeat/i.test(msg ?? '')) {
     kind = 'already-exists'
   } else if (code !== undefined && NOT_FOUND_CODES.has(code)) {
     kind = 'not-found'

@@ -125,7 +125,7 @@ export const feishuDeleteTool = buildTool<FeishuDeleteInput, string>({
 export const feishuMoveTool = buildTool<FeishuMoveInput, string>({
   name: 'FeishuMove',
   description:
-    'Move and / or rename a file or folder within the current user private Feishu cloud workspace — Unix `mv` semantics. Provide `destination` to relocate, `new_name` to rename, or both to do both atomically (move runs first, then rename). At least one of `destination` / `new_name` is required. Source and destination must both stay inside this workspace. When both fields are set and only the rename leg fails, the tool returns `WorkerFailure` with `partial_result` so the caller can retry the rename alone. 中文：在当前用户的飞书工作区内部移动 (`destination`) 和 / 或重命名 (`new_name`) 文件或文件夹（Unix `mv` 同款），两个字段至少给一个。',
+    'Move and / or rename a file or folder within the current user private Feishu cloud workspace — Unix `mv` semantics. Provide `destination` to relocate, `new_name` to rename, or both to do both atomically (move runs first, then rename). At least one of `destination` / `new_name` is required. Source and destination must both stay inside this workspace. Renaming supports docs, sheets, and folders; renaming a FOLDER recreates it (Feishu has no folder rename API), so the folder gets a new token — items inside keep their tokens, but old links to the folder itself go stale. When both fields are set and only the rename leg fails, the tool returns `WorkerFailure` with `partial_result` so the caller can retry the rename alone. 中文：在当前用户的飞书工作区内部移动 (`destination`) 和 / 或重命名 (`new_name`) 文件或文件夹（Unix `mv` 同款），两个字段至少给一个；重命名文件夹会重建该文件夹（token 变化，夹内文件 token 不变）。',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -418,13 +418,18 @@ export async function runFeishuMove(
   const retryCounter = { count: 0 }
   let moved = false
   let renamed = false
+  let renamedNewToken: string | undefined
   try {
     if (shouldMove) {
       await moveFile({ client: deps.client, token: source.token, type: source.type, destFolderToken: dest.token, retryCounter })
       moved = true
     }
     if (shouldRename) {
-      await renameFile({ client: deps.client, token: source.token, type: source.type, name: input.new_name!, retryCounter })
+      // After a move leg the source now lives under dest; rename-only keeps
+      // dest = current parent. Either way dest.token is the folder the
+      // recreate path (folder rename) must create the replacement in.
+      const renameResult = await renameFile({ client: deps.client, token: source.token, type: source.type, name: input.new_name!, parentFolderToken: dest.token, retryCounter })
+      renamedNewToken = renameResult.newToken
       renamed = true
     }
     ctx.ancestry.evict(source.token)
@@ -432,14 +437,19 @@ export async function runFeishuMove(
       at: new Date().toISOString(),
       userId: ctx.canonicalUser,
       operation: 'move',
-      resource: { ...resource, moved, renamed },
+      resource: { ...resource, moved, renamed, ...(renamedNewToken ? { newToken: renamedNewToken } : {}) },
       preview,
       status: 'confirmed',
       sourceAncestry,
       destAncestry,
       ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
-    return { output: formatMoveSuccess({ sourcePath: source.path, destPath: dest.path, newName: input.new_name, mode }) }
+    const successText = formatMoveSuccess({ sourcePath: source.path, destPath: dest.path, newName: input.new_name, mode })
+    return {
+      output: renamedNewToken
+        ? `${successText} Renaming a folder recreates it: new folder token is ${renamedNewToken} (items inside keep their tokens; links to the old folder token are stale).`
+        : successText,
+    }
   } catch (error) {
     ctx.ancestry.evict(source.token)
     if (shouldMove && shouldRename && moved && !renamed) {
@@ -495,11 +505,15 @@ function formatMovePreview(input: {
   const label = input.type === 'folder'
     ? `folder "${input.sourcePath}" and ${input.descendantCount} contained item(s)`
     : `${displayType(input.type)} "${input.sourcePath}"`
+  // Feishu has no folder rename API — a folder rename is executed as
+  // recreate + move contents + trash the old folder, so the folder token
+  // (and any shared links to it) changes. Say so on the approval card.
+  const folderRenameNote = input.type === 'folder' ? ' (recreates the folder: its link/token changes, contained items keep theirs)' : ''
   if (input.mode === 'rename') {
-    return `Rename ${label} to "${input.newName}".`
+    return `Rename ${label} to "${input.newName}"${folderRenameNote}.`
   }
   if (input.mode === 'move-and-rename') {
-    return `Move ${label} to "${input.destPath}" and rename it to "${input.newName}".`
+    return `Move ${label} to "${input.destPath}" and rename it to "${input.newName}"${folderRenameNote}.`
   }
   return `Move ${label} to "${input.destPath}".`
 }

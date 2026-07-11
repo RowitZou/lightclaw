@@ -198,7 +198,7 @@ describe('Feishu workspace tools', () => {
       { ask: async () => ({ behavior: 'allow' }) },
     )
     assert.match(result.output, /Moved "notes\.docx" to "papers"/)
-    assert.deepEqual(client.moved, [{ token: 'docNotes', dest: 'fldPapers' }])
+    assert.deepEqual(client.moved, [{ token: 'docNotes', dest: 'fldPapers', type: 'docx' }])
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'move')
     assert.equal(records[0].status, 'confirmed')
@@ -243,13 +243,56 @@ describe('Feishu workspace tools', () => {
       { ask: async () => ({ behavior: 'allow' }) },
     )
     assert.match(result.output, /Moved "notes\.docx" to "papers" and renamed it to "archive\.docx"/)
-    assert.deepEqual(client.moved, [{ token: 'docNotes', dest: 'fldPapers' }])
+    assert.deepEqual(client.moved, [{ token: 'docNotes', dest: 'fldPapers', type: 'docx' }])
     assert.deepEqual(client.renamed, [{ token: 'docNotes', name: 'archive.docx' }])
     const records = await readAuditRecords()
     const resource = records[0].resource as Record<string, unknown>
     assert.equal(resource.mode, 'move-and-rename')
     assert.equal(resource.moved, true)
     assert.equal(resource.renamed, true)
+  })
+
+  // Feishu has no folder rename API — the tool recreates the folder under
+  // the new name, moves the children over, and trashes the drained original.
+  it('renames a folder by recreate + move children + delete old', async () => {
+    const client = makeClient({
+      userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
+      fldPapers: [
+        item('draft.docx', 'docDraft', 'docx', 'fldPapers'),
+        item('data', 'sheetData', 'sheet', 'fldPapers'),
+      ],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuMove({ target: 'papers', new_name: 'archive' }, { client }),
+      { ask: async () => ({ behavior: 'allow' }) },
+    )
+    assert.match(result.output, /Renamed "papers" to "archive"/)
+    assert.match(result.output, /new folder token is fld_archive/)
+    // Children moved into the recreated folder, old folder trashed.
+    assert.deepEqual(client.moved, [
+      { token: 'docDraft', dest: 'fld_archive', type: 'docx' },
+      { token: 'sheetData', dest: 'fld_archive', type: 'sheet' },
+    ])
+    assert.deepEqual(client.deleted, ['fldPapers'])
+    const records = await readAuditRecords()
+    const resource = records[0].resource as Record<string, unknown>
+    assert.equal(resource.mode, 'rename')
+    assert.equal(resource.newToken, 'fld_archive')
+  })
+
+  it('rejects renaming a drive item type Feishu cannot rename', async () => {
+    const client = makeClient({
+      userFld: [item('report.pdf', 'filePdf', 'file', 'userFld')],
+    })
+    await assert.rejects(
+      withFeishuSession(
+        () => runFeishuMove({ target: 'report.pdf', new_name: 'renamed.pdf' }, { client }),
+        { ask: async () => ({ behavior: 'allow' }) },
+      ),
+      /no rename API for drive item type "file"/,
+    )
+    assert.deepEqual(client.deleted, [])
+    assert.deepEqual(client.renamed, [])
   })
 
   it('returns partial WorkerFailure when move succeeds but rename fails', async () => {
@@ -705,12 +748,12 @@ function makeClient(
   } = {},
 ): FeishuClient & {
   deleted: string[]
-  moved: Array<{ token: string; dest: string }>
+  moved: Array<{ token: string; dest: string; type: string }>
   renamed: Array<{ token: string; name: string }>
   grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
 } {
   const deleted: string[] = []
-  const moved: Array<{ token: string; dest: string }> = []
+  const moved: Array<{ token: string; dest: string; type: string }> = []
   const renamed: Array<{ token: string; name: string }> = []
   const grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }> = []
   const byToken = new Map<string, Record<string, unknown>>([
@@ -778,39 +821,82 @@ function makeClient(
             deleted.push(input.path?.file_token ?? '')
             return { code: 0, data: {} }
           },
-          move: async (input: { path?: { file_token?: string }; data?: { folder_token?: string } }) => {
+          // Mirrors the real move API: `type` AND `folder_token` both live
+          // in the request body; a missing `type` is the 400 code=1061002
+          // "params error." that made production FeishuMove fail every call.
+          move: async (input: { path?: { file_token?: string }; data?: { type?: string; folder_token?: string } }) => {
             if (errors.moveError) {
               throw errors.moveError
             }
-            moved.push({ token: input.path?.file_token ?? '', dest: input.data?.folder_token ?? '' })
-            return { code: 0, data: {} }
-          },
-          update: async (input: {
-            path?: { file_token?: string }
-            data?: { name?: string; title?: string }
-            request_body?: { title?: string }
-          }) => {
-            if (errors.renameError) {
-              throw errors.renameError
+            if (!input.data?.type) {
+              throw new Error('fake: move request body missing required `type` (real API returns 400 code=1061002)')
             }
             const token = input.path?.file_token ?? ''
-            const name = input.data?.name ?? input.data?.title ?? input.request_body?.title ?? ''
-            renamed.push({ token, name })
+            const dest = input.data?.folder_token ?? ''
+            moved.push({ token, dest, type: input.data.type })
             const entry = byToken.get(token)
             if (entry) {
-              entry.name = name
+              const oldParent = String(entry.parent_token ?? '')
+              tree[oldParent] = (tree[oldParent] ?? []).filter(e => e.token !== token)
+              entry.parent_token = dest
+              tree[dest] = [...(tree[dest] ?? []), entry]
             }
             return { code: 0, data: {} }
           },
+          // Deliberately NO `update` handler: the real SDK has no
+          // drive.v1.file.update / PATCH files route. Renames go through
+          // docx.documentBlock.patch / sheets.spreadsheet.patch below —
+          // the old fake `update` was exactly the fixture drift that let
+          // a never-working production rename path stay green in tests.
         },
         metadata: {
           batchQuery: async () => ({ code: 0, data: { metas: [] } }),
         },
       },
     },
+    docx: {
+      documentBlock: {
+        patch: async (input: {
+          path?: { document_id?: string; block_id?: string }
+          data?: { update_text_elements?: { elements?: Array<{ text_run?: { content?: string } }> } }
+        }) => {
+          if (errors.renameError) {
+            throw errors.renameError
+          }
+          const token = input.path?.document_id ?? ''
+          if (input.path?.block_id !== token) {
+            throw new Error('fake: doc title rename must patch the page block (block_id == document_id)')
+          }
+          const name = input.data?.update_text_elements?.elements?.[0]?.text_run?.content ?? ''
+          renamed.push({ token, name })
+          const entry = byToken.get(token)
+          if (entry) {
+            entry.name = name
+          }
+          return { code: 0, data: {} }
+        },
+      },
+    },
+    sheets: {
+      spreadsheet: {
+        patch: async (input: { path?: { spreadsheet_token?: string }; data?: { title?: string } }) => {
+          if (errors.renameError) {
+            throw errors.renameError
+          }
+          const token = input.path?.spreadsheet_token ?? ''
+          const name = input.data?.title ?? ''
+          renamed.push({ token, name })
+          const entry = byToken.get(token)
+          if (entry) {
+            entry.name = name
+          }
+          return { code: 0, data: {} }
+        },
+      },
+    },
   } as unknown as FeishuClient & {
     deleted: string[]
-    moved: Array<{ token: string; dest: string }>
+    moved: Array<{ token: string; dest: string; type: string }>
     renamed: Array<{ token: string; name: string }>
     grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
   }

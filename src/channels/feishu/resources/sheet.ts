@@ -103,6 +103,26 @@ export async function readSheetMetadata(input: {
   }
 }
 
+// PATCH /sheets/v3/spreadsheets/{token} — the only rename path for sheets;
+// the drive files API has no rename at all (see renameFile in folder.ts).
+export async function renameSpreadsheet(input: {
+  client: FeishuClient
+  spreadsheetToken: string
+  title: string
+  retryCounter?: { count: number }
+}): Promise<void> {
+  const client = input.client as FeishuSheetClient
+  await withFeishuRetry(() => callFeishu(() =>
+    client.sheets.spreadsheet.patch({
+      path: { spreadsheet_token: input.spreadsheetToken },
+      data: { title: input.title },
+    }),
+  ), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'sheet.rename'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
+}
+
 export async function createSpreadsheet(input: {
   client: FeishuClient
   title: string
@@ -441,6 +461,7 @@ type FeishuSheetClient = {
     spreadsheet: {
       create(input: unknown): Promise<FeishuEnvelope>
       get(input: unknown): Promise<FeishuEnvelope>
+      patch(input: unknown): Promise<FeishuEnvelope>
     }
     spreadsheetSheet: {
       query(input: unknown): Promise<FeishuEnvelope>

@@ -1,8 +1,10 @@
 import type { FeishuClient } from '../client.js'
 import { getWorkspaceParentCache } from '../workspace/ancestry.js'
 import { callFeishu, type FeishuEnvelope } from './api.js'
+import { updateDocBlockText } from './doc.js'
 import { classifyFeishuError, logFeishuRetry } from './errors.js'
 import { withFeishuRetry } from './retry.js'
+import { renameSpreadsheet } from './sheet.js'
 
 export type FeishuDriveItemType = 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file' | 'unknown'
 
@@ -125,45 +127,130 @@ export async function moveFile(input: {
   retryCounter?: { count: number }
 }): Promise<FeishuEnvelope> {
   const client = input.client as unknown as FeishuFolderClient
+  // POST /drive/v1/files/{token}/move takes BOTH `type` and `folder_token`
+  // in the request body. Sending `type` as a query param (the shape the
+  // DELETE endpoint uses) returns 400 code=1061002 "params error." on every
+  // call — FeishuMove had never succeeded in production until this landed.
   return withFeishuRetry(() => callFeishu(() => client.drive.v1.file.move({
     path: { file_token: input.token },
-    params: { type: driveType(input.type) },
-    data: { folder_token: input.destFolderToken },
+    data: { type: driveType(input.type), folder_token: input.destFolderToken },
   })), {
     onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.move'),
     ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
   })
 }
 
+// Feishu has NO drive-level rename API (no PATCH /drive/v1/files/{token};
+// the SDK's only bare files/{token} route is DELETE). Renames are per-type:
+//   - docx: the document title IS the page block's text (block_id ==
+//     document_id), so a documentBlock.patch on that block renames the doc.
+//   - sheet: PATCH /sheets/v3/spreadsheets/{token} with { title }.
+//   - folder: no API at all — recreate under a new name, move the children
+//     over, then trash the drained old folder. The folder's own token
+//     changes (returned as `newToken`); contained items keep their tokens.
 export async function renameFile(input: {
   client: FeishuClient
   token: string
   type: FeishuDriveItemType
   name: string
+  /** Current parent folder — required for the folder recreate path. */
+  parentFolderToken?: string
   retryCounter?: { count: number }
-}): Promise<FeishuEnvelope> {
-  const client = input.client as unknown as FeishuFolderClient
-  const type = driveType(input.type)
-  return withFeishuRetry(() => callFeishu(() => {
-    if (client.drive.v1.file.update) {
-      return client.drive.v1.file.update({
-        path: { file_token: input.token },
-        params: { type },
-        data: { name: input.name, title: input.name },
-      })
+  /** Folder recreate: how long to wait between drain checks (test override). */
+  pollIntervalMs?: number
+  /** Folder recreate: how many drain checks before giving up (old folder is kept). */
+  maxPollAttempts?: number
+}): Promise<{ newToken?: string }> {
+  if (input.type === 'doc' || input.type === 'docx') {
+    await updateDocBlockText({
+      client: input.client,
+      documentId: input.token,
+      blockId: input.token,
+      content: input.name,
+      ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+    })
+    return {}
+  }
+  if (input.type === 'sheet') {
+    await renameSpreadsheet({
+      client: input.client,
+      spreadsheetToken: input.token,
+      title: input.name,
+      ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+    })
+    return {}
+  }
+  if (input.type === 'folder') {
+    if (!input.parentFolderToken) {
+      throw new Error('Renaming a folder requires its parent folder token.')
     }
-    if (client.request) {
-      return client.request({
-        method: 'PATCH',
-        url: `/open-apis/drive/v1/files/${encodeURIComponent(input.token)}`,
-        data: { type, name: input.name, title: input.name },
-      })
-    }
-    throw new Error('Feishu file rename API is unavailable in this SDK client.')
-  }), {
-    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.rename'),
-    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+    return renameFolderViaRecreate({
+      client: input.client,
+      token: input.token,
+      parentFolderToken: input.parentFolderToken,
+      name: input.name,
+      ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+      ...(input.pollIntervalMs !== undefined ? { pollIntervalMs: input.pollIntervalMs } : {}),
+      ...(input.maxPollAttempts !== undefined ? { maxPollAttempts: input.maxPollAttempts } : {}),
+    })
+  }
+  throw new Error(`Feishu has no rename API for drive item type "${input.type}". Only docs, sheets, and folders can be renamed.`)
+}
+
+async function renameFolderViaRecreate(input: {
+  client: FeishuClient
+  token: string
+  parentFolderToken: string
+  name: string
+  retryCounter?: { count: number }
+  pollIntervalMs?: number
+  maxPollAttempts?: number
+}): Promise<{ newToken: string }> {
+  const retry = input.retryCounter ? { retryCounter: input.retryCounter } : {}
+  // Enumerate BEFORE any mutation so an over-large folder is refused cleanly.
+  const children = await listFolder({ client: input.client, folderToken: input.token })
+  if (children.truncated) {
+    throw new Error(`Folder rename recreates the folder and moves its contents, but this folder has more items than one rename pass handles (${children.items.length}+). Move the contents in batches instead.`)
+  }
+  const created = await createFolder({
+    client: input.client,
+    parentFolderToken: input.parentFolderToken,
+    name: input.name,
+    ...retry,
   })
+  const newToken = created.folderToken
+  for (const child of children.items) {
+    await moveFile({
+      client: input.client,
+      token: child.token,
+      type: child.type,
+      destFolderToken: newToken,
+      ...retry,
+    })
+  }
+  // Folder-type child moves run async server-side (the move API returns a
+  // task_id for folders), so wait until the old folder actually reads empty.
+  // Never trash a folder that still lists content — that would delete data.
+  const maxAttempts = input.maxPollAttempts ?? 10
+  const intervalMs = input.pollIntervalMs ?? 1000
+  for (let attempt = 0; ; attempt++) {
+    const remaining = await listFolder({ client: input.client, folderToken: input.token, maxItems: 1 })
+    if (remaining.items.length === 0) {
+      break
+    }
+    if (attempt >= maxAttempts - 1) {
+      throw new Error(`Folder rename created "${input.name}" (token=${newToken}) and moved ${children.items.length} item(s) into it, but the old folder still lists content after ${maxAttempts} checks — the old folder was NOT deleted. Verify both folders with FeishuList before retrying.`)
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+  }
+  await deleteFile({ client: input.client, token: input.token, type: 'folder', ...retry })
+  const cache = getWorkspaceParentCache()
+  cache.observeChild(newToken, input.parentFolderToken)
+  for (const child of children.items) {
+    cache.observeChild(child.token, newToken)
+  }
+  cache.evict(input.token)
+  return { newToken }
 }
 
 export async function grantFolderPermission(input: {
@@ -305,7 +392,6 @@ type FeishuFolderClient = {
         list(input: unknown): Promise<FeishuEnvelope>
         delete(input: unknown): Promise<FeishuEnvelope>
         move(input: unknown): Promise<FeishuEnvelope>
-        update?(input: unknown): Promise<FeishuEnvelope>
       }
     }
   }
