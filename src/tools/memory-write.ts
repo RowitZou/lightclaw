@@ -49,7 +49,7 @@ Choose \`type\` carefully:
     content: z
       .string()
       .min(10)
-      .describe('Markdown body. For feedback/project memories include Why: and How to apply: sections.'),
+      .describe(`Markdown body, max ${MEMORY_CONTENT_MAX_CHARS} characters. For feedback/project memories include Why: and How to apply: sections. If the content runs long, split it into multiple focused memories instead of trimming detail to fit.`),
   }),
   async call(input) {
     const role = getCurrentRole() ?? getMainRole()
@@ -76,9 +76,11 @@ Choose \`type\` carefully:
         })
         return {
           output:
-            `Memory content is ${input.content.length} characters; the hard limit is ${MEMORY_CONTENT_MAX_CHARS}. ` +
+            `Memory content is ${input.content.length} characters; the hard limit is ${MEMORY_CONTENT_MAX_CHARS} ` +
+            `(over by ${input.content.length - MEMORY_CONTENT_MAX_CHARS}). ` +
             'Rewrite the entry as a tighter summary — keep only the essential rule / fact / pointer, ' +
-            'drop verbose examples and quoted dialogue — and call MemoryWrite again.',
+            'drop verbose examples and quoted dialogue — or split the material into multiple focused memories, ' +
+            'then call MemoryWrite again.',
           isError: true,
         }
       }

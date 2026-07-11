@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
+import { toJSONSchema } from 'zod/v4'
+
 import type { Role } from '../agents/types.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -144,7 +146,8 @@ describe('MemoryWrite currentRole binding', () => {
 
     assert.equal(result.isError, true)
     assert.match(result.output as string, /6001 characters/)
-    assert.match(result.output as string, /hard limit is 6000/)
+    assert.match(result.output as string, /hard limit is 6000 \(over by 1\)/)
+    assert.match(result.output as string, /split the material into multiple focused memories/)
     await assert.rejects(
       () => readFile(path.join(memoryDir, 'too-big.md'), 'utf8'),
       { code: 'ENOENT' },
@@ -152,6 +155,19 @@ describe('MemoryWrite currentRole binding', () => {
     const audit = await readAudit()
     assert.match(audit, /"status":"denied"/)
     assert.match(audit, /content exceeds 6000 chars/)
+  })
+
+  it('declares the content limit in the schema so agents see it before writing', () => {
+    // The 2026-07-07 prod thrash (5 blind trim-and-retry cycles, the 5th
+    // still 2 chars over) happened because the limit only surfaced in the
+    // deny message. The schema description is the up-front disclosure.
+    assert.ok(memoryWriteTool.inputSchema)
+    const schema = toJSONSchema(memoryWriteTool.inputSchema) as unknown as {
+      properties: { content: { description?: string } }
+    }
+    const description = schema.properties.content.description ?? ''
+    assert.match(description, /max 6000 characters/)
+    assert.match(description, /split it into multiple focused memories/)
   })
 
   it('lets fork-like nested contexts override a parent worker role', async () => {
