@@ -40,7 +40,6 @@ import {
   getAbortController,
   getCurrentEnabledSecrets,
   getCurrentTaskRunId,
-  getCurrentUserId,
   getCwd,
   getRuntime,
   getSessionId,
@@ -53,7 +52,6 @@ import {
   buildTurnToolCatalog,
   type TurnToolCatalog,
 } from './tools/deferred-loading.js'
-import { appendUsage } from './usage/storage.js'
 import { addTaskRunUsage } from './taskrun/store.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
@@ -753,6 +751,10 @@ export async function query(params: QueryParams): Promise<{
                 : {}),
               turn,
               attempt,
+              // usage.jsonl accounting lives inside streamChat (the api-log
+              // chokepoint); the ephemeral flag is what makes it record
+              // kind 'fresh' instead of the api-log kind.
+              ...(invocation.ephemeral ? { ephemeral: true } : {}),
             },
           })) {
             lastEventAt = Date.now()
@@ -861,16 +863,9 @@ export async function query(params: QueryParams): Promise<{
 
     addUsage(stopEvent.usage)
     totalUsage = mergeUsage(totalUsage, stopEvent.usage)
-    void appendUsage({
-      ts: new Date().toISOString(),
-      user: getCurrentUserId() ?? '__terminal__',
-      model: roleModel,
-      kind: invocation.ephemeral ? 'fresh' : apiLogKind,
-      input: stopEvent.usage.input_tokens ?? 0,
-      output: stopEvent.usage.output_tokens ?? 0,
-      cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
-      cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
-    })
+    // usage.jsonl accounting happens inside streamChat (keyed off
+    // apiLogContext), so every tagged caller — including the sub-LLM
+    // paths that never enter this loop — is recorded at one chokepoint.
     // Charge this turn's tokens to the current TaskRun (best-effort), so the
     // task card can sum what each subtask cost. The root / main turn run is
     // excluded by the card aggregator, so attributing main's tokens here is

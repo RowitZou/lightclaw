@@ -570,6 +570,7 @@ export async function formatCost(): Promise<string> {
   const byModel = new Map<string, number>()
   const byUser = new Map<string, number>()
   let freshTok = 0
+  let subLlmTok = 0
   let cacheRead = 0
   let cacheCreate = 0
   for (const r of records) {
@@ -579,6 +580,9 @@ export async function formatCost(): Promise<string> {
     cacheRead += r.cacheRead
     cacheCreate += r.cacheCreate
     if (r.kind === 'fresh') freshTok += tok
+    // Sub-LLM helper calls (session-memory / compact / web-fetch-summarize
+    // / describe-image / …): everything that is not an agent-loop kind.
+    if (r.kind !== 'main' && r.kind !== 'fresh' && r.kind !== 'subagent') subLlmTok += tok
   }
   const fmt = (n: number): string => formatTokens(n)
   const lines: string[] = [
@@ -592,6 +596,10 @@ export async function formatCost(): Promise<string> {
   ]
   if (freshTok > 0) {
     lines.push('', t('cost.freshSubset', { tok: fmt(freshTok), percent: Math.round(freshTok * 100 / total) }))
+  }
+  if (subLlmTok > 0) {
+    if (freshTok === 0) lines.push('')
+    lines.push(t('cost.subLlmSubset', { tok: fmt(subLlmTok), percent: Math.round(subLlmTok * 100 / total) }))
   }
   lines.push('')
   return lines.join('\n')

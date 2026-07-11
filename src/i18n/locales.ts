@@ -344,6 +344,7 @@ export const LOCALES = {
     'cost.byModel': '  按 model：',
     'cost.byUser': '  按 user：',
     'cost.freshSubset': '  Fresh 子项：{tok} tok（{percent}%）',
+    'cost.subLlmSubset': '  子模型子项（记忆/压缩/摘要等）：{tok} tok（{percent}%）',
     'cost.adminOnlyHint': '/admin cost 仅 admin 可用。',
 
     // ---- /admin sandbox ----
@@ -1402,6 +1403,7 @@ export const LOCALES = {
     'cost.byModel': '  By model:',
     'cost.byUser': '  By user:',
     'cost.freshSubset': '  Fresh subset: {tok} tok ({percent}%)',
+    'cost.subLlmSubset': '  Sub-LLM subset (memory/compact/summarize etc.): {tok} tok ({percent}%)',
     'cost.adminOnlyHint': '/admin cost is admin-only.',
 
     // ---- /admin sandbox ----

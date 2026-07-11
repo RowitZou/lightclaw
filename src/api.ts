@@ -17,6 +17,8 @@ import {
   type ApiLogTurnRecord,
 } from './api-logs/storage.js'
 import { getCurrentUserId, getRuntimeIfInitialized, getSessionConfig, getSessionId } from './state.js'
+import { getCurrentSessionContext } from './session-context.js'
+import { appendUsage } from './usage/storage.js'
 
 /**
  * Tag describing which subsystem is making this streamChat call. Plumbed
@@ -36,6 +38,10 @@ export interface ApiLogContext {
   /** Attempt within turn. Defaults to 0 (only main loop's prompt-too-long
    *  retry path uses attempt > 0). */
   attempt?: number
+  /** Ephemeral (fresh-context) main-loop invocation. Affects usage
+   *  accounting only — the usage.jsonl record gets kind 'fresh' instead of
+   *  the api-log kind, so /cost can report the fresh subset. */
+  ephemeral?: boolean
 }
 
 /**
@@ -148,9 +154,10 @@ export async function* streamChat(
   }
 
   const logger = getActiveApiLogger()
-  // Fast path: no active query scope OR caller didn't tag the call. Bail
-  // before touching the buffering branch so cost stays at zero.
-  if (!logger || !apiLogContext) {
+  // Fast path: caller didn't tag the call. Bail before touching the
+  // buffering branch so cost stays at zero. Untagged calls are neither
+  // api-logged nor usage-accounted — they cannot be attributed.
+  if (!apiLogContext) {
     for await (const event of provider.streamChat(wireParams)) {
       yield event
     }
@@ -188,47 +195,81 @@ export async function* streamChat(
     }
     throw error
   } finally {
-    const record: ApiLogTurnRecord = {
-      kind: apiLogContext.kind,
-      ...(apiLogContext.subagentLabel
-        ? { subagentLabel: apiLogContext.subagentLabel }
-        : {}),
-      sessionId: getSessionId(),
-      ...(getCurrentUserId() ? { user: getCurrentUserId()! } : {}),
-      turn: apiLogContext.turn ?? 0,
-      attempt: apiLogContext.attempt ?? 0,
-      ts: new Date().toISOString(),
-      model: rest.model,
-      request: {
-        // `params.system` is now the entire system prompt — the per-turn
-        // volatile suffix lives at the tail of the last user message in
-        // `finalizedMessages` (injected by query.ts to keep auto
-        // prefix-cache hittable). Log what the provider actually saw, so
-        // dogfood readers can grep both halves in the right places.
-        system: rest.system,
-        tools: rest.tools,
-        // Log finalized messages — describe-text replacements are what
-        // the provider actually saw, which is what dogfood readers want.
-        messages: finalizedMessages,
-        ...(rest.cacheBreakpointMessageIndex !== undefined
-          ? { cacheBreakpointMessageIndex: rest.cacheBreakpointMessageIndex }
-          : {}),
-        ...(wireParams.maxTokens !== undefined ? { maxTokens: wireParams.maxTokens } : {}),
-        ...(wireParams.reasoningEffort ? { reasoningEffort: wireParams.reasoningEffort } : {}),
-      },
-      ...(errorRec
-        ? { error: errorRec }
-        : stopContent !== undefined
-          ? {
-              response: {
-                content: stopContent,
-                stopReason,
-                usage: stopUsage,
-              },
-            }
-          : {}),
+    // Usage accounting is the CHOKEPOINT for usage.jsonl: every tagged
+    // streamChat caller — main loop, subagents, and the sub-LLM paths
+    // (session-memory / compact / web-fetch-summarize) — is recorded here,
+    // so a new caller can never silently skip accounting (07-10 review
+    // §1.6: sub-LLM calls recorded to api-logs but not usage.jsonl).
+    // Only a successful stop is recorded: an errored attempt has no usage,
+    // and the main loop's transient retry re-enters streamChat so the
+    // eventual success still lands exactly once per logical turn.
+    // Deliberately independent of the api logger — the logger is
+    // ALS-scoped to query lifecycles, while cost accounting must cover
+    // every tagged call.
+    // Awaited (not void-ed): a ~150-byte atomic append is negligible next
+    // to the LLM call it accounts for, and awaiting gives deterministic
+    // ordering — stream consumed ⇒ record on disk (appendUsage never
+    // throws; failures are swallowed and logged inside it).
+    if (!errorRec && stopContent !== undefined) {
+      const sessionCtx = getCurrentSessionContext()
+      await appendUsage({
+        ts: new Date().toISOString(),
+        user: sessionCtx?.currentUserId ?? '__terminal__',
+        model: rest.model,
+        kind: apiLogContext.ephemeral ? 'fresh' : apiLogContext.kind,
+        input: stopUsage.input_tokens ?? 0,
+        output: stopUsage.output_tokens ?? 0,
+        cacheRead: stopUsage.cache_read_input_tokens ?? 0,
+        cacheCreate: stopUsage.cache_creation_input_tokens ?? 0,
+      })
     }
-    void logger.appendTurn(record)
+    // No active query scope → usage above is still recorded, but there is
+    // no api-log destination for the full request/response record. Guarded
+    // with `if` (NOT an early return — a return inside finally would
+    // swallow the catch block's re-thrown error).
+    if (logger) {
+      const record: ApiLogTurnRecord = {
+        kind: apiLogContext.kind,
+        ...(apiLogContext.subagentLabel
+          ? { subagentLabel: apiLogContext.subagentLabel }
+          : {}),
+        sessionId: getSessionId(),
+        ...(getCurrentUserId() ? { user: getCurrentUserId()! } : {}),
+        turn: apiLogContext.turn ?? 0,
+        attempt: apiLogContext.attempt ?? 0,
+        ts: new Date().toISOString(),
+        model: rest.model,
+        request: {
+          // `params.system` is now the entire system prompt — the per-turn
+          // volatile suffix lives at the tail of the last user message in
+          // `finalizedMessages` (injected by query.ts to keep auto
+          // prefix-cache hittable). Log what the provider actually saw, so
+          // dogfood readers can grep both halves in the right places.
+          system: rest.system,
+          tools: rest.tools,
+          // Log finalized messages — describe-text replacements are what
+          // the provider actually saw, which is what dogfood readers want.
+          messages: finalizedMessages,
+          ...(rest.cacheBreakpointMessageIndex !== undefined
+            ? { cacheBreakpointMessageIndex: rest.cacheBreakpointMessageIndex }
+            : {}),
+          ...(wireParams.maxTokens !== undefined ? { maxTokens: wireParams.maxTokens } : {}),
+          ...(wireParams.reasoningEffort ? { reasoningEffort: wireParams.reasoningEffort } : {}),
+        },
+        ...(errorRec
+          ? { error: errorRec }
+          : stopContent !== undefined
+            ? {
+                response: {
+                  content: stopContent,
+                  stopReason,
+                  usage: stopUsage,
+                },
+              }
+            : {}),
+      }
+      void logger.appendTurn(record)
+    }
   }
 }
 

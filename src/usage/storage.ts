@@ -2,8 +2,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { lightclawHome } from '../paths.js'
+import type { ApiLogKind } from '../api-logs/storage.js'
 
-export type UsageKind = 'main' | 'fresh' | 'subagent'
+// Usage kinds mirror the api-log call kinds so the two surfaces stay
+// cross-checkable (api-logs success rows vs usage.jsonl rows), plus 'fresh'
+// for ephemeral main-loop invocations. Sub-LLM kinds (session-memory /
+// compact / web-fetch-summarize) are recorded since 2026-07-11; earlier
+// files only contain main / fresh / subagent.
+export type UsageKind = ApiLogKind | 'fresh'
 
 export interface UsageRecord {
   ts: string  // ISO 8601
