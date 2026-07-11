@@ -178,6 +178,50 @@ describe('InterjectionQueue', () => {
     queue.unmarkInFlight('s1')
     assert.equal(queue.drainedInterjectionByMessageId('m1'), undefined)
   })
+
+  it('a same-coalesceKey push replaces the still-queued entry in place', () => {
+    // 2026-07-09 prod (review §1.11): 4 taskrun-reconcile blocks stacked
+    // behind an 11-minute AskUserQuestion and drained at once. Idempotent
+    // snapshot blocks carry coalesceKey so only the freshest survives.
+    const queue = new InterjectionQueue()
+    const first = queue.push('s1', { ...entry('m1', 'snapshot v1'), arrivedAt: 1_000, coalesceKey: 'reconcile' })
+    assert.equal(first.coalesced, false)
+    const second = queue.push('s1', { ...entry('m2', 'snapshot v2'), arrivedAt: 5_000, coalesceKey: 'reconcile' })
+    assert.equal(second.coalesced, true)
+    assert.equal(queue.size('s1'), 1)
+
+    const drained = queue.drain('s1')
+    assert.equal(drained.length, 1)
+    // Freshest content wins; arrivedAt stays with the FIRST emission so
+    // waitedMs telemetry reflects how long the snapshot really waited.
+    assert.equal(drained[0]!.text, 'snapshot v2')
+    assert.equal(drained[0]!.messageId, 'm2')
+    assert.equal(drained[0]!.arrivedAt, 1_000)
+  })
+
+  it('coalescing preserves FIFO position and never touches other entries', () => {
+    const queue = new InterjectionQueue()
+    queue.push('s1', { ...entry('m1', 'snapshot v1'), coalesceKey: 'reconcile' })
+    queue.push('s1', entry('m2', 'user words'))
+    queue.push('s1', { ...entry('m3', 'snapshot v2'), coalesceKey: 'reconcile' })
+    assert.deepEqual(queue.drain('s1').map(item => item.text), ['snapshot v2', 'user words'])
+  })
+
+  it('does not coalesce across keys, keyless entries, or an already-drained entry', () => {
+    const queue = new InterjectionQueue()
+    queue.push('s1', { ...entry('m1', 'a'), coalesceKey: 'k1' })
+    queue.push('s1', { ...entry('m2', 'b'), coalesceKey: 'k2' })
+    queue.push('s1', entry('m3', 'c'))
+    queue.push('s1', entry('m4', 'd'))
+    assert.equal(queue.size('s1'), 4)
+
+    queue.drain('s1')
+    // The previous k1 entry was drained (the model saw it) — a new k1 push is
+    // a genuinely new report, not a replacement.
+    const after = queue.push('s1', { ...entry('m5', 'a2'), coalesceKey: 'k1' })
+    assert.equal(after.coalesced, false)
+    assert.equal(queue.size('s1'), 1)
+  })
 })
 
 function entry(messageId: string, text: string) {

@@ -5,7 +5,12 @@ import { getInboundAnchor } from '../inbound-anchor.js'
 import type { NormalizedChannelMessage } from '../types.js'
 
 export type WakeOrInterjectResult =
-  | { ok: true; mode: 'interjection' | 'synthetic' | 'queued' }
+  // `coalesced` is set on the queue-backed modes when the entry replaced a
+  // still-queued same-coalesceKey block instead of appending — the model has
+  // not seen the previous emission yet. A 'synthetic' delivery is by
+  // construction a fresh turn and never coalesces.
+  | { ok: true; mode: 'interjection' | 'queued'; coalesced: boolean }
+  | { ok: true; mode: 'synthetic' }
   | { ok: false; reason: string }
 
 type PendingWake = {
@@ -31,18 +36,24 @@ export async function wakeOrInterject(input: {
    *  block routes to chat in full; the in-flight path is covered separately by
    *  the interjection drain. See `NormalizedChannelMessage.userFacingWake`. */
   userFacingWake?: boolean
+  /** Same-key queue coalescing for idempotent snapshot blocks (taskrun
+   *  reconcile): a still-queued entry with this key is replaced in place
+   *  instead of stacking. See `InterjectionEntry.coalesceKey`. */
+  coalesceKey?: string
 }): Promise<WakeOrInterjectResult> {
+  const queueEntry = () => ({
+    text: input.block,
+    messageId: input.messageId,
+    senderOpenId: input.ownerOpenId,
+    arrivedAt: input.emittedAt,
+    source: input.source ?? 'background-task' as const,
+    synthetic: true,
+    ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
+    ...(input.coalesceKey ? { coalesceKey: input.coalesceKey } : {}),
+  })
   if (channelInterjectionQueue.hasInflightFor(input.targetSessionId)) {
-    channelInterjectionQueue.push(input.targetSessionId, {
-      text: input.block,
-      messageId: input.messageId,
-      senderOpenId: input.ownerOpenId,
-      arrivedAt: input.emittedAt,
-      source: input.source ?? 'background-task',
-      synthetic: true,
-      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
-    })
-    return { ok: true, mode: 'interjection' }
+    const { coalesced } = channelInterjectionQueue.push(input.targetSessionId, queueEntry())
+    return { ok: true, mode: 'interjection', coalesced }
   }
 
   const pending = pendingWakeBySession.get(input.targetSessionId)
@@ -52,34 +63,18 @@ export async function wakeOrInterject(input: {
     // marked in-flight yet — a mutation in that window is silently lost. The
     // interjection queue has no such window: items pushed before the turn
     // begins are drained at its first tool boundary.
-    channelInterjectionQueue.push(input.targetSessionId, {
-      text: input.block,
-      messageId: input.messageId,
-      senderOpenId: input.ownerOpenId,
-      arrivedAt: input.emittedAt,
-      source: input.source ?? 'background-task',
-      synthetic: true,
-      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
-    })
-    return { ok: true, mode: 'queued' }
+    const { coalesced } = channelInterjectionQueue.push(input.targetSessionId, queueEntry())
+    return { ok: true, mode: 'queued', coalesced }
   }
 
   const parsed = parseFeishuSessionId(input.targetSessionId)
   const runner = getChannelRunner()
   if (!parsed || !runner) {
-    channelInterjectionQueue.push(input.targetSessionId, {
-      text: input.block,
-      messageId: input.messageId,
-      senderOpenId: input.ownerOpenId,
-      arrivedAt: input.emittedAt,
-      source: input.source ?? 'background-task',
-      synthetic: true,
-      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
-    })
+    const { coalesced } = channelInterjectionQueue.push(input.targetSessionId, queueEntry())
     process.stderr.write(
       `${input.logPrefix} queued wake block for ${input.targetSessionId}; synthetic turn unavailable\n`,
     )
-    return { ok: true, mode: 'queued' }
+    return { ok: true, mode: 'queued', coalesced }
   }
 
   // Topic groups cannot receive an unanchored create (`im.message.create`

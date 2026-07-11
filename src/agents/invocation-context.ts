@@ -47,6 +47,16 @@ export type InterjectionEntry = {
    *  Distinct from `synthetic`: bg-result / taskrun wakes are synthetic but
    *  carry real deliveries and MUST be rescued. */
   ephemeral?: boolean
+  /** Same-key queue coalescing for idempotent state snapshots (taskrun
+   *  reconcile blocks). While a prior entry with this key is still QUEUED
+   *  (not yet drained into the model), a new push replaces it in place —
+   *  keeping the freshest snapshot without stacking N same-shaped blocks
+   *  behind a long-blocked turn (2026-07-09 prod: 4 reconcile blocks queued
+   *  behind an 11-minute AskUserQuestion, all drained at once). Only set on
+   *  framework blocks that fully supersede their previous emission; user
+   *  interjections / bg-results / Message deliveries are each distinct
+   *  content and must never carry it. */
+  coalesceKey?: string
 }
 
 /**

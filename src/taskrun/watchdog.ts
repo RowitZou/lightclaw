@@ -56,7 +56,11 @@ export type TaskRunWatchdogFinding = {
 }
 
 export type TaskRunReconcileDelivery =
-  | { ok: true; mode: 'interjection' | 'synthetic' | 'queued' }
+  // `coalesced: true` means the reconcile block replaced a still-queued
+  // (never-drained) previous block instead of appending — the model has not
+  // seen ANY of it yet, so the reconcile must not count it as a delivered
+  // report (no watchdog-report event, no escalation-budget consumption).
+  | { ok: true; mode: 'interjection' | 'synthetic' | 'queued'; coalesced?: boolean }
   | { ok: false; reason: string }
 
 export type TaskRunReconcileResult = {
@@ -250,7 +254,12 @@ export async function reconcileTaskRunsOnce(
     fingerprint,
     activeSessionIds: deps.activeSessionIds ?? new Set(),
   })
-  if (parentDelivery.delivered.length > 0) {
+  if (parentDelivery.delivered.length + parentDelivery.coalesced.length > 0) {
+    // Only genuinely fresh deliveries earn a watchdog-report event; a
+    // coalesced block replaced one the parent never drained, so recording it
+    // would double-count the same undelivered report toward the escalation
+    // budget ("repeatedly reminded, no progress" — while the parent literally
+    // saw nothing).
     await Promise.all(parentDelivery.delivered.map(finding =>
       appendEvent(
         finding.runId,
@@ -266,14 +275,15 @@ export async function reconcileTaskRunsOnce(
     ))
     const remaining = parentDelivery.remaining
     if (remaining.length === 0) {
+      const allCoalesced = parentDelivery.delivered.length === 0
       return {
         ownerCanonicalUser,
         findings,
         fingerprint,
-        reported: true,
-        deduped: false,
+        reported: !allCoalesced,
+        deduped: allCoalesced,
         escalatedRootRunIds: escalation.escalatedRootRunIds,
-        delivery: { ok: true, mode: 'interjection' },
+        delivery: { ok: true, mode: 'interjection', coalesced: allCoalesced },
       }
     }
     reportableFindings.splice(0, reportableFindings.length, ...remaining)
@@ -290,6 +300,25 @@ export async function reconcileTaskRunsOnce(
       fingerprint,
       reported: false,
       deduped: false,
+      escalatedRootRunIds: escalation.escalatedRootRunIds,
+      delivery,
+    }
+  }
+  if (delivery && delivery.ok && delivery.coalesced) {
+    // The previous reconcile block is still sitting undrained in the wake
+    // session's queue (e.g. the turn is parked on a long AskUserQuestion) —
+    // the model never saw it. The push above refreshed that queued block in
+    // place; treat this sweep as deduped and append NO watchdog-report event,
+    // so the escalation budget counts only reports the model actually
+    // received (2026-07-09 prod: 3 undrained re-reports burned the budget and
+    // fired a false "repeatedly reminded, change approach now" escalation at
+    // a model that was legitimately waiting on the user).
+    return {
+      ownerCanonicalUser,
+      findings,
+      fingerprint,
+      reported: false,
+      deduped: true,
       escalatedRootRunIds: escalation.escalatedRootRunIds,
       delivery,
     }
@@ -715,9 +744,17 @@ async function deliverParentFirstFindings(input: {
   runs: TaskRunMeta[]
   fingerprint: string
   activeSessionIds: Set<string>
-}): Promise<{ delivered: TaskRunWatchdogFinding[]; remaining: TaskRunWatchdogFinding[] }> {
+}): Promise<{
+  delivered: TaskRunWatchdogFinding[]
+  /** Findings whose block replaced a still-queued reconcile block at the same
+   *  parent inbox — handled (freshest snapshot is waiting to drain) but the
+   *  model never saw the previous one, so no watchdog-report event is due. */
+  coalesced: TaskRunWatchdogFinding[]
+  remaining: TaskRunWatchdogFinding[]
+}> {
   const runById = new Map(input.runs.map(run => [run.id, run]))
   const delivered: TaskRunWatchdogFinding[] = []
+  const coalesced: TaskRunWatchdogFinding[] = []
   const remaining: TaskRunWatchdogFinding[] = []
   const grouped = new Map<string, TaskRunWatchdogFinding[]>()
   for (const finding of input.findings) {
@@ -759,14 +796,19 @@ async function deliverParentFirstFindings(input: {
       parentInbox &&
       input.activeSessionIds.has(parentInbox)
     if (live) {
-      channelInterjectionQueue.push(parentInbox!, {
+      const pushed = channelInterjectionQueue.push(parentInbox!, {
         messageId: `taskrun-reconcile-parent-${parent.id}-${Date.now()}`,
         senderOpenId: `taskrun-watchdog:${parent.id}`,
         text: block,
         arrivedAt: Date.now(),
         source: 'background-task',
+        coalesceKey: `taskrun-reconcile-parent-${parent.id}`,
       })
-      delivered.push(...findings)
+      if (pushed.coalesced) {
+        coalesced.push(...findings)
+      } else {
+        delivered.push(...findings)
+      }
       continue
     }
     // Not live: revive a shift so the parent settles its children in place.
@@ -787,7 +829,7 @@ async function deliverParentFirstFindings(input: {
     })
     delivered.push(...findings)
   }
-  return { delivered, remaining }
+  return { delivered, coalesced, remaining }
 }
 
 
@@ -897,6 +939,13 @@ async function wakeTaskRunReconcileOwner(
     emittedAt,
     source: 'background-task',
     logPrefix: '[taskrun-watchdog]',
+    // A reconcile block is an idempotent snapshot: while a previous one is
+    // still queued undrained (turn parked on a long tool / AskUserQuestion),
+    // this push replaces it in place instead of stacking N copies — and the
+    // escalation variant naturally supersedes a queued regular block. The
+    // caller reads `coalesced` off the result to skip the watchdog-report
+    // ledger event for replaced (never-seen) reports.
+    coalesceKey: 'taskrun-reconcile',
     ...(rootIds.length === 1
       ? { taskCardRoot: { owner: ownerCanonicalUser, rootRunId: rootIds[0] } }
       : {}),

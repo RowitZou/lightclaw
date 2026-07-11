@@ -759,6 +759,147 @@ describe('TaskRun watchdog', () => {
     }
   })
 
+  it('a coalesced wake (previous block still queued undrained) is deduped and consumes no escalation budget', async () => {
+    // 2026-07-09 prod (review §1.11): with the wake session parked on an
+    // 11-minute AskUserQuestion, every 5-minute re-arm queued ANOTHER
+    // identical reconcile block, each appending a watchdog-report event —
+    // three of which burned the escalation budget and fired a false
+    // "repeatedly reminded, no progress, change approach now" escalation at
+    // a model that had seen none of them. A delivery that reports
+    // coalesced:true (it replaced the still-queued block) must count as
+    // deduped: no watchdog-report event, no budget consumption.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-coalesce-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Coordinate task.',
+        title: 'Root task',
+        now: 100,
+      })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Implement task.',
+        parentRunId: root.id,
+        chainId: 'chain-1',
+        depth: 1,
+        now: 200,
+      })
+      await markStarted(child.id, 'bg-alice-child', 300, 'alice')
+      await markDelivered(child.id, { ok: true, summary: 'Ready.' }, 400, 'alice')
+
+      const first = await reconcileTaskRunsOnce('alice', {
+        now: 10_000,
+        deliveredGraceMs: 1,
+        reportFindings: async () => ({ ok: true, mode: 'interjection', coalesced: false }),
+      })
+      assert.equal(first.reported, true)
+
+      // Re-arm expired, but the queued block was never drained — the wake
+      // path replaced it in place and reports coalesced.
+      let escalations = 0
+      const sweepDeps = (now: number) => ({
+        now,
+        deliveredGraceMs: 1,
+        reportReArmMs: 0,
+        budgetWindowMinutes: 30,
+        wakeBudgetReportLimit: 3,
+        reportFindings: async () => (
+          { ok: true, mode: 'interjection', coalesced: true } as const
+        ),
+        escalateFindings: async () => {
+          escalations += 1
+          return { ok: true, mode: 'synthetic' } as const
+        },
+      })
+      const second = await reconcileTaskRunsOnce('alice', sweepDeps(20_000))
+      assert.equal(second.reported, false)
+      assert.equal(second.deduped, true)
+      assert.equal(
+        (await getTaskRunEvents(child.id, {}, 'alice'))
+          .filter(event => event.kind === 'watchdog-report').length,
+        1,
+        'a coalesced (never-seen) re-report must not append a watchdog-report event',
+      )
+
+      // However many sweeps pass while the block sits undrained, the budget
+      // holds at 1 delivered report — never a false escalation.
+      await reconcileTaskRunsOnce('alice', sweepDeps(30_000))
+      await reconcileTaskRunsOnce('alice', sweepDeps(40_000))
+      assert.equal(escalations, 0)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('parent-inbox reconcile re-pushes coalesce into one queued block with one report event', async () => {
+    // Same class as the main-wake case, at the parent-first delivery site: a
+    // long-running worker parent that has not hit a tool boundary yet must
+    // not accumulate N identical reconcile blocks in its inbox.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-parent-coalesce-'))
+    setLightclawHomeOverride(tmpHome)
+    const parentLeaf = 'parent-coalesce-leaf'
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Coordinate the probes.',
+        parentRunId: null,
+        chainId: 'chain-parent-coalesce',
+        depth: 1,
+        now: 100,
+        interjectionSessionId: parentLeaf,
+      })
+      await markStarted(parent.id, 'bg-parent-shift', 200, 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: parentLeaf,
+        mode: 'background',
+        objective: 'Probe one corner.',
+        parentRunId: parent.id,
+        chainId: 'chain-parent-coalesce',
+        depth: 2,
+        now: 300,
+      })
+      await markStarted(child.id, 'bg-child-dead-session', 400, 'alice')
+
+      const sweepDeps = (now: number) => ({
+        now,
+        deliveredGraceMs: 1,
+        reportReArmMs: 0,
+        activeSessionIds: new Set([parentLeaf]),
+        reportFindings: async () => ({ ok: true, mode: 'queued' } as const),
+      })
+      const first = await reconcileTaskRunsOnce('alice', sweepDeps(10_000))
+      assert.equal(first.reported, true)
+      const second = await reconcileTaskRunsOnce('alice', sweepDeps(20_000))
+      assert.equal(second.reported, false)
+      assert.equal(second.deduped, true)
+
+      const queued = channelInterjectionQueue.drain(parentLeaf)
+      assert.equal(queued.length, 1, 'repeat reconciles must coalesce into one queued block')
+      assert.equal(
+        (await getTaskRunEvents(child.id, {}, 'alice'))
+          .filter(event => event.kind === 'watchdog-report').length,
+        1,
+        'the replaced (never-seen) re-report must not append a second watchdog-report event',
+      )
+    } finally {
+      channelInterjectionQueue.drain(parentLeaf)
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
   it('re-arms an escalated root when state moves on a descendant, not just the root itself', async () => {
     // 2026-06-30 prod: main answered an idle-root escalation by dispatching
     // and settling a CHILD — every resulting event landed on the child's

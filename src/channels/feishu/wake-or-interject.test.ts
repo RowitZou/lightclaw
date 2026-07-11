@@ -24,7 +24,7 @@ test('wakeOrInterject queues into an in-flight session', async () => {
       source: 'background-task',
       logPrefix: '[test]',
     })
-    assert.deepEqual(result, { ok: true, mode: 'interjection' })
+    assert.deepEqual(result, { ok: true, mode: 'interjection', coalesced: false })
     const drained = channelInterjectionQueue.drain(sessionId)
     assert.equal(drained.length, 1)
     assert.equal(drained[0]?.text, '<block>A</block>')
@@ -71,7 +71,7 @@ test('wakeOrInterject routes later wake blocks into the interjection queue while
       source: 'background-task',
       logPrefix: '[test]',
     })
-    assert.deepEqual(second, { ok: true, mode: 'queued' })
+    assert.deepEqual(second, { ok: true, mode: 'queued', coalesced: false })
     assert.equal(syntheticMessages.length, 1)
     assert.match(syntheticMessages[0]?.text ?? '', /<block>A<\/block>/)
     // B must NOT ride on the consumed synthetic text — it lands in the

@@ -8,6 +8,8 @@
 // Events (all keyed by sessionId + the user message's messageId):
 //   inbound        a message arrived; route = interjection | fresh | slash
 //   queued         an in-flight interjection was enqueued (size = queue depth)
+//   coalesced      a same-coalesceKey push replaced a still-queued entry in
+//                  place (replaced = the superseded entry's messageId)
 //   inflight-set   the session was marked in-flight (a turn is starting)
 //   drained        a queued interjection reached the model at a tool boundary
 //   leftover       a turn ended with an interjection still queued (not drained)

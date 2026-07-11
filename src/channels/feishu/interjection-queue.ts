@@ -147,8 +147,35 @@ export class InterjectionQueue {
     return undefined
   }
 
-  push(sessionId: string, entry: InterjectionEntry): void {
+  /**
+   * Returns `coalesced: true` when the entry replaced a still-queued entry
+   * carrying the same `coalesceKey` instead of appending. Callers emitting
+   * periodic idempotent snapshots (taskrun reconcile) use this to know the
+   * model never saw the previous emission — e.g. the watchdog skips its
+   * `watchdog-report` ledger event so the escalation budget only counts
+   * reports that were actually delivered.
+   */
+  push(sessionId: string, entry: InterjectionEntry): { coalesced: boolean } {
     const queue = this.queueBySession.get(sessionId) ?? []
+    if (entry.coalesceKey) {
+      const index = queue.findIndex(existing => existing.coalesceKey === entry.coalesceKey)
+      if (index !== -1) {
+        const previous = queue[index]!
+        // Replace in place: FIFO position and arrivedAt stay with the FIRST
+        // emission, so drain order and waitedMs telemetry keep reflecting how
+        // long this standing snapshot has actually been waiting to be seen.
+        queue[index] = { ...entry, arrivedAt: previous.arrivedAt }
+        this.queueBySession.set(sessionId, queue)
+        traceInterjection('coalesced', {
+          session: sessionId,
+          msg: entry.messageId,
+          replaced: previous.messageId,
+          source: entry.source,
+          size: queue.length,
+        })
+        return { coalesced: true }
+      }
+    }
     queue.push(entry)
     this.queueBySession.set(sessionId, queue)
     // Every interjection form funnels through here — user → main, agent Message
@@ -162,6 +189,7 @@ export class InterjectionQueue {
       inflight: this.inFlightSessions.has(sessionId),
       size: queue.length,
     })
+    return { coalesced: false }
   }
 
   /**
