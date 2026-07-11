@@ -112,7 +112,6 @@ export type ConfigFileCompactSection = {
   keepRecent?: number
   preFlush?: {
     enabled?: boolean
-    timeoutMs?: number
   }
   micro?: {
     enabled?: boolean
@@ -462,7 +461,6 @@ export type ConfigFileShape = {
   /** @deprecated → `compact.preFlush` */
   preCompactFlush?: {
     enabled?: boolean
-    timeoutMs?: number
   }
   /** @deprecated → `compact.micro` */
   microCompact?: {

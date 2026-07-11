@@ -176,7 +176,6 @@ export type MemoryNudgeConfig = {
 
 export type PreCompactFlushConfig = {
   enabled: boolean
-  timeoutMs: number
 }
 
 export type IdleMicroCompactConfig = {
@@ -1393,19 +1392,6 @@ export function getConfig(): LightClawConfig {
       fileConfig.compact?.preFlush?.enabled,
     ) ??
     true
-  const preCompactFlushTimeoutMs = Math.max(
-    1000,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS) ??
-        pickWithLegacy(
-          'preCompactFlush.timeoutMs',
-          'compact.preFlush.timeoutMs',
-          fileConfig.preCompactFlush?.timeoutMs,
-          fileConfig.compact?.preFlush?.timeoutMs,
-        ) ??
-        8000,
-    ),
-  )
   const microCompactEnabled =
     parseBoolean(process.env.LIGHTCLAW_MICRO_COMPACT_ENABLED) ??
     pickWithLegacy(
@@ -1777,7 +1763,7 @@ export function getConfig(): LightClawConfig {
       auto: autoCompact,
       thresholdRatio: compactThresholdRatio,
       keepRecent: compactKeepRecent,
-      preFlush: { enabled: preCompactFlushEnabled, timeoutMs: preCompactFlushTimeoutMs },
+      preFlush: { enabled: preCompactFlushEnabled },
       micro: {
         enabled: microCompactEnabled,
         idle: {

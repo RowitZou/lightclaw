@@ -1,4 +1,4 @@
-import { flushBeforeCompact } from '../../memory/extract.js'
+import { extractMemories } from '../../memory/extract.js'
 import { compactConversation } from '../../session/compact.js'
 import { compactFallbackTruncate } from '../../session/compact-fallback.js'
 import { maybeIdleMicroCompact } from '../../session/idle-mc.js'
@@ -10,6 +10,7 @@ import {
   getMemoryDir,
   getSessionId,
   incrementCompactionCount,
+  registerBackgroundTask,
   setLastExtractedAt,
 } from '../../state.js'
 import { estimateProjectedInputTokens } from '../../token-estimate.js'
@@ -61,6 +62,43 @@ export const autoCompactHook: Hook = {
   },
 }
 
+// Pre-compact memory flush: capture the about-to-be-compacted prefix into
+// auto-memory before compaction rewrites it away. Fire-and-forget —
+// extraction runs on a snapshot copy, so the compaction below cannot lose
+// data, and nothing in the turn needs the result synchronously. Do NOT
+// re-add a synchronous wait here: the old shape awaited an 8s race that
+// real extractions structurally never won (the extractor subagent's first
+// token alone has p50 ~6.4s on the system lane — review 2026-07-10 §1.8),
+// so every large-session compaction paid the full timeout as dead latency
+// and then dropped the raced promise, losing the watermark advance. The
+// continuation below is what persists the watermark when the extraction
+// eventually lands; without it the next trigger re-analyzes the same
+// window (duplicate extractor cost). sessionId is captured at kick time so
+// the late meta write can never land under a different ambient context.
+function kickPreCompactFlush(ctx: HookContext): void {
+  const sessionId = getSessionId()
+  const task = extractMemories({
+    messages: [...ctx.messages],
+    lastExtractedAt: getLastExtractedAt(),
+    memoryDir: getMemoryDir(),
+    canonicalUser: getCurrentUserId(),
+    config: ctx.config,
+    ownerRole: ctx.role,
+  })
+    .then(async result => {
+      if (result.lastExtractedAt <= getLastExtractedAt()) {
+        return
+      }
+      setLastExtractedAt(result.lastExtractedAt)
+      await updateMetaLastExtractedAt(sessionId, result.lastExtractedAt)
+    })
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[memory] pre-compact flush failed for ${sessionId}: ${message}`)
+    })
+  registerBackgroundTask(task)
+}
+
 export async function runCompaction(
   ctx: HookContext,
   force: boolean,
@@ -85,19 +123,7 @@ export async function runCompaction(
   }
 
   if (ctx.config.memory.extractor.enabled && ctx.config.compact.preFlush.enabled) {
-    const flushed = await flushBeforeCompact({
-      messages: [...ctx.messages],
-      lastExtractedAt: getLastExtractedAt(),
-      memoryDir: getMemoryDir(),
-      canonicalUser: getCurrentUserId(),
-      config: ctx.config,
-      ownerRole: ctx.role,
-      timeoutMs: ctx.config.compact.preFlush.timeoutMs,
-    })
-    if (flushed.lastExtractedAt > getLastExtractedAt()) {
-      setLastExtractedAt(flushed.lastExtractedAt)
-      await updateMetaLastExtractedAt(getSessionId(), flushed.lastExtractedAt)
-    }
+    kickPreCompactFlush(ctx)
   }
 
   ctx.invocation.onCompactStart?.()
