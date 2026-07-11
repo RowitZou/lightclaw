@@ -27,6 +27,19 @@ export function isSkillCompatibleWithRuntime(
   return !skill.requiresDriver || skill.requiresDriver === (gate.runtimeDriver ?? null)
 }
 
+/** Skill frontmatter declares tools in permission-rule pattern form as often
+ *  as bare names — skillify's authoring guidance says "Use patterns
+ *  (`Bash(gh:*)`, not bare `Bash`)". Role visibility is a per-tool gate, so
+ *  compatibility is judged on the base tool name; the parenthesized scope is
+ *  the permission layer's concern. Exact-matching the full pattern both
+ *  silently killed every skill written per that guidance (2026-07-10 review
+ *  §1.7) and let a pattern on a blocked tool slip past the worker block via
+ *  the wildcard fallthrough. */
+function baseToolName(declared: string): string {
+  const parenIndex = declared.indexOf('(')
+  return (parenIndex === -1 ? declared : declared.slice(0, parenIndex)).trim()
+}
+
 export function isSkillCompatibleWithRole(
   skill: SkillMeta,
   role: Role,
@@ -41,7 +54,7 @@ export function isSkillCompatibleWithRole(
   if (!skill.allowedTools || skill.allowedTools.length === 0) {
     return true
   }
-  return skill.allowedTools.every(toolName => isToolVisibleToRole(role, toolName))
+  return skill.allowedTools.every(declared => isToolVisibleToRole(role, baseToolName(declared)))
 }
 
 // A mis-fitting skill is a config fact, not a per-turn event: log each

@@ -291,3 +291,63 @@ function skill(overrides: Partial<SkillMeta>): SkillMeta {
     ...overrides,
   }
 }
+
+test('parameterized allowed-tools entries are judged on the base tool name', () => {
+  // skillify's authoring guidance says "Use patterns (`Bash(gh:*)`, not bare
+  // `Bash`)" — a skill written that way must stay visible to a role whose
+  // tools list carries the bare name (2026-07-10 official review §1.7: all
+  // six production skips were this false positive).
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'git-flow', allowedTools: ['Bash(git:*)', 'Read'] }),
+      role({ tools: ['Bash', 'Read'], skills: ['git-flow'] }),
+    ),
+    true,
+  )
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'survey', allowedTools: ['UseSkill(web-research-workflow)', 'WebSearch'] }),
+      role({ tools: ['UseSkill', 'WebSearch'], skills: ['survey'] }),
+    ),
+    true,
+  )
+})
+
+test('parameterized allowed-tools keep real production skills visible to their bundled role', () => {
+  const webSearcher = BUNDLED_AGENTS.find(agent => agent.agentType === 'webSearcher')
+  assert.ok(webSearcher)
+
+  const filtered = filterSkillsForRole(
+    [
+      skill({
+        name: 'world-cup-2026-current-status-research',
+        source: 'user',
+        roles: ['webSearcher'],
+        allowedTools: ['UseSkill(web-research-workflow)', 'TodoWrite', 'WebSearch', 'WebFetch'],
+      }),
+    ],
+    webSearcher,
+  )
+
+  assert.deepEqual(filtered.map(item => item.name), ['world-cup-2026-current-status-research'])
+})
+
+test('a genuinely out-of-role tool still skips the skill even in pattern form', () => {
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'fetcher', allowedTools: ['WebFetch(arxiv.org)'] }),
+      role({ tools: ['Read', 'Grep'], skills: ['fetcher'] }),
+    ),
+    false,
+  )
+})
+
+test('worker tool blocks apply to the base name of a parameterized entry', () => {
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'delegate-flow', allowedTools: ['Notify(user-dm)'] }),
+      role({ kind: 'worker', tools: ['*'], skills: ['delegate-flow'] }),
+    ),
+    false,
+  )
+})
