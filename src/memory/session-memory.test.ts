@@ -256,3 +256,64 @@ describe('concurrent refresh triggers dedup on the same work', () => {
     assert.match(written, /FIRST-WRITE-BODY/)
   })
 })
+
+describe('updateSessionMemoryForSession failure logging carries the sessionId', () => {
+  // The rewrite runs fire-and-forget off-turn, so when several sessions' SM
+  // updates interleave in the daemon log this error line is the only way to
+  // attribute a stalled digest (2026-07-10 review §1.4: three `[session-memory]`
+  // transient-error lines in prod, none attributable to a session).
+  const sidLogSessionId = 'sm-sid-log-test'
+  const sidLogConfig = {
+    memory: {
+      extractor: { enabled: true },
+      session: {
+        enabled: true,
+        idleRefresh: true,
+        updateTokenThreshold: 20_000,
+        updateToolCallThreshold: 5,
+      },
+    },
+  } as unknown as LightClawConfig
+
+  it('logs the sessionId when the LLM rewrite throws', async () => {
+    setRequestSessionMemoryUpdateForTest(async () => {
+      throw new Error('Our servers are currently overloaded. Please try again later.')
+    })
+    resetSessionMemoryCounters(sidLogSessionId)
+    const messages: Message[] = [createUserMessage('some new work')]
+    const logged: string[] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map(String).join(' '))
+    }
+    try {
+      const ctx = createSessionContext({
+        cwd: '/tmp/sm-sid-log',
+        model: 'test-model',
+        sessionsDir,
+        memoryDir: path.join(tmpRoot, 'memory'),
+        sessionId: sidLogSessionId,
+        permissionMode: 'bypassPermissions',
+      })
+      const result = await runWithSessionContext(ctx, () =>
+        updateSessionMemoryForSession({
+          sessionId: sidLogSessionId,
+          sessionsDir,
+          messages,
+          config: sidLogConfig,
+          force: true,
+        }),
+      )
+      assert.deepEqual(result, { updated: false })
+    } finally {
+      console.error = originalError
+    }
+    const errorLine = logged.find(line => line.includes('[session-memory]'))
+    assert.ok(errorLine, 'expected a [session-memory] error line')
+    assert.ok(
+      errorLine.includes(sidLogSessionId),
+      `error line must carry the sessionId for attribution, got: ${errorLine}`,
+    )
+    assert.match(errorLine, /overloaded/)
+  })
+})

@@ -361,7 +361,11 @@ export async function updateSessionMemoryForSession(
       return { updated: result.updated }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error(`[session-memory] ${message}`)
+      // Session attribution is mandatory here: this rewrite usually runs
+      // fire-and-forget off-turn, so this line is the only way to tell WHOSE
+      // digest stalled when several sessions' SM updates interleave in the
+      // daemon log (2026-07-10 review §1.4).
+      console.error(`[session-memory] update failed for ${sessionId}: ${message}`)
       return { updated: false }
     }
   })

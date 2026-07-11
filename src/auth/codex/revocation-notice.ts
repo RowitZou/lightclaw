@@ -55,14 +55,21 @@ export function reportCodexCredentialRevoked(input: CodexRevocationNoticeInput):
   const key = keyFor(input)
   if (notifiedKeys.has(key)) return
   notifiedKeys.add(key)
-  void (deliveryOverride ?? deliverViaFeishu)(input).catch(error => {
-    // Send failure re-arms the marker so the next 401 retries the card.
-    notifiedKeys.delete(key)
-    process.stderr.write(
-      `[codex-auth] revocation notice delivery failed for ${key}: ` +
-        `${error instanceof Error ? error.message : String(error)}\n`,
-    )
-  })
+  void (deliveryOverride ?? deliverViaFeishu)(input)
+    .then(() => {
+      // Success leaves a log trace too: without it an outage postmortem
+      // cannot tell "card reached the owner" from "delivery silently never
+      // ran" (2026-07-10 review §2.1 observability gap).
+      process.stderr.write(`[codex-auth] revocation notice delivered for ${key}\n`)
+    })
+    .catch(error => {
+      // Send failure re-arms the marker so the next 401 retries the card.
+      notifiedKeys.delete(key)
+      process.stderr.write(
+        `[codex-auth] revocation notice delivery failed for ${key}: ` +
+          `${error instanceof Error ? error.message : String(error)}\n`,
+      )
+    })
 }
 
 async function deliverViaFeishu(input: CodexRevocationNoticeInput): Promise<void> {

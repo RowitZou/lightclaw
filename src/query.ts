@@ -417,7 +417,7 @@ export async function query(params: QueryParams): Promise<{
     }
     const pending = maybeUpdateSessionMemory(snapshot).catch(err => {
       const detail = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`[query] session-memory update failed: ${detail}\n`)
+      process.stderr.write(`[query] session-memory update failed sid=${getSessionId()}: ${detail}\n`)
     })
     sessionMemoryInFlight = pending
     void pending.finally(() => {
@@ -439,7 +439,7 @@ export async function query(params: QueryParams): Promise<{
       await maybeUpdateSessionMemory(snapshot)
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`[query] session-memory flush failed: ${detail}\n`)
+      process.stderr.write(`[query] session-memory flush failed sid=${getSessionId()}: ${detail}\n`)
     }
   }
 
@@ -472,7 +472,7 @@ export async function query(params: QueryParams): Promise<{
         transcriptPersistCursor = messages.length
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[query] rewriteMessages failed: ${detail}\n`)
+        process.stderr.write(`[query] rewriteMessages failed sid=${getSessionId()}: ${detail}\n`)
         transcriptFlushDisabled = true
       }
       return
@@ -493,7 +493,7 @@ export async function query(params: QueryParams): Promise<{
       transcriptPersistCursor += batch.length
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[query] persistMessages failed: ${detail}\n`)
+      process.stderr.write(`[query] persistMessages failed sid=${getSessionId()}: ${detail}\n`)
     }
   }
 
@@ -820,7 +820,7 @@ export async function query(params: QueryParams): Promise<{
           if (!shouldRetry && isTransientError(error)) {
             const detail = error instanceof Error ? error.message : String(error)
             process.stderr.write(
-              `[query] transient stream error on turn ${turn}; retrying turn: ${detail}\n`,
+              `[query] transient stream error sid=${getSessionId()} turn=${turn}; retrying turn: ${detail}\n`,
             )
             const delayMs = retryDelayMsWithRetryAfter(
               transientTurnRetryDelayMs,
@@ -843,7 +843,7 @@ export async function query(params: QueryParams): Promise<{
               mainRoute.provider.recycleConnections?.()
             } catch (recycleError) {
               process.stderr.write(
-                `[query] recycleConnections threw on turn ${turn}: ${
+                `[query] recycleConnections threw sid=${getSessionId()} turn=${turn}: ${
                   recycleError instanceof Error ? recycleError.message : String(recycleError)
                 }\n`,
               )
@@ -915,7 +915,7 @@ export async function query(params: QueryParams): Promise<{
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
-          `[query] onAssistantTurn callback failed: ${detail}\n`,
+          `[query] onAssistantTurn callback failed sid=${getSessionId()}: ${detail}\n`,
         )
       }
     }

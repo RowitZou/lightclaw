@@ -66,10 +66,26 @@ type RefreshResponse = {
   token_type: string
 }
 
-/** OAuth token endpoint response (error path). */
+/** OAuth token endpoint response (error path). The spec says both fields are
+ *  strings, but auth.openai.com has been observed returning an OBJECT in
+ *  `error` (2026-07-08 prod: the 401 diagnostic rendered as
+ *  `error=[object Object]`, dropping the actual upstream code) — so parse as
+ *  unknown and serialize explicitly. */
 type RefreshErrorResponse = {
-  error?: string
-  error_description?: string
+  error?: unknown
+  error_description?: unknown
+}
+
+/** String pass-through; non-string shapes JSON-stringify instead of relying on
+ *  template-literal coercion (which yields `[object Object]`). */
+function asDiagnosticString(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 /** Pluggable HTTP for tests. Production uses undici with an optional
@@ -207,8 +223,11 @@ async function refreshTokens(
   } catch {
     // body wasn't JSON
   }
-  const errorCode = errorBody.error ?? ''
-  if (statusCode === 401 || errorCode === 'invalid_grant') {
+  const errorCode = asDiagnosticString(errorBody.error)
+  const errorDescription = asDiagnosticString(errorBody.error_description)
+  // `includes` (not `===`): an object-shaped `error` serializes to JSON, so
+  // `{"code":"invalid_grant",...}` still classifies as the consumed-grant case.
+  if (statusCode === 401 || errorCode.includes('invalid_grant')) {
     throw new AuthError({
       code: 'refresh_consumed_by_other_client',
       provider: PROVIDER_NAME,
@@ -225,7 +244,7 @@ async function refreshTokens(
     message:
       `Codex token refresh failed with status ${statusCode}` +
       (errorCode ? ` (${errorCode})` : '') +
-      (errorBody.error_description ? `: ${errorBody.error_description}` : '') +
+      (errorDescription ? `: ${errorDescription}` : '') +
       `.`,
   })
 }
