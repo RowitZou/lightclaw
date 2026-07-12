@@ -89,8 +89,8 @@ function asDiagnosticString(value: unknown): string {
 }
 
 /** Pluggable HTTP for tests. Production uses undici with an optional
- *  ProxyAgent built from the `endpoints.codex.proxy` config value passed
- *  to `createCodexAuthProvider({ proxy })`. `signal` is optional and only
+ *  ProxyAgent built from the `proxy` value (URL or per-call resolver)
+ *  passed to `createCodexAuthProvider({ proxy })`. `signal` is optional and only
  *  honored by implementations that support in-flight cancellation (the
  *  device-login poller's http passes it to undici so a superseded login's
  *  in-flight poll request is torn down instead of running to completion). */
@@ -101,8 +101,19 @@ export type HttpFn = (input: {
   signal?: AbortSignal
 }) => Promise<{ statusCode: number; bodyText: string }>
 
-function buildDefaultHttp(dispatcher: Dispatcher | undefined): HttpFn {
+function buildDefaultHttp(resolveProxy: () => string | undefined): HttpFn {
+  // The proxy is re-resolved on every call (refreshes are rare — token
+  // lifetime is days) so a config-driven proxy change applies without
+  // re-registering the provider. The dispatcher is memoized per proxy value
+  // to avoid building a fresh ProxyAgent connection pool per request.
+  let dispatcherProxy: string | undefined
+  let dispatcher: Dispatcher | undefined
   return async ({ url, body, headers }) => {
+    const proxy = resolveProxy()?.trim() || undefined
+    if (proxy !== dispatcherProxy) {
+      dispatcherProxy = proxy
+      dispatcher = buildProxyDispatcher(proxy)
+    }
     const res = await request(url, {
       method: 'POST',
       body,
@@ -348,16 +359,20 @@ export type CodexAuthProviderOptions = {
   http?: HttpFn
   /** Override the refresh skew (seconds). Production uses the constant. */
   refreshSkewSeconds?: number
-  /** Explicit proxy URL for the OAuth token refresh path. Sourced from
-   *  `endpoints.codex.proxy` at registration time. Empty / undefined =
-   *  direct connect. */
-  proxy?: string
+  /** Proxy for the OAuth token refresh path. Either a fixed URL (login /
+   *  probe callers that already resolved the effective proxy) or a resolver
+   *  invoked per refresh (the registered global provider, so config edits
+   *  apply without re-registration). Empty / undefined = direct connect. */
+  proxy?: string | (() => string | undefined)
 }
 
 export function createCodexAuthProvider(
   opts: CodexAuthProviderOptions = {},
 ): AuthProvider {
-  const http = opts.http ?? buildDefaultHttp(buildProxyDispatcher(opts.proxy))
+  const proxyOpt = opts.proxy
+  const resolveProxy: () => string | undefined =
+    typeof proxyOpt === 'function' ? proxyOpt : () => proxyOpt
+  const http = opts.http ?? buildDefaultHttp(resolveProxy)
   const skew = opts.refreshSkewSeconds ?? CODEX_REFRESH_SKEW_SECONDS
 
   async function getCredentials(
