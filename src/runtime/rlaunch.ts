@@ -18,7 +18,7 @@ import { LayeredDataPlane, STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.
 import { withByteBudget } from './byte-budget.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { agentExecEnv } from './exec-home.js'
-import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
+import { logSandboxTimeoutIfAny, sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
@@ -545,6 +545,7 @@ export class RlaunchRuntime implements Runtime {
     // directly and stay unwrapped.
     const wrapped = this.wrapForSandboxTimeout(input)
     const result = await this.runBrainctlExec(wrapped)
+    logSandboxTimeoutIfAny('rlaunch', input, result)
     if (!this.isWorkerLostError(result)) {
       return result
     }

@@ -24,7 +24,7 @@ import { LayeredDataPlane, STAGING_COPY_TIMEOUT_MS } from './data-plane/layered.
 import { agentExecEnv } from './exec-home.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
-import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
+import { logSandboxTimeoutIfAny, sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 
 export type DockerMount = {
   host: string
@@ -348,11 +348,13 @@ export class DockerRuntime implements Runtime {
     // whose stdin should not detour through the wrapper's setsid child.
     if (input.stdin === undefined) {
       const budgetMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
-      return this.runDockerExec({
+      const result = await this.runDockerExec({
         ...input,
         command: wrapSandboxCommandWithTimeout(input.command, budgetMs),
         timeoutMs: sandboxBackstopTimeoutMs(budgetMs),
       })
+      logSandboxTimeoutIfAny('docker', input, result)
+      return result
     }
     return this.runDockerExec(input)
   }

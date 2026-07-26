@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import { globTool } from './glob.js'
 import type { ToolCallContext } from '../tool.js'
@@ -189,5 +192,128 @@ describe('Glob via ripgrep --files', () => {
     } as unknown as ToolCallContext
     await globTool.call({ pattern: '**/*.ts', path: '/other/abs' }, ctx)
     assert.equal(observedCwd, '/other/abs')
+  })
+})
+
+// GPFS-tier walk strategy (2026-07-26): host-visible dirs drop rg's in-walk
+// --sort=modified (single-threaded + stats every file walked) in favor of a
+// daemon-side stat of only the matches; timeouts salvage the partial walk.
+describe('Glob host-side mtime sort and timeout salvage', () => {
+  function buildHostCtx(
+    hostDir: string | null,
+    execImpl: (input: { command: string; cwd: string; timeoutMs?: number; maxBufferBytes?: number }) => Promise<ExecResult>,
+    observed: { command?: string; cwd?: string; timeoutMs?: number; maxBufferBytes?: number } = {},
+  ): ToolCallContext {
+    return {
+      abortSignal: new AbortController().signal,
+      runtime: {
+        workspaceRoot: '/fake/workspace',
+        paths: { toHostPath: () => hostDir },
+        async exec(input: { command: string; cwd: string; timeoutMs?: number; maxBufferBytes?: number }) {
+          observed.command = input.command
+          observed.cwd = input.cwd
+          observed.timeoutMs = input.timeoutMs
+          observed.maxBufferBytes = input.maxBufferBytes
+          return execImpl(input)
+        },
+      },
+    } as unknown as ToolCallContext
+  }
+
+  it('drops --sort=modified for host-visible dirs and sorts matches by real mtime', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-glob-'))
+    try {
+      writeFileSync(path.join(dir, 'old.ts'), 'a')
+      writeFileSync(path.join(dir, 'new.ts'), 'b')
+      const past = new Date(Date.now() - 3_600_000)
+      utimesSync(path.join(dir, 'old.ts'), past, past)
+      const observed: { command?: string } = {}
+      const ctx = buildHostCtx(dir, async () => ({
+        // rg walk order deliberately newest-first to prove the daemon re-sorts.
+        stdout: './new.ts\n./old.ts\n',
+        stderr: '',
+        exitCode: 0,
+      }), observed)
+      const result = await globTool.call({ pattern: '*.ts' }, ctx)
+      assert.equal(result.isError, undefined)
+      assert.equal(result.output, 'old.ts\nnew.ts')
+      assert.ok(!observed.command?.includes('--sort=modified'), 'in-walk sort must be dropped')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps --sort=modified when the search dir is not host-visible', async () => {
+    const observed: { command?: string } = {}
+    const ctx = buildHostCtx(null, async () => ({
+      stdout: './a.ts\n',
+      stderr: '',
+      exitCode: 0,
+    }), observed)
+    const result = await globTool.call({ pattern: '*.ts', path: '/tmp/scratch-tree' }, ctx)
+    assert.equal(result.output, 'a.ts')
+    assert.ok(observed.command?.includes('--sort=modified'))
+  })
+
+  it('passes the rg-specific timeout and path-list buffer budgets', async () => {
+    const observed: { timeoutMs?: number; maxBufferBytes?: number } = {}
+    const ctx = buildHostCtx(null, async () => ({ stdout: '', stderr: '', exitCode: 0 }), observed)
+    await globTool.call({ pattern: '*.ts' }, ctx)
+    assert.equal(observed.timeoutMs, 60_000)
+    assert.equal(observed.maxBufferBytes, 20 * 1024 * 1024)
+  })
+
+  it('extracts the static base dir from an absolute pattern (rg needs relative globs)', async () => {
+    const observed: { command?: string; cwd?: string } = {}
+    const ctx = buildHostCtx(null, async () => ({ stdout: '', stderr: '', exitCode: 0 }), observed)
+    await globTool.call({ pattern: '/data/papers/**/*.pdf' }, ctx)
+    assert.equal(observed.cwd, '/data/papers')
+    assert.ok(observed.command?.includes(`'**/*.pdf'`))
+  })
+
+  it('salvages partial results with a PARTIAL trailer when the walk times out', async () => {
+    const ctx = buildHostCtx(null, async () => ({
+      stdout: './found-1.ts\n./found-2.ts\n./torn-lin',
+      stderr: 'lightclaw: command exceeded the 30s sandbox time limit; terminating',
+      exitCode: 143,
+    }))
+    const result = await globTool.call({ pattern: '**/*.ts' }, ctx)
+    assert.equal(result.isError, undefined)
+    assert.match(result.output, /found-1\.ts/)
+    assert.match(result.output, /found-2\.ts/)
+    assert.ok(!result.output.includes('torn-lin'), 'torn final line must be dropped')
+    assert.match(result.output, /PARTIAL/)
+  })
+
+  it('returns an actionable error when the walk times out with nothing found', async () => {
+    const ctx = buildHostCtx(null, async () => ({
+      stdout: '',
+      stderr: 'lightclaw: command exceeded the 30s sandbox time limit; terminating',
+      exitCode: 143,
+    }))
+    const result = await globTool.call({ pattern: '**/*.ts' }, ctx)
+    assert.equal(result.isError, true)
+    assert.match(result.output, /narrow the/i)
+    assert.match(result.output, /maxDepth/)
+  })
+
+  it('skips the global sort past the cap and labels the walk-order subset', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-glob-cap-'))
+    try {
+      const lines = Array.from({ length: 10_001 }, (_, i) => `./f${i}.ts`).join('\n')
+      const ctx = buildHostCtx(dir, async () => ({
+        stdout: `${lines}\n`,
+        stderr: '',
+        exitCode: 0,
+      }))
+      const result = await globTool.call({ pattern: '**/*.ts' }, ctx)
+      assert.equal(result.isError, undefined)
+      assert.match(result.output, /matched 10001 files/)
+      assert.match(result.output, /walk-order subset/)
+      const listed = result.output.split('\n\n')[0].split('\n')
+      assert.equal(listed.length, 100)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

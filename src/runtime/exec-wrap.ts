@@ -79,3 +79,18 @@ export function wrapSandboxCommandWithTimeout(
     `exit $__lc_rc`,
   ].join('\n')
 }
+
+/** One daemon-stderr line when a sandbox exec hit the in-sandbox watchdog.
+ *  The wrapper's timeout message lands in the TOOL RESULT (visible only to
+ *  the model), never in daemon logs — 2026-07-26 forensics found weeks of
+ *  silent 30s tool timeouts (Glob the top burner) invisible to every
+ *  log-based patrol. Best-effort observability; never throws. */
+export function logSandboxTimeoutIfAny(
+  kind: string,
+  input: { command: string; cwd?: string },
+  result: { stderr: string },
+): void {
+  if (!result.stderr.includes('sandbox time limit')) return
+  const head = input.command.replace(/\s+/g, ' ').slice(0, 120)
+  process.stderr.write(`[${kind} exec-timeout] cwd=${input.cwd ?? '-'} cmd=${head}\n`)
+}
