@@ -14,6 +14,7 @@
 // write path or a turn.
 
 import { getInboundAnchor } from '../inbound-anchor.js'
+import { classifyFeishuError } from './resources/errors.js'
 import { serializeByKey } from '../../memory/serialize-by-key.js'
 import { readTaskCardBinding, writeTaskCardBinding } from './task-card-binding.js'
 import {
@@ -187,13 +188,57 @@ export function startTaskCardPipeline(
       return
     }
 
-    const patched = await io.patch(
-      binding.messageId,
-      card,
-      binding.cardId
-        ? { cardId: binding.cardId, sequence: binding.cardSequence ?? 0 }
-        : undefined,
-    )
+    let patched: { sequence?: number } | void
+    try {
+      patched = await io.patch(
+        binding.messageId,
+        card,
+        binding.cardId
+          ? { cardId: binding.cardId, sequence: binding.cardSequence ?? 0 }
+          : undefined,
+      )
+    } catch (error) {
+      // withdrawn-target family = the bound message can never be patched
+      // again (recalled, invalid id, or past Feishu's 14-day edit window —
+      // code 230031). Standing-service roots routinely outlive that window,
+      // and pre-fix the flusher re-threw the 400 into the patcher forever
+      // (2026-07-26 prod: two standing roots × ~300 failed flushes/day).
+      // Recovery: re-create the card at the binding's own target and rebind;
+      // every other error keeps the best-effort contract (patcher logs one
+      // line, drops the frame, next event re-renders).
+      if (classifyFeishuError(error).kind !== 'withdrawn-target') throw error
+      process.stderr.write(
+        `[task-card] bound message for ${rootRunId} is no longer editable; re-creating card\n`,
+      )
+      const target = {
+        chatId: binding.chatId,
+        ...(binding.threadId ? { threadId: binding.threadId } : {}),
+        ...(binding.replyAnchorMessageId
+          ? { replyAnchorMessageId: binding.replyAnchorMessageId }
+          : {}),
+      }
+      const created = await io.create(target, card)
+      if (!created.messageId) return
+      // Fresh binding: old cardId/cardSequence belong to the dead message.
+      await writeTaskCardBinding(owner, rootRunId, {
+        ...target,
+        messageId: created.messageId,
+        ...(created.cardId ? { cardId: created.cardId } : {}),
+        ...(created.sequence !== undefined ? { cardSequence: created.sequence } : {}),
+        ...(terminal ? { finalizedAt: Date.now() } : {}),
+      })
+      if (terminal) {
+        if (created.cardId && io.close) {
+          await io.close({
+            cardId: created.cardId,
+            sequence: created.sequence ?? 0,
+            summary: view.root.title,
+          })
+        }
+        patcher.release(rootRunId)
+      }
+      return
+    }
     if (terminal) {
       // Settle a live cardkit card (streaming_mode off) before stamping the
       // freeze; a non-live card has no streaming state to close.

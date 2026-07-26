@@ -118,6 +118,16 @@ describe('classifyFeishuError', () => {
     })).kind, 'withdrawn-target')
   })
 
+  it('classifies a past-edit-window message (230031) as withdrawn-target', () => {
+    // Feishu refuses updates on messages older than 14 days. The target is
+    // permanently un-editable — same remedy as a recalled target: create a
+    // fresh message instead of retrying the patch.
+    assert.equal(classifyFeishuError(axiosLike({
+      status: 400,
+      data: { code: 230031, msg: 'Message has expired when updating message, ext=Message can only be updated within fourteen days.' },
+    })).kind, 'withdrawn-target')
+  })
+
   it('classifies an invalid/nonexistent open_message_id (99992354) as withdrawn-target', () => {
     // bg-wake synthetic messageIds the platform never saw 400 with this code;
     // the reply path treats it like a withdrawn target and falls back to create.

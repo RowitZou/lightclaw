@@ -59,8 +59,13 @@ const RATE_LIMIT_CODES = new Set([99991400, 99991403, 1000004, 1000005, 11232, 1
 // 230011 / 231003: the reply-target message was recalled. 99992354: the
 // message_id handed to im.message.reply / reactions is invalid or never
 // existed (e.g. a synthetic bg-wake messageId) — same remedy either way:
-// skip the reply, fall back to im.message.create.
-const WITHDRAWN_TARGET_CODES = new Set([230011, 231003, 99992354])
+// skip the reply, fall back to im.message.create. 230031: the message is
+// past Feishu's 14-day edit window ("Message can only be updated within
+// fourteen days") — only update/patch APIs return it, and the target is
+// permanently un-editable, so the remedy is again create-a-fresh-message
+// (2026-07-26 prod: two standing-root task cards outlived the window and
+// the flusher retried the 400 hundreds of times a day).
+const WITHDRAWN_TARGET_CODES = new Set([230011, 231003, 99992354, 230031])
 const NOT_FOUND_CODES = new Set([1002, 600, 11244, 18066, 90304, 90305, 91005, 91205, 95007, 1069304, 95006, 91402, 99992355, 99992375, 99992379])
 // 1061xxx is the WHOLE drive submodule error space, not an already-exists
 // family: 1061002 is drive's generic "params error." (request-shape bug on

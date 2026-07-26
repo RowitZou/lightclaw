@@ -130,6 +130,78 @@ void describe('task-card pipeline', () => {
     assert.ok(cardText(last.card).includes('已确定候选论文'))
   })
 
+  void it('re-creates the card and rebinds when the bound message is past the Feishu edit window (230031)', async () => {
+    // Standing-service root cards outlive Feishu's 14-day edit window; the
+    // patch then 400s with code 230031 forever. The flusher must fall back to
+    // create + rebind instead of re-throwing the same permanent failure on
+    // every subsequent event (pre-fix prod: ~300 failed flushes/day per card).
+    const calls: IoCall[] = []
+    let counter = 0
+    const expiredMessageIds = new Set<string>()
+    const io: TaskCardIo = {
+      async create(target, card) {
+        calls.push({ kind: 'create', target, card })
+        counter += 1
+        return { messageId: `om_card_${counter}` }
+      },
+      async patch(messageId, card) {
+        if (expiredMessageIds.has(messageId)) {
+          throw Object.assign(new Error('Request failed with status code 400'), {
+            response: {
+              status: 400,
+              data: { code: 230031, msg: 'Message has expired when updating message' },
+            },
+          })
+        }
+        calls.push({ kind: 'patch', messageId, card })
+      },
+      async sendText(target, text) {
+        calls.push({ kind: 'sendText', target, text })
+      },
+    }
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+
+    const root = await createRootTaskRun(OWNER, DM_SESSION, {
+      objective: '每日竞品仓库更新与发布分析',
+      title: '每日竞品扫描',
+    })
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId === 'om_card_1',
+      { label: 'initial create binds om_card_1' },
+    )
+
+    // The bound message ages past the edit window; the next tree event's
+    // patch 400s and must trigger create + rebind.
+    expiredMessageIds.add('om_card_1')
+    const child = await createTaskRun({
+      ownerCanonicalUser: OWNER,
+      parentRunId: root.id,
+      chainId: 'chain-exp',
+      depth: 1,
+      role: 'webSearcher',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      objective: '今日扫描',
+      mode: 'background',
+    })
+    await markStarted(child.id, 'bg-session-exp', Date.now(), OWNER)
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId === 'om_card_2',
+      { label: 'expired patch target rebinds to a fresh card' },
+    )
+    assert.equal(calls.filter(c => c.kind === 'create').length, 2)
+    const binding = await readTaskCardBinding(OWNER, root.id)
+    assert.equal(binding?.finalizedAt, undefined, 'non-terminal root stays live on the new card')
+
+    // Subsequent frames patch the NEW message — the dead id is never retried.
+    await appendProgress(child.id, { label: '扫描进行中' }, Date.now(), OWNER)
+    await waitFor(
+      () => calls.some(c => c.kind === 'patch' && c.messageId === 'om_card_2'),
+      { label: 'next frame patches the rebound card' },
+    )
+    assert.ok(!calls.some(c => c.kind === 'patch' && c.messageId === 'om_card_1'))
+  })
+
   void it('freezes the card on root terminal WITHOUT a live settlement send, then goes silent', async () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
