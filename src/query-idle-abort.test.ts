@@ -59,6 +59,12 @@ async function* firstEventThenIdle(params: { signal?: AbortSignal }): AsyncGener
   await waitForAbort(params.signal)
 }
 
+async function* keepaliveThenSilence(params: { signal?: AbortSignal }): AsyncGenerator<StreamEvent> {
+  await sleep(2)
+  yield { type: 'keepalive', reason: 'transport' }
+  await waitForAbort(params.signal)
+}
+
 async function* keepaliveThenStop(): AsyncGenerator<StreamEvent> {
   for (let i = 0; i < 8; i += 1) {
     await sleep(2)
@@ -153,6 +159,55 @@ describe('query stream idle abort', () => {
 
     assert.equal(result.stopReason, 'end_turn')
     assert.deepEqual(deltas, ['partial'])
+    assert.equal(streams.calls(), 2)
+  })
+
+it('first keepalive ends the scaled TTFB phase — strict inter-event budget takes over (2026-07-26 contract)', async () => {
+    // Effort-adaptive TTFB gives xhigh a x2.5 budget, but that headroom
+    // exists ONLY while the wire has produced nothing at all. The moment the
+    // first event (a keepalive counts) arrives, the heartbeat contract is
+    // live and the UNSCALED inter-event budget applies. If a refactor ever
+    // let the scaled TTFB budget survive past the first keepalive, the abort
+    // below would surface as kind='ttfb' instead of 'inter-event'.
+    const streams = fakeStreamChat([
+      p => keepaliveThenSilence(p),
+      p => keepaliveThenSilence(p),
+    ])
+    const base = getConfig()
+    const config = {
+      ...base,
+      streamIdle: { ttfbMs: 40, interEventMs: 40 },
+      models: {
+        ...base.models,
+        'test-model': { ...base.models['test-model'], reasoningEffort: 'xhigh' as const },
+      },
+    }
+    const ctx = createSessionContext({
+      cwd: '/tmp',
+      model: 'test-model',
+      sessionsDir: '/tmp/sessions',
+      memoryDir: '/tmp/memory',
+      sessionId: 'feishu:dm:idle-abort-keepalive-handoff',
+      channel: 'feishu',
+      permissionMode: 'bypassPermissions',
+      runtime: {} as unknown as Runtime,
+    })
+    await assert.rejects(
+      runWithSessionContext(ctx, () =>
+        query({
+          role: TEST_ROLE,
+          invocation: { systemPromptOverride: 'test system prompt' },
+          messages: [createUserMessage('hello', null)],
+          tools: [],
+          config,
+        }),
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof IdleStreamError)
+        assert.equal(err.kind, 'inter-event')
+        return true
+      },
+    )
     assert.equal(streams.calls(), 2)
   })
 
