@@ -63,8 +63,20 @@ import type { Role } from './types.js'
 // same day: the intro / Workflow-each-invocation / Output-discipline sections
 // were rewritten so the operational steps cover redirect + extract (not just
 // merge), shifting the skillConsolidator hash once more.
+// review dose-calibration (2026-07-26): two coordinated edits. (a) reviewer
+// whenToUse replaced the unconditional "on your own initiative, even when the
+// user did not explicitly ask" with risk-tiered triggers (publication-or-
+// beyond-the-requester / hard-to-reverse / checking-takes-hands) plus a
+// read-type self-check exemption and a web-facts trust-the-citations
+// contract — renders only in ## Reachable Workers of roles that can reach
+// reviewer, i.e. main alone under the current matrix. (b) delivery-
+// orchestration step 6 + first Do-not became stakes-proportional (same
+// trigger triple; focused re-read after a fix round with mechanical checks
+// rerun in full; one-pass ceiling for read-type deliverables) — the skill is
+// main's autoload. Net: only the `main` hash shifts; all worker and internal
+// hashes are stable.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: 'defb05c2fd94446bae1ca067d380cf5428b69f074f2bafc1b9d322a7ce66926b',
+  main: '571098b9c361363e4c13bbeeb4ed89a114317ca49cd23c4267c90054bcd9083b',
   generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',
