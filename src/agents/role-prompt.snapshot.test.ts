@@ -82,15 +82,25 @@ import type { Role } from './types.js'
 // ("single-sourced or unverified claims labeled as such"). The workflow skill
 // body does not render in this snapshot, so the only shift is again `main`
 // (reviewer whenToUse in its Reachable Workers).
+// worker dispatch-threshold dose-calibration (2026-07-26): the Dispatch Mode
+// worker intro and the cap.lean worker bullet gained an explicit two-branch
+// priority (specialty/too-heavy -> dispatch; otherwise short bounded checks
+// your own tools settle reliably stay inline), and the duplicated
+// "keeps your own context on the main thread" rationale collapsed into the
+// heavy-branch condition ("crowd out your own thread") — one exposure, not
+// two. Both fragments render only for Dispatch-bearing workers, so the five
+// dispatcher workers (generalist / feishuSecretary / coder / archivist /
+// reviewer) shift; main's orch variants, the two leaves, and the internal
+// roles are stable.
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '8a41ddf97b73f6709c5e41581b44f99952bc8d2511913c27ca813565bcd45490',
-  generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
+  generalist: 'c161dfe5022342621d16db9037b7a6bf7be44b59884bb2bb3cc2a8503998d52c',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',
-  feishuSecretary: '8664ad530699fe3e54c8eb4fe4ead374c98c06e4b298c35340d6bcfcf14f3687',
-  coder: 'f7550ffba64cb1842e5a36de0c3ee340b841d31d96f7bd93beeaa4261ce3ce80',
-  archivist: 'dec960886472290d3af4f2d1ca1925140679e21b1c013f08aa91c1976b8b8b60',
-  reviewer: 'f513323c17e5f96627efaeba018eb2b49201b0dc41023a8b1ad53e74939f5652',
+  feishuSecretary: 'a60a3f8f09042722f7894dc131b4fea3b519952d754aa050742b76823ca09e5b',
+  coder: 'a05571fc88299d10073ab2912a525c721580cf78c112d1cc6323c046b3b0848f',
+  archivist: '33b3553bd1f941d21bf96fdebf6e3c04b5467326f3bd06e7d979d382949505fd',
+  reviewer: '0b10560b4dc0ecc1ac2e613e8bd63e3c9c433450123d194436f7a8990f3a8040',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: '22a81196c1a4d5b8fd8aa38266fc67a7750689916da58a15b93aeaadc3e8cd94',
