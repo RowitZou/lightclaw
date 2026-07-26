@@ -650,16 +650,16 @@ export function createOpenAIAuthProvider(
     // and only a real upstream hang (proxy stall, TCP death) can exceed
     // it. A 35s threshold gives ~5s grace over the heartbeat.
     //
-    // TTFB gets a LOOSER budget (75s) than inter-event: keepalives only
-    // start once the stream is up, so the pre-first-event window has no
-    // heartbeat to anchor the clock — the watchdog is blind there and the
-    // threshold must cover the model's real worst-case first byte, not the
-    // healthy 1-5s case. Under xhigh reasoning + a large uncached prefill
-    // legit first-byte routinely exceeded the old 35s budget (2026-07-14
-    // prod: 34 whole-turn retries in a day, each re-paying the full
-    // prefill it just aborted). A genuine pre-first-event proxy stall
-    // (historically ~3% against 1091) now costs up to 75s instead of 35s —
-    // cheap next to a false kill that discards and re-buys a 100K prefill.
+    // These are the LOW/MEDIUM-effort base values, and 35s TTFB is
+    // strongly validated at that tier. Keepalives only start once the
+    // stream is up, so the pre-first-event window has no heartbeat and
+    // legit first byte grows with reasoning effort (2026-07-14/15 xhigh
+    // prod: successful TTFB p99.9 33s / max 39.5s, 67 false-mixed kills).
+    // The per-request adjustment lives in query.ts's
+    // `streamIdleThresholds` (TTFB ×1.5 at high / ×2.5 at xhigh,
+    // inter-event never scaled) — do NOT loosen the base value here to
+    // solve a deep-reasoning tail; that dilutes stall detection for the
+    // sub-LLM bulk traffic that runs at medium.
     //
     // apiKey mode (schema `openai`) is an arbitrary gateway whose keepalive
     // cadence and first-token latency are unknown (boyue dogfood showed TTFB up
@@ -667,7 +667,7 @@ export function createOpenAIAuthProvider(
     // `config.streamIdle` defaults (90s TTFB / 30s inter-event) instead.
     ...(apiKeyMode
       ? {}
-      : { idleTimeouts: { ttfbMs: 75_000, interEventMs: 35_000 } as const }),
+      : { idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 } as const }),
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`

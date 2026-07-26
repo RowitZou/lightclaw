@@ -50,13 +50,19 @@
     `tool_calls[]` entries fire in the same chunk: one keepalive per wire
     chunk is sufficient to anchor the clock, and emitting one per parallel
     tool call would flood the event stream with redundant resets.
-  `openai-auth` overrides `Provider.idleTimeouts` to `75s TTFB / 35s
-  inter-event` (2026-07-26): inter-event stays tight at ~30s keepalive
-  cadence + ~5s grace, but keepalives only start once the stream is up, so
-  the pre-first-event window has no heartbeat and the TTFB budget must cover
-  legit worst-case first byte — xhigh reasoning + large uncached prefill
-  routinely exceeded the old 35s (2026-07-14 prod: 34 whole-turn retries in
-  a day, each re-paying the prefill it aborted). Other providers fall
+  `openai-auth` overrides `Provider.idleTimeouts` to `35s/35s` — validated
+  base values for low/medium effort. **The TTFB budget is effort-adaptive
+  per request** (2026-07-26): `query.ts`'s `streamIdleThresholds` scales
+  ONLY the TTFB side by the route entry's reasoningEffort (×1.5 high,
+  ×2.5 xhigh). Rationale: keepalives start only once the stream is up, so
+  the pre-first-event window has no heartbeat, and legit first byte grows
+  with effort — 2026-07-14/15 xhigh prod showed successful TTFB p99.9 33s /
+  max 39.5s (past-30s successes prove the window is heartbeat-silent),
+  with 67 flat-35s kills including 8-deep consecutive-abort chains
+  re-paying prefill each time. Inter-event is NEVER scaled — post-first-
+  event the ~30s keepalive cadence anchors the clock at every effort (same
+  window: zero inter-event false kills). Do not loosen the 35s base to fix
+  a deep-reasoning tail, and do not scale inter-event. Other providers fall
   through to `config.streamIdle` global defaults (90s/30s). Do not
   prompt-engineer around any of this — it is provider plumbing.
   When adding a new provider, **audit every accumulator path** (tool args

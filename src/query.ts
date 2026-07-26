@@ -76,7 +76,7 @@ import type {
   UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
-import type { AttachmentKind } from './provider/types.js'
+import type { AttachmentKind, ReasoningEffort } from './provider/types.js'
 
 // streamChat indirection so unit tests can drive the query loop with a fake
 // event stream. Production code always uses the real implementation.
@@ -131,12 +131,38 @@ export function setStreamIdleCheckIntervalForTest(ms: number | null): void {
   streamIdleCheckIntervalMs = ms ?? 5_000
 }
 
-function streamIdleThresholds(
+/** TTFB budget multiplier by request reasoning effort.
+ *
+ *  The base thresholds (provider override or config.streamIdle) are
+ *  validated at LOW/MEDIUM effort — codex 35s TTFB was strongly confirmed
+ *  there. But keepalives only start once the stream is up: the
+ *  pre-first-event window has no heartbeat to anchor the clock, and legit
+ *  first byte grows with reasoning effort. 2026-07-14/15 prod (xhigh era,
+ *  n=2991 successful requests): TTFB p50 5.5s / p99 20.1s / p99.9 33.0s /
+ *  max 39.5s — successful first bytes past 30s PROVE the window is silent
+ *  (a pre-stream heartbeat would cap measured TTFB at the ~30s cadence).
+ *  The flat 35s budget sat inside that tail: 67 aborts, of which ~30
+ *  re-paid a 10-30s first byte on retry and chains up to 8 consecutive
+ *  kills on one session. Scaling ONLY the TTFB budget by effort keeps the
+ *  validated tight budget for the low/medium bulk (session-memory /
+ *  compact sub-traffic) while giving deep-reasoning requests the headroom
+ *  their real tail needs. Inter-event is never scaled — post-first-event
+ *  the ~30s keepalive cadence anchors the clock regardless of effort
+ *  (same window: 0 inter-event false kills). */
+function ttfbEffortMultiplier(effort: ReasoningEffort | undefined): number {
+  if (effort === 'xhigh') return 2.5
+  if (effort === 'high') return 1.5
+  return 1
+}
+
+export function streamIdleThresholds(
   config: LightClawConfig,
   provider: { idleTimeouts?: { ttfbMs?: number; interEventMs?: number } },
+  reasoningEffort?: ReasoningEffort,
 ): { ttfbMs: number; interEventMs: number } {
+  const baseTtfb = provider.idleTimeouts?.ttfbMs ?? config.streamIdle.ttfbMs
   return {
-    ttfbMs: provider.idleTimeouts?.ttfbMs ?? config.streamIdle.ttfbMs,
+    ttfbMs: Math.round(baseTtfb * ttfbEffortMultiplier(reasoningEffort)),
     interEventMs: provider.idleTimeouts?.interEventMs ?? config.streamIdle.interEventMs,
   }
 }
@@ -681,7 +707,11 @@ export async function query(params: QueryParams): Promise<{
         // hung" because the daemon is idle waiting on response bytes.
         // Grep: [ttfb] for per-call distribution; admin can compute percentiles.
         const streamStartMs = Date.now()
-        const idleThresholds = streamIdleThresholds(config, mainRoute.provider)
+        const idleThresholds = streamIdleThresholds(
+          config,
+          mainRoute.provider,
+          mainRoute.entry.reasoningEffort,
+        )
         const streamAbort = new AbortController()
         const combinedSignal = AbortSignal.any([signal, streamAbort.signal])
         let lastEventAt = streamStartMs

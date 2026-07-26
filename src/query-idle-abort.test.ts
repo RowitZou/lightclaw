@@ -6,6 +6,7 @@ import {
   setStreamChatForTest,
   setStreamIdleCheckIntervalForTest,
   setTransientTurnRetryDelayForTest,
+  streamIdleThresholds,
 } from './query.js'
 import { getConfig } from './config.js'
 import { createSessionContext, runWithSessionContext } from './session-context.js'
@@ -222,5 +223,42 @@ describe('query stream idle abort', () => {
     )
     // No retry: caller intent wins, attempt-0 was the only attempt.
     assert.equal(calls, 1)
+  })
+})
+
+describe('streamIdleThresholds — effort-adaptive TTFB budget', () => {
+  // 2026-07-26: the pre-first-event window has no keepalive heartbeat, and
+  // legit first byte grows with reasoning effort (07-14/15 xhigh prod:
+  // successful TTFB p99.9 33s / max 39.5s vs a flat 35s budget → 67 kills,
+  // chains up to 8 consecutive on one session). Only TTFB scales; the
+  // inter-event budget is keepalive-anchored and must never scale.
+  const fakeConfig = {
+    streamIdle: { ttfbMs: 90_000, interEventMs: 30_000 },
+  } as unknown as Parameters<typeof streamIdleThresholds>[0]
+  const codexLike = { idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 } }
+
+  it('low/medium/undefined effort keeps the validated base budgets', () => {
+    for (const effort of [undefined, 'low', 'medium', 'none', 'minimal'] as const) {
+      const t = streamIdleThresholds(fakeConfig, codexLike, effort)
+      assert.deepEqual(t, { ttfbMs: 35_000, interEventMs: 35_000 })
+    }
+  })
+
+  it('high scales TTFB x1.5, xhigh x2.5; inter-event never scales', () => {
+    assert.deepEqual(
+      streamIdleThresholds(fakeConfig, codexLike, 'high'),
+      { ttfbMs: 52_500, interEventMs: 35_000 },
+    )
+    assert.deepEqual(
+      streamIdleThresholds(fakeConfig, codexLike, 'xhigh'),
+      { ttfbMs: 87_500, interEventMs: 35_000 },
+    )
+  })
+
+  it('providers without idleTimeouts scale the config defaults the same way', () => {
+    assert.deepEqual(
+      streamIdleThresholds(fakeConfig, {}, 'xhigh'),
+      { ttfbMs: 225_000, interEventMs: 30_000 },
+    )
   })
 })
