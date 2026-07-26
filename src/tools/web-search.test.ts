@@ -160,12 +160,12 @@ describe('WebSearch tool — Brave + DDG fallback chain', () => {
     assert.doesNotMatch(out, /drop/)
   })
 
-  it('Brave error → WebSearch failed envelope, no auto-DDG fallback on hard error', async () => {
-    // Distinct from "Brave returns 0": this is Brave throwing. We do NOT
-    // try DDG as second attempt (the model already pays a turn for the
-    // failure tool_result; surfacing the Brave error is what admin needs
-    // to see — DDG fallback is for "Brave returned no result", not
-    // "Brave is down").
+  it('Brave error → automatic DDG fallback (2026-07-26: a Brave failure is not a search failure)', async () => {
+    // Reverses the earlier "no auto-DDG fallback on hard error" contract.
+    // Prod evidence: a hung Brave request burned its full timeout budget and
+    // hard-failed the tool while DDG sat unused ("WebSearch failed: timeout
+    // of 30000ms exceeded"). Admin visibility is preserved via the one-line
+    // `[web-search] brave failed ...` stderr log instead of the tool_result.
     _setBraveHttpGetForTests((async () => ({
       status: 429,
       statusText: 'Too Many Requests',
@@ -174,11 +174,40 @@ describe('WebSearch tool — Brave + DDG fallback chain', () => {
       config: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     })) as any)
+    stubDdg([{ title: 'DDG rescue', url: 'https://example.com/a', snippet: 'from ddg' }])
+    const result = await webSearchTool.call({ query: 'q' }, buildCtx())
+    assert.equal(result.isError, undefined)
+    assert.match(result.output as string, /DDG rescue/)
+  })
+
+  it('Brave error AND DDG error → failed envelope surfaces the DDG error', async () => {
+    _setBraveHttpGetForTests((async () => {
+      throw new Error('timeout of 10000ms exceeded')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
+    _setDdgHttpGetForTests((async () => {
+      throw new Error('timeout of 10000ms exceeded')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
     const result = await webSearchTool.call({ query: 'q' }, buildCtx())
     assert.equal(result.isError, true)
     assert.match(result.output as string, /^WebSearch failed \(exit 1\): /)
-    assert.match(result.output as string, /Brave Search API error 429/)
-    assert.match(result.output as string, /QUOTA_EXCEEDED/)
+  })
+
+  it('caller abort during Brave → no DDG detour, failure surfaces', async () => {
+    // Honoring the abort outranks completing the search: an aborted turn
+    // must not fan out one more network call behind the caller's back.
+    const controller = new AbortController()
+    _setBraveHttpGetForTests((async () => {
+      controller.abort()
+      throw new Error('canceled')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
+    stubDdg([{ title: 'should not appear', url: 'https://example.com/x', snippet: 'no' }])
+    const ctx = { ...buildCtx(), abortSignal: controller.signal } as ToolCallContext
+    const result = await webSearchTool.call({ query: 'q' }, ctx)
+    assert.equal(result.isError, true)
+    assert.ok(!(result.output as string).includes('should not appear'))
   })
 
   it('no results from either provider: "No search results found." rendered, trailer still appended', async () => {

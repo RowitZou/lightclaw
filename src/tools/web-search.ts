@@ -68,14 +68,29 @@ export const webSearchTool = buildTool({
     let results: WebSearchResult[] = []
     try {
       if (apiKey) {
-        results = await fetchBraveSearch(apiKey, {
-          query: input.query,
-          count: max,
-          signal: context.abortSignal,
-        })
+        try {
+          results = await fetchBraveSearch(apiKey, {
+            query: input.query,
+            count: max,
+            signal: context.abortSignal,
+          })
+        } catch (braveErr) {
+          // A Brave failure (timeout, 5xx, socket reset) is not a search
+          // failure — DDG is sitting right there. Pre-fix this threw past
+          // the fallback and the tool hard-failed after burning the full
+          // Brave budget ("WebSearch failed: timeout of 30000ms exceeded"
+          // in prod, backup engine never consulted). Only a caller abort
+          // must not detour: honoring the abort outranks completing the
+          // search.
+          if (context.abortSignal.aborted) throw braveErr
+          process.stderr.write(
+            `[web-search] brave failed (${braveErr instanceof Error ? braveErr.message : String(braveErr)}); falling back to ddg\n`,
+          )
+          results = []
+        }
       }
-      // Brave returned 0 results OR no key configured → DDG fallback.
-      // Mirrors the Python helper at websearch.py:152-155.
+      // Brave failed, returned 0 results, OR no key configured → DDG
+      // fallback. Mirrors the Python helper at websearch.py:152-155.
       if (results.length === 0) {
         results = await fetchDuckDuckGoSearch({
           query: input.query,

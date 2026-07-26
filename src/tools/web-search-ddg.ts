@@ -26,7 +26,12 @@ import { withWebRetry } from './web-retry.js'
 
 const DDG_ENDPOINT = 'https://duckduckgo.com/html/'
 
-const DDG_TIMEOUT_MS = 30_000
+/** 10 s — the DDG html endpoint answers in 1-3 s when healthy; a request
+ *  still silent at 10 s is effectively dead. The old 30 s budget turned a
+ *  hung request into 30 s of user-visible stall (2026-07-26 dogfood: two
+ *  such stalls in one research worker), and axios timeouts are deliberately
+ *  not retried by withWebRetry, so the full budget is always burned. */
+const DDG_TIMEOUT_MS = 10_000
 
 const DDG_HEADERS = {
   'User-Agent':

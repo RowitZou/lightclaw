@@ -36,10 +36,12 @@ import {
 
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
 
-/** 30 s — Brave's API is typically < 1 s but slow upstream blips happen.
- *  Tighter than WebFetch's 60 s because search is interactive and a long
- *  hang feels worse than a timeout. */
-const BRAVE_TIMEOUT_MS = 30_000
+/** 10 s — Brave's API is typically < 1 s; a request still silent at 10 s is
+ *  effectively dead, and the tool now falls back to DDG on a Brave failure,
+ *  so the budget here bounds only the detour, not the whole search. The old
+ *  30 s budget made a hung Brave request a 30 s hard failure (axios timeouts
+ *  are deliberately not retried by withWebRetry). */
+const BRAVE_TIMEOUT_MS = 10_000
 
 export type WebSearchResult = {
   /** Title from Brave's `web.results[i].title` (or `.name` fallback for

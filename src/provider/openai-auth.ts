@@ -648,11 +648,18 @@ export function createOpenAIAuthProvider(
     // resets on the wire signal, not just on business events. Net effect:
     // legal reasoning silence is bounded by the keepalive cadence (~30s)
     // and only a real upstream hang (proxy stall, TCP death) can exceed
-    // it. A 35s threshold gives ~5s grace over the heartbeat. TTFB
-    // matches because in practice first-byte arrives within 1-5s under
-    // healthy conditions, and a pre-first-event proxy stall (rare but
-    // observed at ~3% rate against 1091) restarts the request fast
-    // enough at 35s vs the previous 90s of pure waste.
+    // it. A 35s threshold gives ~5s grace over the heartbeat.
+    //
+    // TTFB gets a LOOSER budget (75s) than inter-event: keepalives only
+    // start once the stream is up, so the pre-first-event window has no
+    // heartbeat to anchor the clock — the watchdog is blind there and the
+    // threshold must cover the model's real worst-case first byte, not the
+    // healthy 1-5s case. Under xhigh reasoning + a large uncached prefill
+    // legit first-byte routinely exceeded the old 35s budget (2026-07-14
+    // prod: 34 whole-turn retries in a day, each re-paying the full
+    // prefill it just aborted). A genuine pre-first-event proxy stall
+    // (historically ~3% against 1091) now costs up to 75s instead of 35s —
+    // cheap next to a false kill that discards and re-buys a 100K prefill.
     //
     // apiKey mode (schema `openai`) is an arbitrary gateway whose keepalive
     // cadence and first-token latency are unknown (boyue dogfood showed TTFB up
@@ -660,7 +667,7 @@ export function createOpenAIAuthProvider(
     // `config.streamIdle` defaults (90s TTFB / 30s inter-event) instead.
     ...(apiKeyMode
       ? {}
-      : { idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 } as const }),
+      : { idleTimeouts: { ttfbMs: 75_000, interEventMs: 35_000 } as const }),
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`

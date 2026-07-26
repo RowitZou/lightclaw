@@ -50,11 +50,15 @@
     `tool_calls[]` entries fire in the same chunk: one keepalive per wire
     chunk is sufficient to anchor the clock, and emitting one per parallel
     tool call would flood the event stream with redundant resets.
-  `openai-auth` overrides `Provider.idleTimeouts` to `35s/35s`: ~30s keepalive
-  cadence + ~5s grace, tight enough that a real proxy/TCP stall (no
-  heartbeat received) trips abort fast. Other providers fall through to
-  `config.streamIdle` global defaults (90s/30s). Do not prompt-engineer
-  around any of this — it is provider plumbing.
+  `openai-auth` overrides `Provider.idleTimeouts` to `75s TTFB / 35s
+  inter-event` (2026-07-26): inter-event stays tight at ~30s keepalive
+  cadence + ~5s grace, but keepalives only start once the stream is up, so
+  the pre-first-event window has no heartbeat and the TTFB budget must cover
+  legit worst-case first byte — xhigh reasoning + large uncached prefill
+  routinely exceeded the old 35s (2026-07-14 prod: 34 whole-turn retries in
+  a day, each re-paying the prefill it aborted). Other providers fall
+  through to `config.streamIdle` global defaults (90s/30s). Do not
+  prompt-engineer around any of this — it is provider plumbing.
   When adding a new provider, **audit every accumulator path** (tool args
   JSON, structured output deltas, embedded function-call streams) and
   ensure the corresponding wire delta yields a framework keepalive. The
