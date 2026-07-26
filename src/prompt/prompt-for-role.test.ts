@@ -34,8 +34,15 @@ import type { Tool } from '../tool.js'
 // rerun in full; one-pass ceiling for read-type deliverables) — the skill is
 // main's autoload. Net: only the `main` hash shifts; all worker and internal
 // hashes are stable.
+// web-research fact-verification dose-calibration (2026-07-26): step 6 of the
+// webSearcher workflow skill became conclusion-gated single-cross-check with
+// bounded exceptions and an honest single-sourced/unverified exit, and the
+// reviewer whenToUse trust-contract line gained the matching labeling clause
+// ("single-sourced or unverified claims labeled as such"). The workflow skill
+// body does not render in this snapshot, so the only shift is again `main`
+// (reviewer whenToUse in its Reachable Workers).
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '571098b9c361363e4c13bbeeb4ed89a114317ca49cd23c4267c90054bcd9083b',
+  main: '8a41ddf97b73f6709c5e41581b44f99952bc8d2511913c27ca813565bcd45490',
   generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',
