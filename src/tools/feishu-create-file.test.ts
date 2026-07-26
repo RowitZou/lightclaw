@@ -762,3 +762,119 @@ async function readAuditRecords(): Promise<AuditRecord[]> {
     .filter(Boolean)
     .map(line => JSON.parse(line) as AuditRecord)
 }
+
+describe('FeishuCreateFile doc.source_file (candidate-8)', () => {
+  const SOURCE_MD = [
+    '# 报告',
+    '',
+    '![Fig 1](assets/fig-1.png)',
+    '',
+    'tail',
+  ].join('\n')
+
+  function makeSourceDeps(calls: string[], createArgsSink: { value?: unknown }) {
+    const files: Record<string, Buffer> = {
+      '/ws/report.md': Buffer.from(SOURCE_MD),
+      '/ws/assets/fig-1.png': Buffer.from('img1'),
+    }
+    const stub = makeGrantStub()
+    return {
+      client,
+      createDoc: async (input: Record<string, unknown>) => {
+        createArgsSink.value = input
+        calls.push('create')
+        return {
+          documentId: 'docSF',
+          url: 'https://example.feishu.cn/docx/docSF',
+          title: String(input.title),
+          rawData: {},
+        }
+      },
+      appendMarkdown: async (input: { documentId: string; markdown: string }) => {
+        calls.push(`md:${input.markdown.trim()}`)
+        return {
+          documentId: input.documentId,
+          action: 'append_markdown' as const,
+          markdown_chars: input.markdown.length,
+          blocks_added: 1,
+        }
+      },
+      uploadImage: async (input: { documentId: string; fileName: string; content: Buffer }) => {
+        calls.push(`img:${input.fileName}`)
+        return {
+          documentId: input.documentId,
+          action: 'upload_image' as const,
+          fileToken: 't1',
+          fileName: input.fileName,
+          size: input.content.byteLength,
+        }
+      },
+      readLocalFile: async (fp: string) => {
+        const content = files[fp]
+        if (!content) throw new Error(`missing fixture file ${fp}`)
+        return { content, name: path.basename(fp) }
+      },
+      readLocalMedia: async (fp: string, name: string | undefined, options: { maxBytes: number; imageOnly: boolean }) => {
+        const content = files[fp]
+        if (!content) throw new Error(`missing fixture file ${fp}`)
+        if (options.imageOnly && !fp.endsWith('.png')) throw new Error(`not an image: ${fp}`)
+        return { content, name: name ?? path.basename(fp) }
+      },
+      grantUser: stub.grantUser,
+      grantChat: stub.grantChat,
+      resolveOwnerOpenId: async () => 'ou_alice',
+    }
+  }
+
+  it('creates the doc empty and appends segments in order when the source has local images', async () => {
+    const calls: string[] = []
+    const createArgs: { value?: unknown } = {}
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'SF report', folder_token: 'fld123', doc: { source_file: '/ws/report.md' } },
+          makeSourceDeps(calls, createArgs),
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(calls, ['create', 'md:# 报告', 'img:fig-1.png', 'md:tail'])
+    assert.ok(!('content' in (createArgs.value as Record<string, unknown>)), 'doc must be created empty')
+    assert.equal((createArgs.value as Record<string, unknown>).contentFormat, 'markdown')
+    const output = result.output as Record<string, unknown>
+    assert.equal(output.images_added, 1)
+    assert.equal(output.markdown_chars, SOURCE_MD.length)
+  })
+
+  it('passes the whole markdown as initial content when the source has no local images', async () => {
+    const calls: string[] = []
+    const createArgs: { value?: unknown } = {}
+    const deps = makeSourceDeps(calls, createArgs)
+    const plain = Buffer.from('# plain\n\nno images')
+    deps.readLocalFile = async () => ({ content: plain, name: 'plain.md' })
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'SF plain', folder_token: 'fld123', doc: { source_file: '/ws/plain.md' } },
+          deps,
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(calls, ['create'])
+    const args = createArgs.value as Record<string, unknown>
+    assert.equal(args.content, plain.toString('utf8'))
+    assert.equal(args.contentFormat, 'markdown')
+    assert.equal((result.output as Record<string, unknown>).images_added, 0)
+  })
+
+  it('schema rejects doc.content together with doc.source_file', () => {
+    const schema = feishuCreateFileTool.inputSchema!
+    const both = schema.safeParse({
+      kind: 'doc',
+      title: 'x',
+      doc: { content: 'a', source_file: '/ws/report.md' },
+    })
+    assert.equal(both.success, false)
+  })
+})

@@ -778,3 +778,172 @@ function capabilities(resourceType: FeishuCanonicalResource['resourceType']): Fe
   }
   return { readableWith: [], writableWith: [] }
 }
+
+describe('FeishuWriteDoc source_file (candidate-8)', () => {
+  const SOURCE_MD = [
+    '# 标题',
+    '',
+    'intro paragraph',
+    '',
+    '![Fig 1](assets/fig-1.png)',
+    '',
+    '图 1｜说明',
+    '',
+    '![Fig 2](/abs/fig-2.png)',
+    '',
+    'tail section',
+  ].join('\n')
+
+  function makeSourceDeps(calls: string[]) {
+    const files: Record<string, Buffer> = {
+      '/ws/report.md': Buffer.from(SOURCE_MD),
+      '/ws/assets/fig-1.png': Buffer.from('img1'),
+      '/abs/fig-2.png': Buffer.from('img2'),
+    }
+    return {
+      client,
+      resolveResource: async () => canonical('docx', 'doc9'),
+      readLocalMedia: async (fp: string, name: string | undefined, options: { maxBytes: number; imageOnly: boolean }) => {
+        const content = files[fp]
+        if (!content) throw new Error(`missing fixture file ${fp}`)
+        if (options.imageOnly && !fp.endsWith('.png')) throw new Error(`not an image: ${fp}`)
+        return { content, name: name ?? path.posix.basename(fp) }
+      },
+      appendMarkdown: async (input: { documentId: string; markdown: string }) => {
+        calls.push(`md:${input.markdown.trim()}`)
+        return {
+          documentId: input.documentId,
+          action: 'append_markdown' as const,
+          markdown_chars: input.markdown.length,
+          blocks_added: 2,
+        }
+      },
+      uploadImage: async (input: { documentId: string; fileName: string; content: Buffer }) => {
+        calls.push(`img:${input.fileName}`)
+        return {
+          documentId: input.documentId,
+          action: 'upload_image' as const,
+          fileToken: `tok-${input.fileName}`,
+          fileName: input.fileName,
+          size: input.content.byteLength,
+          blockId: `blk-${input.fileName}`,
+        }
+      },
+      replaceMarkdown: async (input: { documentId: string; markdown: string }) => {
+        calls.push(`replace:${JSON.stringify(input.markdown)}`)
+        return {
+          documentId: input.documentId,
+          action: 'replace_markdown' as const,
+          markdown_chars: input.markdown.length,
+          blocks_added: 0,
+          blocks_deleted: 4,
+        }
+      },
+    }
+  }
+
+  it('append_markdown + source_file uploads local images interleaved in source order', async () => {
+    const calls: string[] = []
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuWriteDoc(
+          { url: 'https://example.feishu.cn/docx/doc9', action: 'append_markdown', source_file: '/ws/report.md' },
+          makeSourceDeps(calls),
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(calls, [
+      'md:# 标题\n\nintro paragraph',
+      'img:fig-1.png',
+      'md:图 1｜说明',
+      'img:fig-2.png',
+      'md:tail section',
+    ])
+    const output = result.output as Record<string, unknown>
+    assert.equal(output.action, 'append_markdown')
+    assert.equal(output.images_added, 2)
+    assert.equal(output.markdown_chars, SOURCE_MD.length)
+    assert.equal(output.blocks_added, 6)
+    const records = await readAuditRecords()
+    assert.equal(records[0]?.resource.sourceFile, '/ws/report.md')
+    assert.equal(records[0]?.resource.imageCount, 2)
+  })
+
+  it('replace_markdown + source_file clears via empty replace before appending segments', async () => {
+    const calls: string[] = []
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuWriteDoc(
+          { url: 'https://example.feishu.cn/docx/doc9', action: 'replace_markdown', source_file: '/ws/report.md' },
+          makeSourceDeps(calls),
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    assert.equal(calls[0], 'replace:""')
+    assert.equal(calls.filter(c => c.startsWith('img:')).length, 2)
+    const output = result.output as Record<string, unknown>
+    assert.equal(output.action, 'replace_markdown')
+    assert.equal(output.blocks_deleted, 4)
+    assert.equal(output.images_added, 2)
+  })
+
+  it('insert_markdown + source_file with local images is rejected before any confirmation', async () => {
+    const calls: string[] = []
+    let asked = false
+    const result = await withFeishuSession({
+      approver: { ask: async () => { asked = true; return { behavior: 'allow' } } },
+      fn: () =>
+        runFeishuWriteDoc(
+          { url: 'https://example.feishu.cn/docx/doc9', action: 'insert_markdown', source_file: '/ws/report.md', after_block_id: 'blk1' },
+          makeSourceDeps(calls),
+        ),
+    })
+    assert.equal(result.isError, true)
+    assert.ok(String(result.output).includes('append_markdown'))
+    assert.equal(asked, false)
+    assert.deepEqual(calls, [])
+  })
+
+  it('source_file without local images degenerates to a single append call', async () => {
+    const calls: string[] = []
+    const deps = makeSourceDeps(calls)
+    const plain = Buffer.from('# only text\n\nno images here')
+    const origRead = deps.readLocalMedia
+    deps.readLocalMedia = async (fp, name, options) =>
+      fp === '/ws/plain.md' ? { content: plain, name: 'plain.md' } : origRead(fp, name, options)
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuWriteDoc(
+          { url: 'https://example.feishu.cn/docx/doc9', action: 'append_markdown', source_file: '/ws/plain.md' },
+          deps,
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(calls, [`md:${plain.toString('utf8').trim()}`])
+    assert.equal((result.output as Record<string, unknown>).images_added, undefined)
+  })
+
+  it('schema rejects content together with source_file for markdown actions', () => {
+    const schema = feishuWriteDocTool.inputSchema!
+    const both = schema.safeParse({
+      url: 'https://example.feishu.cn/docx/doc9',
+      action: 'append_markdown',
+      content: 'x',
+      source_file: '/ws/report.md',
+    })
+    assert.equal(both.success, false)
+    const neither = schema.safeParse({ url: 'https://example.feishu.cn/docx/doc9', action: 'append_markdown' })
+    assert.equal(neither.success, false)
+    const misuse = schema.safeParse({
+      url: 'https://example.feishu.cn/docx/doc9',
+      action: 'update_block_text',
+      block_id: 'b',
+      content: 'x',
+      source_file: '/ws/report.md',
+    })
+    assert.equal(misuse.success, false)
+  })
+})

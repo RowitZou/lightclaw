@@ -57,6 +57,10 @@ import {
   type FeishuDocReadResult,
   type FeishuDocTableMutationResult,
 } from '../channels/feishu/resources/doc.js'
+import {
+  countImageSegments,
+  splitMarkdownLocalImages,
+} from '../channels/feishu/resources/doc-markdown-source.js'
 import { feishuShareUrl } from '../channels/feishu/url.js'
 import { getIdentity } from '../identity/store.js'
 import { getCurrentSessionContext } from '../session-context.js'
@@ -102,6 +106,12 @@ function resolveFeishuMaxChars(requested: number | undefined): { maxChars: numbe
 }
 const DEFAULT_FEISHU_DOC_MEDIA_MAX_MB = 20
 const FEISHU_DOC_MEDIA_HARD_MAX_MB = 100
+// source_file (candidate-8): markdown text cap + per-file local-image cap.
+// Text far above 2 MB is not a report, it is a data dump; 50 images bounds
+// the in-memory materialization (each image is additionally bounded by the
+// media size cap at read time).
+const SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024
+const SOURCE_FILE_MAX_IMAGES = 50
 const feishuScalarValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()])
 
 // Inline byte budget for a FeishuRead doc result. query.ts's snipContent
@@ -174,6 +184,8 @@ const feishuCreateFileInputSchema = z.object({
     content: z.string().optional().describe('Initial plain-text content for kind=doc.'),
     format: z.enum(['plain_text', 'markdown']).optional()
       .describe('Initial content format. Use markdown to preserve headings/lists/tables via Feishu docx conversion.'),
+    source_file: z.string().min(1).optional()
+      .describe('Local runtime workspace path of a markdown file to publish as the doc body. Preferred over content when the document already exists as a file — the daemon reads it directly, and standalone local image references (![caption](assets/fig.png)) are uploaded and placed in order automatically. Mutually exclusive with content; format is ignored (always markdown).'),
   }).optional().describe('Doc-specific options. Ignored for other kinds.'),
   sheet: z.object({
     values: z.array(z.array(feishuScalarValueSchema)).min(1).optional()
@@ -189,6 +201,8 @@ const feishuCreateFileInputSchema = z.object({
   message: 'Specify only one of folder_token or parent_folder.',
 }).refine(input => input.kind !== 'file' || Boolean(input.file?.path), {
   message: 'file.path is required when kind="file".',
+}).refine(input => !(input.doc?.content && input.doc?.source_file), {
+  message: 'Specify only one of doc.content or doc.source_file.',
 })
 
 export type FeishuCreateFileInput = z.infer<typeof feishuCreateFileInputSchema>
@@ -201,6 +215,8 @@ export type FeishuCreateFileOutput = {
   title: string
   size?: number
   chunks?: number
+  markdown_chars?: number
+  images_added?: number
   permission_grants?: FeishuPermissionGrants
   rawData?: unknown
 }
@@ -230,6 +246,8 @@ const feishuWriteDocInputSchema = z.object({
     .describe('Doc write action. Omit for legacy append plain text; use append_markdown for structured Markdown.'),
   content: z.string().min(1).optional()
     .describe('Markdown/text content for append_markdown, insert_markdown, replace_markdown, and update_block_text.'),
+  source_file: z.string().min(1).optional()
+    .describe('Local runtime workspace path of a markdown file to use as the content for append_markdown, insert_markdown, or replace_markdown. Preferred over content when the text already exists as a file — the daemon reads it directly, and for append/replace, standalone local image references (![caption](assets/fig.png)) are uploaded and placed in order automatically. Mutually exclusive with content; insert_markdown accepts source_file only when the file has no local image references.'),
   after_block_id: z.string().min(1).optional()
     .describe('For insert_markdown, insert after this existing block. Omit to append at document root.'),
   block_id: z.string().min(1).optional()
@@ -294,9 +312,17 @@ const feishuWriteDocInputSchema = z.object({
     )
   }
   if (action === 'upload_image' || action === 'upload_file') return Boolean(input.file_path)
+  if (action === 'append_markdown' || action === 'insert_markdown' || action === 'replace_markdown') {
+    return Boolean(input.content) !== Boolean(input.source_file)
+  }
   return Boolean(input.content)
 }, {
   message: 'Missing required fields for FeishuWriteDoc action.',
+}).refine(input => {
+  if (!input.source_file) return true
+  return input.action === 'append_markdown' || input.action === 'insert_markdown' || input.action === 'replace_markdown'
+}, {
+  message: 'source_file is only valid for append_markdown, insert_markdown, or replace_markdown.',
 }).refine(input => {
   if (!input.column_width || !input.column_size) return true
   return input.column_width.length === input.column_size
@@ -323,6 +349,7 @@ export type FeishuWriteDocOutput = {
   file_token?: string
   file_name?: string
   size?: number
+  images_added?: number
   note?: string
   action?: z.infer<typeof feishuWriteDocActionSchema>
   mode?: 'append'
@@ -397,6 +424,13 @@ type FeishuCreateFileDeps = {
   writeSheetValues?: typeof writeSheetValues
   uploadFile?: typeof uploadDriveFile
   readLocalFile?: (filePath: string, displayName?: string) => Promise<{ content: Buffer; name: string }>
+  appendMarkdown?: typeof appendDocMarkdown
+  uploadImage?: typeof uploadDocImage
+  readLocalMedia?: (
+    filePath: string,
+    displayName: string | undefined,
+    options: { maxBytes: number; imageOnly: boolean },
+  ) => Promise<{ content: Buffer; name: string }>
   grantUser?: typeof grantUserPermission
   grantChat?: typeof grantChatPermission
   grantSheetUser?: typeof grantSheetUserPermission
@@ -558,7 +592,7 @@ export async function maybeSpillFeishuDocResult(
 export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreateFileOutput | string>({
   name: 'FeishuCreateFile',
   description:
-    'Create a NEW Feishu/Lark resource. Supports kind="doc" (docx with optional initial plain text or markdown), kind="sheet" (spreadsheet with optional initial values), and kind="file" (upload a local runtime workspace file to Feishu Drive). Use FeishuWriteDoc/FeishuWriteSheet to edit existing resources; this tool is for fresh creation/upload. Always asks the user for explicit write confirmation before calling Feishu. After creation, the sender is granted full_access (manager) and, in group chats, the chat is additionally granted view so all members can open the link immediately. The returned permission_grants field reports the outcome of these grants; treat permission_grants.errors as a hint to tell the user how to share manually. When telling the user where the resource lives, ALWAYS share the returned clickable `url`, never the raw token.',
+    'Create a NEW Feishu/Lark resource. Supports kind="doc" (docx with optional initial plain text or markdown), kind="sheet" (spreadsheet with optional initial values), and kind="file" (upload a local runtime workspace file to Feishu Drive). For a document that already exists as a workspace markdown file, pass doc.source_file instead of doc.content — the daemon reads the file itself and uploads its standalone local images in source order. Use FeishuWriteDoc/FeishuWriteSheet to edit existing resources; this tool is for fresh creation/upload. Always asks the user for explicit write confirmation before calling Feishu. After creation, the sender is granted full_access (manager) and, in group chats, the chat is additionally granted view so all members can open the link immediately. The returned permission_grants field reports the outcome of these grants; treat permission_grants.errors as a hint to tell the user how to share manually. When telling the user where the resource lives, ALWAYS share the returned clickable `url`, never the raw token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -583,6 +617,26 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
             name: displayName?.trim() || path.basename(filePath),
           }
         },
+        readLocalMedia: async (filePath, displayName, options) => {
+          const info = await context.runtime.fs.stat(filePath)
+          if (!info.isFile) {
+            throw new Error(`FeishuCreateFile expected a regular file: ${filePath}`)
+          }
+          if (info.size <= 0) {
+            throw new Error(`FeishuCreateFile refused to upload an empty file: ${filePath}`)
+          }
+          if (info.size > options.maxBytes) {
+            throw new Error(
+              `FeishuCreateFile refused to upload ${filePath}: ${info.size} bytes exceeds the ${options.maxBytes} byte limit.`,
+            )
+          }
+          const name = displayName?.trim() || path.basename(filePath)
+          if (options.imageOnly && !isSupportedUploadImageName(name)) {
+            throw new Error(`FeishuCreateFile source_file images only accept png/jpg/jpeg/gif/webp/bmp files; got ${name}`)
+          }
+          const content = await context.runtime.fs.readFile(filePath)
+          return { content, name }
+        },
       })
     } catch (error) {
       return {
@@ -596,7 +650,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
 export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
   name: 'FeishuWriteDoc',
   description:
-    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. Whole-document replace uses stricter one-shot confirmation; document-internal block edits are grantable, and table row/column/merge edits use a dedicated grantable FeishuTableEditConfirm. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
+    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. append_markdown / replace_markdown also accept source_file (a workspace markdown path) instead of content — the daemon reads the file itself and uploads its standalone local images in source order; insert_markdown accepts source_file only for image-free files. Omitting action keeps legacy plain-text append. Whole-document replace uses stricter one-shot confirmation; document-internal block edits are grantable, and table row/column/merge edits use a dedicated grantable FeishuTableEditConfirm. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -767,6 +821,56 @@ export async function runFeishuRead(
   return { output: `Unhandled canonical resource type: ${resource.resourceType}`, isError: true }
 }
 
+type LoadedSourceFile = {
+  sourcePath: string
+  /** Full markdown text — the single-call path when there are no local images. */
+  markdown: string
+  markdownChars: number
+  imageCount: number
+  segments: Array<
+    | { kind: 'markdown'; text: string }
+    | { kind: 'image'; content: Buffer; fileName: string; path: string }
+  >
+}
+
+/** Read a workspace markdown file and materialize its standalone local image
+ *  references. Every read happens BEFORE any Feishu write, so a missing or
+ *  oversized asset fails the whole call with nothing half-written. Relative
+ *  image paths resolve against the source file's own directory. */
+async function loadSourceFileForDoc(
+  sourcePath: string,
+  readText: (filePath: string) => Promise<{ content: Buffer }>,
+  readImage: (filePath: string, fileName: string) => Promise<{ content: Buffer; name: string }>,
+): Promise<LoadedSourceFile> {
+  const text = await readText(sourcePath)
+  if (text.content.byteLength > SOURCE_FILE_MAX_BYTES) {
+    throw new Error(
+      `source_file ${sourcePath} is ${text.content.byteLength} bytes; the markdown source limit is ${SOURCE_FILE_MAX_BYTES} bytes.`,
+    )
+  }
+  const markdown = text.content.toString('utf8')
+  const rawSegments = splitMarkdownLocalImages(
+    markdown,
+    path.posix.dirname(sourcePath.replace(/\\/g, '/')),
+  )
+  const imageCount = countImageSegments(rawSegments)
+  if (imageCount > SOURCE_FILE_MAX_IMAGES) {
+    throw new Error(
+      `source_file ${sourcePath} references ${imageCount} local images; the limit is ${SOURCE_FILE_MAX_IMAGES}.`,
+    )
+  }
+  const segments: LoadedSourceFile['segments'] = []
+  for (const seg of rawSegments) {
+    if (seg.kind === 'markdown') {
+      segments.push(seg)
+      continue
+    }
+    const image = await readImage(seg.path, path.posix.basename(seg.path))
+    segments.push({ kind: 'image', content: image.content, fileName: image.name, path: seg.path })
+  }
+  return { sourcePath, markdown, markdownChars: markdown.length, imageCount, segments }
+}
+
 export async function runFeishuCreateFile(
   input: FeishuCreateFileInput,
   deps: FeishuCreateFileDeps,
@@ -810,8 +914,26 @@ export async function runFeishuCreateFile(
     })
     throw error
   }
+  let sourceFile: LoadedSourceFile | undefined
+  if (input.kind === 'doc' && input.doc?.source_file) {
+    if (!deps.readLocalFile || !deps.readLocalMedia) {
+      return { output: 'FeishuCreateFile doc.source_file requires runtime file readers.', isError: true }
+    }
+    sourceFile = await loadSourceFileForDoc(
+      input.doc.source_file,
+      fp => deps.readLocalFile!(fp),
+      (fp, name) => deps.readLocalMedia!(fp, name, {
+        maxBytes: DEFAULT_FEISHU_DOC_MEDIA_MAX_MB * 1024 * 1024,
+        imageOnly: true,
+      }),
+    )
+  }
   const preview = `Create Feishu ${input.kind} titled "${input.title}"${
     input.doc?.content ? ` with ${input.doc.content.length} chars of initial content` : ''
+  }${
+    sourceFile
+      ? ` from markdown source ${sourceFile.sourcePath} (${sourceFile.markdownChars} chars, ${sourceFile.imageCount} local image(s) to upload)`
+      : ''
   }${
     input.sheet?.values ? ` with ${input.sheet.values.length} initial row(s)` : ''
   }${
@@ -824,6 +946,7 @@ export async function runFeishuCreateFile(
     ...(input.parent_folder ? { parent_folder: input.parent_folder } : {}),
     ...(input.folder_token ? { folder_token: input.folder_token } : {}),
     ...(input.file?.path ? { file_path: input.file.path } : {}),
+    ...(sourceFile ? { source_file: sourceFile.sourcePath, image_count: sourceFile.imageCount } : {}),
   }
 
   await requireFeishuWriteConfirmation({
@@ -903,14 +1026,47 @@ export async function runFeishuCreateFile(
     }
 
     const create = deps.createDoc ?? createDoc
+    // source_file with no local images degenerates to the single-call path
+    // (whole markdown as initial content). With images, create empty and
+    // append segments sequentially below — sequential appends preserve the
+    // source order without any block-index arithmetic.
+    const initialContent = sourceFile
+      ? (sourceFile.imageCount === 0 ? sourceFile.markdown : undefined)
+      : input.doc?.content
     const docMeta = await create({
       client: deps.client,
       title: input.title,
-      content: input.doc?.content,
-      ...(input.doc?.format ? { contentFormat: input.doc.format } : {}),
+      ...(initialContent !== undefined ? { content: initialContent } : {}),
+      ...(sourceFile
+        ? { contentFormat: 'markdown' as const }
+        : input.doc?.format ? { contentFormat: input.doc.format } : {}),
       folderToken: parentFolderToken,
       retryCounter,
     })
+    let imagesAdded = 0
+    if (sourceFile && sourceFile.imageCount > 0 && docMeta.documentId) {
+      const appendMarkdown = deps.appendMarkdown ?? appendDocMarkdown
+      const uploadImage = deps.uploadImage ?? uploadDocImage
+      for (const seg of sourceFile.segments) {
+        if (seg.kind === 'markdown') {
+          await appendMarkdown({
+            client: deps.client,
+            documentId: docMeta.documentId,
+            markdown: seg.text,
+            retryCounter,
+          })
+        } else {
+          await uploadImage({
+            client: deps.client,
+            documentId: docMeta.documentId,
+            content: seg.content,
+            fileName: seg.fileName,
+            retryCounter,
+          })
+          imagesAdded += 1
+        }
+      }
+    }
     // Best-effort initial permission grant. Bot is the doc owner; without
     // this step the link returned in tool_result is 403 for the requesting
     // user (Bug 9 from 2026-05-12 dogfood). Failures are non-fatal: the doc
@@ -932,7 +1088,12 @@ export async function runFeishuCreateFile(
       ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return {
-      output: formatCreatedDoc(docMeta, grants),
+      output: {
+        ...formatCreatedDoc(docMeta, grants),
+        ...(sourceFile
+          ? { markdown_chars: sourceFile.markdownChars, images_added: imagesAdded }
+          : {}),
+      },
     }
   } catch (error) {
     // Preserve chronology: the confirmed audit was deferred so it could be
@@ -1166,8 +1327,37 @@ export async function runFeishuWriteDoc(
   const action = input.action
   const mode = input.mode ?? 'append'
   const operation = operationForDocAction(action)
-  const contentLength = input.content?.length ?? 0
-  const preview = previewForDocAction({ action, documentId, contentLength, blockId: input.block_id ?? input.table_block_id })
+
+  let sourceFile: LoadedSourceFile | undefined
+  if (input.source_file) {
+    if (!deps.readLocalMedia) {
+      return { output: 'FeishuWriteDoc source_file requires a runtime file reader.', isError: true }
+    }
+    const mediaMaxBytes = Math.min(
+      input.media_max_mb ?? DEFAULT_FEISHU_DOC_MEDIA_MAX_MB,
+      FEISHU_DOC_MEDIA_HARD_MAX_MB,
+    ) * 1024 * 1024
+    sourceFile = await loadSourceFileForDoc(
+      input.source_file,
+      fp => deps.readLocalMedia!(fp, undefined, { maxBytes: SOURCE_FILE_MAX_BYTES, imageOnly: false }),
+      (fp, name) => deps.readLocalMedia!(fp, name, { maxBytes: mediaMaxBytes, imageOnly: true }),
+    )
+    if (action === 'insert_markdown' && sourceFile.imageCount > 0) {
+      return {
+        output:
+          `source_file ${input.source_file} contains ${sourceFile.imageCount} local image reference(s); ` +
+          'insert_markdown cannot place images at an arbitrary position. Use append_markdown ' +
+          '(images upload in order at the end of the document) or pass content without local images.',
+        isError: true,
+      }
+    }
+  }
+  // With no local images, source_file degenerates to the existing single-call
+  // markdown paths; only the image-bearing append/replace flows loop segments.
+  const markdownContent = input.content ?? sourceFile?.markdown
+  const contentLength = markdownContent?.length ?? 0
+  const preview = previewForDocAction({ action, documentId, contentLength, blockId: input.block_id ?? input.table_block_id }) +
+    (sourceFile ? ` [from ${sourceFile.sourcePath}, ${sourceFile.imageCount} local image(s)]` : '')
   const resource = {
     documentId,
     ...(action ? { action } : { mode }),
@@ -1182,20 +1372,61 @@ export async function runFeishuWriteDoc(
     ...(input.filename ? { filename: input.filename } : {}),
     ...(input.index !== undefined ? { index: input.index } : {}),
     ...(input.media_max_mb ? { mediaMaxMb: input.media_max_mb } : {}),
+    ...(sourceFile ? { sourceFile: sourceFile.sourcePath, imageCount: sourceFile.imageCount } : {}),
   }
 
   await requireFeishuWriteConfirmation({ operation, preview, resource })
 
   const retryCounter = { count: 0 }
+
+  // Image-bearing source_file flow: append markdown segments and upload
+  // image segments in source order. Sequential appends preserve document
+  // order with zero block-index arithmetic; replace clears first by reusing
+  // replace_markdown's safe delete (empty markdown converts to zero blocks).
+  const writeSourceSegments = async (clearFirst: boolean): Promise<FeishuWriteDocOutput> => {
+    const appendMarkdown = deps.appendMarkdown ?? appendDocMarkdown
+    const uploadImage = deps.uploadImage ?? uploadDocImage
+    let blocksAdded = 0
+    let imagesAdded = 0
+    let blocksDeleted: number | undefined
+    if (clearFirst) {
+      const replaceMarkdown = deps.replaceMarkdown ?? replaceDocMarkdown
+      const cleared = await replaceMarkdown({ client: deps.client, documentId, markdown: '', retryCounter })
+      blocksDeleted = cleared.blocks_deleted ?? 0
+    }
+    for (const seg of sourceFile!.segments) {
+      if (seg.kind === 'markdown') {
+        const r = await appendMarkdown({ client: deps.client, documentId, markdown: seg.text, retryCounter })
+        blocksAdded += r.blocks_added ?? 0
+      } else {
+        await uploadImage({ client: deps.client, documentId, content: seg.content, fileName: seg.fileName, retryCounter })
+        imagesAdded += 1
+      }
+    }
+    return {
+      ...formatMarkdownDocWriteOutput({
+        documentId,
+        action: clearFirst ? 'replace_markdown' : 'append_markdown',
+        markdown_chars: sourceFile!.markdownChars,
+        blocks_added: blocksAdded,
+        ...(blocksDeleted !== undefined ? { blocks_deleted: blocksDeleted } : {}),
+      }),
+      images_added: imagesAdded,
+    }
+  }
+
   try {
     if (action === 'append_markdown') {
+      if (sourceFile && sourceFile.imageCount > 0) {
+        return { output: await writeSourceSegments(false) }
+      }
       const appendMarkdown = deps.appendMarkdown ?? appendDocMarkdown
       return {
         output: formatMarkdownDocWriteOutput(
           await appendMarkdown({
             client: deps.client,
             documentId,
-            markdown: input.content!,
+            markdown: markdownContent!,
             retryCounter,
           }),
         ),
@@ -1208,7 +1439,7 @@ export async function runFeishuWriteDoc(
           await insertMarkdown({
             client: deps.client,
             documentId,
-            markdown: input.content!,
+            markdown: markdownContent!,
             ...(input.after_block_id ? { afterBlockId: input.after_block_id } : {}),
             retryCounter,
           }),
@@ -1216,13 +1447,16 @@ export async function runFeishuWriteDoc(
       }
     }
     if (action === 'replace_markdown') {
+      if (sourceFile && sourceFile.imageCount > 0) {
+        return { output: await writeSourceSegments(true) }
+      }
       const replaceMarkdown = deps.replaceMarkdown ?? replaceDocMarkdown
       return {
         output: formatMarkdownDocWriteOutput(
           await replaceMarkdown({
             client: deps.client,
             documentId,
-            markdown: input.content!,
+            markdown: markdownContent!,
             retryCounter,
           }),
         ),
