@@ -41,7 +41,12 @@ const EXPECTED = {
   // child-join when the caller needs to resume on the result.
   // Dispatch-brief PR2.1 (2026-06-16): unfamiliar roles are routed through
   // ListRoleSkill before Dispatch so the caller learns what to settle first.
-  Dispatch: 'd49f379e37e51831b1d94f5d1b0711c393260866b5ac39e359a4a1d853c6557b',
+  // Brief-handles dose-calibration (2026-07-26): Writing-the-prompt gains an
+  // unconditional handle rule — inputs the brief references that the caller
+  // already holds a handle for (paths / URLs / tokens / run ids) are named
+  // verbatim, never described; scoped to brief-referenced inputs so it does
+  // not read as dump-every-handle.
+  Dispatch: '909300814c6ba410c7512787caffa7340f6f3200fadb186080bf0db93b0b6ac8',
   // Uplink short-reply (2026-06-16): Message gained the no-`to` `reply_code`
   // mode (worker replies to a requester's message with the info it asked for),
   // the `to` paragraph now prefers TaskInspect for status and notes the

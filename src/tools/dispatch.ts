@@ -83,6 +83,7 @@ Only parallelize tasks that touch disjoint files / branches / resources — the 
 The dispatched role starts with a fresh context. It has NOT seen this conversation. Write the prompt as a self-contained imperative:
 - Explain what you're trying to accomplish and why.
 - Describe what you've already learned or ruled out.
+- When the brief references an input you already hold a handle for — a file path, URL, document token, run id from an earlier result — name it verbatim instead of describing it. The worker cannot see what you saw: "the official PDF" or "the report" forces a search of the whole workspace for something one line could have named.
 - Give enough context that the role can make judgment calls, not just follow a narrow instruction.
 - If you need a short response, say so ("report in under 200 words").
 - Lookups: hand over the exact pattern / path. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
