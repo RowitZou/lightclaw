@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
-import { userSessionsRoot } from '../identity/paths.js'
-import { getAdmin, getIdentity } from '../identity/store.js'
+import { getIdentity } from '../identity/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { routeBackgroundResult } from './result-route.js'
 import {
   appendCompletedTaskRecord,
   flushLastFiredAt,
@@ -274,51 +274,10 @@ async function createNextStandingTaskRunBestEffort(
   }
 }
 
-/**
- * Pick the receiver for a bg-dispatch result, preferring the closest live
- * worker spawner in the chain over the legacy "always main" route. Walks
- * path[length-2] (the direct spawner) up to path[1] (the deepest worker
- * before main), returning the first node whose sessionId is still alive
- * in the SignalRouter chain registry. Path index 0 is main, which is
- * intentionally skipped — main never registers itself in the chain
- * registry, and main delivery flows through the legacy origin/DM
- * resolution path in deliverCompletion.
- *
- * Returns null when no worker ancestor is alive, signaling the caller to
- * fall back to main resolution.
- */
-export function resolveLiveWorkerSpawner(
-  chainState: ChainState,
-  liveSessions: Set<string>,
-): { role: string; sessionId: string } | null {
-  if (chainState.path.length < 2) return null
-  for (let i = chainState.path.length - 2; i >= 1; i--) {
-    const node = chainState.path[i]
-    if (!node) continue
-    if (liveSessions.has(node.sessionId)) {
-      return { role: node.role, sessionId: node.sessionId }
-    }
-  }
-  return null
-}
-
-/**
- * A bg-result belongs to main only when no live worker spawner caught it AND
- * its direct parent is not itself a still-active worker. When the parent IS a
- * non-root worker that is `running` or `waiting`, the result is the PARENT's
- * obligation — its child-join wait and the watchdog reconcile settle it. The
- * parent can be invisible to `resolveLiveWorkerSpawner` even while alive: a
- * resumed shift does not register its chain session, and a parent between
- * shifts (delivered→park gap) holds no session at all. Routing such a result
- * to main double-delivers it (the parent settles it too) and lands it in the
- * wrong chat. `delivered` / terminal / root parents are NOT owners — those
- * results legitimately flow to main.
- */
-export function parentOwnsBackgroundResult(parent: TaskRunMeta | null | undefined): boolean {
-  if (!parent) return false
-  if ((parent.kind ?? 'dispatch') === 'root') return false
-  return parent.status === 'running' || parent.status === 'waiting'
-}
+// resolveLiveWorkerSpawner / parentOwnsBackgroundResult moved to
+// result-route.ts (the shared turn-end routing chokepoint); re-exported so
+// existing importers (tests, hooks) keep their scheduler-facing path.
+export { parentOwnsBackgroundResult, resolveLiveWorkerSpawner } from './result-route.js'
 
 export class BackgroundTaskScheduler {
   private readonly heapByUser = new Map<string, HeapItem[]>()
@@ -1001,80 +960,21 @@ export class BackgroundTaskScheduler {
       ...(taskRunId ? { taskRunId } : {}),
     }
 
-    // Spawner-aware delivery: if a still-alive worker ancestor spawned this
-    // bg dispatch, return the result to that worker instead of main. See
-    // `resolveLiveWorkerSpawner` for the walk-up semantics. Standing services
-    // are top-level roots, so their fire results go to main for acceptance.
-    if (task.chainState && !task.standingRootRunId) {
-      const liveSessions = new Set(
-        getSignalRouter().sessionIdsForChain(task.chainState.chainId),
-      )
-      const workerReceiver = resolveLiveWorkerSpawner(task.chainState, liveSessions)
-      if (workerReceiver) {
-        await getSignalRouter().publish({
-          kind: 'notification',
-          from: { kind: 'scheduler' },
-          to: { kind: 'role', id: workerReceiver.role, sessionId: workerReceiver.sessionId },
-          payload,
-          timing: { emittedAt: Date.now() },
-          chainId: task.chainState.chainId,
-        })
-        return
-      }
-    }
-
-    // Durable-parent guard: a non-terminal worker parent still owns this child
-    // even when no live spawner was found (resumed shift → unregistered chain
-    // session; or the parent is between shifts). Its child-join wait + the
-    // watchdog reconcile settle the child; routing to main here would
-    // double-deliver and land in the wrong chat. See `parentOwnsBackgroundResult`.
-    if (taskRunId) {
-      const childRun = await getTaskRun(taskRunId, canonicalUser)
-      const parent = childRun?.parentRunId
-        ? await getTaskRun(childRun.parentRunId, canonicalUser)
-        : null
-      if (parentOwnsBackgroundResult(parent)) {
-        process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} result owned by active worker parent ${parent!.id} (${parent!.status}); suppressing redundant main delivery\n`,
-        )
-        return
-      }
-    }
-
-    // No live worker ancestor and no active worker parent → main is the
-    // receiver. Existing path: admin gate (LocalRuntime carve-out), origin/DM
-    // resolution, deliver to main.
-    const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
-    if (adminId !== null && adminId !== canonicalUser) {
-      process.stderr.write(
-        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: LocalRuntime admin-only; user "${canonicalUser}" is not admin\n`,
-      )
-      return
-    }
-    const sessionsDir = userSessionsRoot(canonicalUser)
-    const { resolveMainWakeSessionId } = await import('./session-resolve.js')
-    const mainSessionId = await resolveMainWakeSessionId({
+    // Routing (spawner-aware delivery, durable-parent guard, admin gate,
+    // origin/DM resolution) lives in the shared turn-end chokepoint —
+    // result-route.ts — used by BOTH this fire path and resume.ts. Do not
+    // re-inline any branch here.
+    await routeBackgroundResult({
+      canonicalUser,
+      payload,
+      ...(task.chainState ? { chainState: task.chainState } : {}),
+      suppressSpawnerRouting: Boolean(task.standingRootRunId),
       ...(task.originSessionId ? { originSessionId: task.originSessionId } : {}),
       ...(task.chainState?.path[0]?.sessionId
         ? { chainRootSessionId: task.chainState.path[0].sessionId }
         : {}),
-      canonicalUser,
-      sessionsDir,
-    })
-    if (!mainSessionId) {
-      process.stderr.write(
-        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: no usable origin/DM session for ${canonicalUser}\n`,
-      )
-      return
-    }
-
-    await getSignalRouter().publish({
-      kind: 'notification',
-      from: { kind: 'scheduler' },
-      to: { kind: 'role', id: 'main', sessionId: mainSessionId },
-      payload,
-      timing: { emittedAt: Date.now() },
-      chainId: mainSessionId,
+      backendIsLocal: this.config?.runtime.backend === 'local',
+      logContext: `${task.id} fire ${fireUuid}`,
     })
   }
 }

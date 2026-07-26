@@ -8,6 +8,8 @@ import { buildWorkerProgressForwarder } from './worker-progress.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
+import { routeBackgroundResult } from '../background-task/result-route.js'
+import { getIdentity } from '../identity/store.js'
 import { buildPromptForRole } from '../prompt.js'
 import { getConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
@@ -401,7 +403,19 @@ export async function resumeRunWithBlock(
     // resumed turn produced no final reply.
     const settled = (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run
     if (settled.status === 'delivered') {
-      await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, settled, result.finalReplyText || result.assistantText)
+      const wokeParent = await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, settled, result.finalReplyText || result.assistantText)
+      // No parent was parked on this child — mirror the fire path's second
+      // half (onFireComplete → deliverCompletion): the result must still
+      // reach a receiver. Pre-fix this branch simply returned, so a resumed
+      // run delivering under a root parent notified nobody and the watchdog's
+      // unsettled-delivered grace became the de facto delivery path.
+      if (!wokeParent) {
+        await deliverResumedResultBestEffort(
+          run.ownerCanonicalUser,
+          settled,
+          result.finalReplyText || result.assistantText,
+        )
+      }
     }
     return {
       ok: true,
@@ -501,6 +515,75 @@ async function rescueLeftoverInterjections(
 function isSessionTurnInFlight(sessionId: string): boolean {
   return channelInterjectionQueue.hasInflightFor(sessionId) ||
     getSignalRouter().getAllActiveSessionIds().has(sessionId)
+}
+
+/** Turn-end fallback for a resumed shift whose result no waiting parent
+ *  consumed inline: mirror the fire path's second half (onFireComplete →
+ *  deliverCompletion) by assembling the background-result payload from the
+ *  run — plus its backing bg entry when one still exists (a completed
+ *  oneshot's entry is usually pruned by the time a resume happens) — and
+ *  handing routing to the shared chokepoint in result-route.ts. Best-effort:
+ *  a delivery failure must never mask the resumed turn's own outcome; the
+ *  watchdog reconcile remains the cold backstop. */
+export async function deliverResumedResultBestEffort(
+  canonicalUser: string,
+  run: TaskRunMeta,
+  resultText: string | undefined,
+): Promise<void> {
+  try {
+    const identity = await getIdentity(canonicalUser).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (!ownerOpenId) {
+      process.stderr.write(
+        `[taskrun-resume] ${run.id} delivered but no feishu open_id is bound for ${canonicalUser}\n`,
+      )
+      return
+    }
+    const entry = loadBackgroundTasks(canonicalUser).find(e => e.taskRunId === run.id)
+    const failed = run.outcome?.ok === false
+    if (entry) {
+      const shouldNotify =
+        entry.notifyOn === 'always' ||
+        (entry.notifyOn === 'success' && !failed) ||
+        (entry.notifyOn === 'failure' && failed)
+      if (!shouldNotify) return
+    }
+    await routeBackgroundResult({
+      canonicalUser,
+      payload: {
+        kind: 'background-result',
+        ownerOpenId,
+        ownerCanonicalUser: canonicalUser,
+        dispatchId: entry?.id ?? run.id,
+        label: entry?.label ?? run.title ?? run.id,
+        outcome: failed ? 'failed' : 'success',
+        result:
+          resultText?.trim() ||
+          run.outcome?.summary ||
+          run.outcome?.error ||
+          '(resumed shift returned no final text)',
+        taskRunId: run.id,
+      },
+      ...(entry?.chainState ? { chainState: entry.chainState } : {}),
+      suppressSpawnerRouting: Boolean(entry?.standingRootRunId),
+      ...(entry?.originSessionId
+        ? { originSessionId: entry.originSessionId }
+        : run.callerSessionId
+          ? { originSessionId: run.callerSessionId }
+          : {}),
+      ...(entry?.chainState?.path[0]?.sessionId
+        ? { chainRootSessionId: entry.chainState.path[0].sessionId }
+        : {}),
+      backendIsLocal: getConfig().runtime.backend === 'local',
+      logContext: `resume ${run.id}`,
+    })
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun-resume] result delivery failed for ${run.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
 
 /** Child reached delivered → if its parent is parked at paused(child-join)
