@@ -51,14 +51,23 @@ import type { Tool } from '../tool.js'
 // dispatcher workers (generalist / feishuSecretary / coder / archivist /
 // reviewer) shift; main's orch variants, the two leaves, and the internal
 // roles are stable.
+// batch-edit routing (2026-07-26): the Write/Edit cap bullet's unconditional
+// "Use Edit instead of sed / awk" read as a per-spot-Edit mandate to a
+// fully-compliant model (prod: one homogeneous heading demotion executed as
+// 22 sequential single Edits, ~3 minutes of per-step reasoning for a
+// one-liner scripted job). The clause now routes three ways: ordinary edits
+// -> Edit; one identical string repeated -> replace_all; the same
+// transformation across many differing spots -> one scripted pass plus a
+// re-read. Heterogeneous per-spot edits are untouched. Only the roles that
+// render the bullet shift: generalist / coder / archivist.
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '8a41ddf97b73f6709c5e41581b44f99952bc8d2511913c27ca813565bcd45490',
-  generalist: 'c161dfe5022342621d16db9037b7a6bf7be44b59884bb2bb3cc2a8503998d52c',
+  generalist: '96e70128cebdd166f4fe4ac1e2703c69ad1735391f2d25a0609fdc05e7e0573d',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',
   feishuSecretary: 'a60a3f8f09042722f7894dc131b4fea3b519952d754aa050742b76823ca09e5b',
-  coder: 'a05571fc88299d10073ab2912a525c721580cf78c112d1cc6323c046b3b0848f',
-  archivist: '33b3553bd1f941d21bf96fdebf6e3c04b5467326f3bd06e7d979d382949505fd',
+  coder: '71f300ba06c4d0e629ad5237b5f8f00f331afb9afdd7645b5d5655a53240073c',
+  archivist: '149ae1a92756f99e872c97c679595414e85cd971359f64a648d184d37d03ae30',
   reviewer: '0b10560b4dc0ecc1ac2e613e8bd63e3c9c433450123d194436f7a8990f3a8040',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',

@@ -970,7 +970,7 @@ const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
     bullets: [
       { when: 'always', text: '- Prefer a direct answer when no tool is needed.' },
       { when: { tool: 'Bash' }, text: '- Prefer dedicated tools over Bash when one fits — Read instead of cat / head / tail; Grep instead of grep / rg; Glob instead of find / ls. Reserve Bash for shell-only operations — git, package managers, build / test, system diagnostics.' },
-      { when: { anyTool: ['Write', 'Edit'] }, text: '- Use Edit instead of sed / awk and Write instead of echo > / heredoc. When editing files, be precise and avoid unrelated changes.' },
+      { when: { anyTool: ['Write', 'Edit'] }, text: '- Use Edit instead of sed / awk and Write instead of echo > / heredoc; be precise and avoid unrelated changes. When one identical string repeats, replace_all is the batch form. When the same transformation repeats across many differing spots — every heading down a level, one prefix swapped through dozens of links — run it as one scripted pass and re-read the result, rather than a long chain of single Edits.' },
       { when: 'always', text: '- If a tool fails, explain the failure and recover with a narrower step — do not retry the same call.' },
       { when: { tool: 'Read' }, text: '- Visual content from Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, and other precise tokens may have OCR errors. When an exact value matters, treat the transcription as a hint — re-render at higher fidelity or ask the requester to confirm before committing it.' },
     ],
