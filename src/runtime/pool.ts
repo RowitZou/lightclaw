@@ -137,6 +137,41 @@ export class RuntimePool {
     return next
   }
 
+  /** Rebuild the cached RlaunchRuntime for `userId` from the current on-disk
+   *  mount store, when its mount-aware deployment identity has drifted.
+   *
+   *  Needed because `acquire()`'s cache hit checks only the backend kind, not
+   *  the mount fingerprint: the startup mount-refresh persists a confirmed
+   *  DOWNGRADE ~10s after boot (detached confirmation probes), and preheat or
+   *  an early inbound message may have already cached a runtime built from the
+   *  pre-downgrade store. That stale instance fails `assertMountsAccessible`
+   *  on every start (the daemon can no longer see the now-worker-only host
+   *  path) until the process restarts — the health checker then retries it
+   *  forever with the same stale config. Swapping here mirrors
+   *  `swapRlaunchRuntime`'s retire-forwarding so concurrent ALS references
+   *  follow the corrected instance.
+   *
+   *  Returns true when a stale instance was actually replaced; an unchanged
+   *  identity (acquire happened after the store rewrite) is a no-op so a
+   *  healthy live worker is never churned. */
+  refreshRlaunchRuntimeForUser(userId: string, config: LightClawConfig): boolean {
+    if (config.runtime.backend !== 'cluster') {
+      return false
+    }
+    const key = runtimeKey(userId)
+    const old = this.runtimes.get(key)
+    if (!(old instanceof RlaunchRuntime)) {
+      return false
+    }
+    const next = this.create(userId, config, old.workspaceHostPath, undefined)
+    if (!(next instanceof RlaunchRuntime) || next.deploymentHash === old.deploymentHash) {
+      return false
+    }
+    this.runtimes.set(key, next)
+    old.markRetired(() => this.runtimes.get(key))
+    return true
+  }
+
   async releaseAll(): Promise<void> {
     await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.stop()))
   }

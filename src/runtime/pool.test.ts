@@ -1,8 +1,16 @@
-import { describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
+import type { LightClawConfig } from '../config.js'
+import { setLightclawHomeOverride } from '../paths.js'
+import { RlaunchRuntime } from './index.js'
+import { setUserRlaunchMount } from './rlaunch-mounts.js'
 import {
   parseBrainctlProcessList,
+  RuntimePool,
   selectRlaunchOrphans,
   type ClusterRlaunchProcess,
 } from './pool.js'
@@ -177,5 +185,132 @@ describe('selectRlaunchOrphans', () => {
       trackedNamesByUser: new Map(),
     })
     assert.deepEqual(orphans, [])
+  })
+})
+
+describe('RuntimePool.refreshRlaunchRuntimeForUser', () => {
+  let tmpHome = ''
+  let gpfsRoot = ''
+  let savedWorkspaceRoot: string | undefined
+
+  before(() => {
+    savedWorkspaceRoot = process.env.LIGHTCLAW_WORKSPACE_ROOT
+  })
+  after(() => {
+    if (savedWorkspaceRoot === undefined) {
+      delete process.env.LIGHTCLAW_WORKSPACE_ROOT
+    } else {
+      process.env.LIGHTCLAW_WORKSPACE_ROOT = savedWorkspaceRoot
+    }
+  })
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-pool-refresh-'))
+    gpfsRoot = path.join(tmpHome, 'gpfs')
+    mkdirSync(gpfsRoot, { recursive: true })
+    setLightclawHomeOverride(tmpHome)
+    // buildRlaunchRuntimeConfig resolves the workspace gpfs mount from
+    // workspaceFor(), which reads LIGHTCLAW_WORKSPACE_ROOT — point it under
+    // the gpfs host prefix declared in clusterConfig().
+    process.env.LIGHTCLAW_WORKSPACE_ROOT = path.join(gpfsRoot, 'workspaces')
+  })
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  function clusterConfig(): LightClawConfig {
+    return {
+      runtime: {
+        backend: 'cluster',
+        driver: 'brainpp',
+        maxConcurrentIoBytesMb: 3072,
+        maxRelayBytesMb: 4,
+        network: {
+          mode: 'isolated',
+          proxy: '',
+          noProxy: [],
+          port: 18080,
+          bindHost: '0.0.0.0',
+          acl: [],
+        },
+        dockerSettings: {
+          idleTimeoutMs: 1_800_000,
+          memoryLimit: '4g',
+          cpuLimit: 4,
+          network: 'bridge',
+          mounts: [],
+          tmpfs: [],
+          env: {},
+          autoPull: true,
+        },
+        clusterSettings: {
+          image: 'registry/x:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          cpu: 8,
+          memoryMb: 16000,
+          gpu: 0,
+          privateMachine: 'group',
+          positiveTags: [],
+          gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
+          imagePullPolicy: 'IfNotPresent',
+          maxWaitDuration: '5m',
+          workerGcTimeHours: 24,
+          predictBeforeStart: true,
+          healthCheckIntervalMs: 300_000,
+          preheatOnStartup: true,
+          preheatOnApproval: true,
+          env: {},
+        },
+      },
+    } as unknown as LightClawConfig
+  }
+
+  it('swaps a cached runtime built from a pre-downgrade mount store', () => {
+    const dataPath = path.join(gpfsRoot, 'data')
+    mkdirSync(dataPath, { recursive: true })
+    // Pre-cluster-update view: the daemon can see the mount (shared/rw).
+    setUserRlaunchMount('alice', dataPath, 'rw')
+
+    const config = clusterConfig()
+    const pool = new RuntimePool()
+    const workspace = path.join(gpfsRoot, 'workspaces', 'alice')
+    const stale = pool.acquire('alice', config, workspace)
+    assert.ok(stale instanceof RlaunchRuntime)
+    const staleEntry = stale.paths.mountTable.find(m => m.host === dataPath)
+    assert.equal(staleEntry?.mode, 'rw')
+    assert.notEqual(staleEntry?.daemonVisible, false)
+
+    // Cluster update: the daemon lost the path; the startup re-probe confirms
+    // the downgrade and rewrites the store. acquire() still serves the stale
+    // instance (cache hit checks only the backend kind).
+    setUserRlaunchMount('alice', dataPath, 'ro', 'worker-only')
+    assert.equal(pool.acquire('alice', config, workspace), stale)
+
+    assert.equal(pool.refreshRlaunchRuntimeForUser('alice', config), true)
+    const fresh = pool.acquire('alice', config, workspace)
+    assert.ok(fresh instanceof RlaunchRuntime)
+    assert.notEqual(fresh, stale)
+    const freshEntry = fresh.paths.mountTable.find(m => m.host === dataPath)
+    assert.equal(freshEntry?.mode, 'ro')
+    assert.equal(freshEntry?.daemonVisible, false)
+
+    // The stale instance is retired and forwards to the successor, so a
+    // concurrent ALS reference enforces the corrected mount semantics.
+    assert.equal(stale.paths, fresh.paths)
+
+    // Unchanged identity is a no-op — a healthy worker is never churned.
+    assert.equal(pool.refreshRlaunchRuntimeForUser('alice', config), false)
+    assert.equal(pool.acquire('alice', config, workspace), fresh)
+  })
+
+  it('no-ops when nothing is cached or the backend is not cluster', () => {
+    const config = clusterConfig()
+    const pool = new RuntimePool()
+    assert.equal(pool.refreshRlaunchRuntimeForUser('alice', config), false)
+
+    const local = { ...config, runtime: { ...config.runtime, backend: 'local' } } as LightClawConfig
+    assert.equal(pool.refreshRlaunchRuntimeForUser('alice', local), false)
   })
 })

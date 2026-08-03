@@ -320,6 +320,22 @@ export class RlaunchRuntime implements Runtime {
     return this.workerName
   }
 
+  /** Host-side workspace path this instance was built with. The pool reads it
+   *  to rebuild the runtime with the same identity inputs after a mount-store
+   *  rewrite (`refreshRlaunchRuntimeForUser`). Deliberately NOT forwarded to a
+   *  successor — it describes THIS instance's build inputs. */
+  get workspaceHostPath(): string {
+    return this.cfg.workspaceHostPath
+  }
+
+  /** Mount-aware deployment identity (workspace gpfs mount + extra-mount
+   *  fingerprint folded in by buildRlaunchRuntimeConfig). Two instances with
+   *  equal hashes were built from the same mount view. Not forwarded — same
+   *  rationale as `workspaceHostPath`. */
+  get deploymentHash(): string {
+    return this.cfg.deploymentHash
+  }
+
   /** The worker name is the generation token: it is freshly allocated on every
    *  spawn (respawn after worker-lost, health-checker restart, or /system mount swap),
    *  so a change signals that the worker pod — and its container-local /tmp,

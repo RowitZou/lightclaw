@@ -183,7 +183,19 @@ async function refreshAllRlaunchMountAccess(): Promise<void> {
       const result = await refreshUserRlaunchMountAccess(userId)
       if (result.changed > 0) corrected += 1
       if (result.downgradeConfirmation) {
-        void result.downgradeConfirmation.catch(error => {
+        void result.downgradeConfirmation.then(({ changed: downgraded }) => {
+          if (downgraded === 0) return
+          // Preheat and early inbound messages run inside the confirmation
+          // window and may have cached a runtime built from the pre-downgrade
+          // store. Swap it onto the corrected store now — a stale instance
+          // fails assertMountsAccessible on every start (preheat, health
+          // restart, user acquire) until the next daemon restart.
+          if (getRuntimePool().refreshRlaunchRuntimeForUser(userId, getConfig())) {
+            process.stderr.write(
+              `[rlaunch-mount-refresh] ${userId}: rebuilt cached runtime onto the downgraded mount table\n`,
+            )
+          }
+        }).catch(error => {
           const detail = error instanceof Error ? error.message : String(error)
           process.stderr.write(`[rlaunch-mount-refresh] ${userId}: downgrade confirmation failed: ${detail}\n`)
         })
