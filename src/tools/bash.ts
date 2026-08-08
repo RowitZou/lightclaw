@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { launchBackgroundJob } from '../background-exec/launcher.js'
 import { suggestBashRules } from '../permission/suggestions.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import {
   getCurrentEnabledSecrets,
   getCurrentRole,
@@ -9,6 +10,13 @@ import {
   getSessionId,
 } from '../state.js'
 import { buildTool } from '../tool.js'
+import {
+  buildCwdProbePath,
+  collectCwdProbe,
+  resolveTrackedCwd,
+  updateTrackedCwd,
+  wrapCommandWithCwdProbe,
+} from './bash-cwd.js'
 
 const MAX_OUTPUT_CHARS = 30000
 const MAX_TIMEOUT_SECONDS = 300
@@ -66,11 +74,21 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
       ? Object.fromEntries(enabledSecrets)
       : undefined
 
+    // Cwd persistence (see bash-cwd.ts): outside a session scope the tool
+    // degrades to the historical stateless behavior.
+    const sessionId = getCurrentSessionContext()?.sessionId
+    const workspaceRoot = context.runtime.workspaceRoot
+    const trackedCwd = sessionId
+      ? await resolveTrackedCwd(sessionId, workspaceRoot)
+      : workspaceRoot
+
     if (input.run_in_background) {
       const meta = await launchBackgroundJob({
         runtime: context.runtime,
         command: input.command,
-        cwd: context.runtime.workspaceRoot,
+        // Background jobs launch from the tracked cwd but never update it —
+        // they finish asynchronously, so a writeback would race later calls.
+        cwd: trackedCwd,
         canonicalUser: getCurrentUserId() ?? 'terminal',
         sessionId: getSessionId(),
         roleId: getCurrentRole()?.agentType,
@@ -87,14 +105,33 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
 
     const timeoutMs = Math.min(input.timeout ?? 30, MAX_TIMEOUT_SECONDS) * 1000
 
+    const probeFile = sessionId
+      ? buildCwdProbePath(workspaceRoot, getCurrentUserId())
+      : null
+    const command = probeFile
+      ? wrapCommandWithCwdProbe({
+          command: input.command,
+          cwd: trackedCwd,
+          workspaceRoot,
+          probeFile,
+        })
+      : input.command
+
     const result = await context.runtime.exec({
-      command: input.command,
-      cwd: context.runtime.workspaceRoot,
+      command,
+      cwd: workspaceRoot,
       timeoutMs,
       maxBufferBytes: 1024 * 1024,
       abortSignal: context.abortSignal,
       env,
     })
+
+    if (sessionId && probeFile) {
+      const newCwd = await collectCwdProbe(context.runtime, probeFile)
+      if (newCwd && newCwd !== trackedCwd) {
+        await updateTrackedCwd(sessionId, newCwd)
+      }
+    }
 
     if (result.exitCode === 0) {
       return {

@@ -208,6 +208,12 @@ export type SessionMeta = {
   compactionCount: number
   lastExtractedAt?: number
   sessionMemoryUpdatedAt?: number
+  /**
+   * Working directory the Bash tool's next command starts from, recorded by
+   * the post-command `pwd -P` probe (see src/tools/bash-cwd.ts). Absent until
+   * a command actually changes directory away from the workspace root.
+   */
+  bashCwd?: string
   todos?: TodoItem[]
   permissionMode?: import('./permission/types.js').PermissionMode
   userId?: string
