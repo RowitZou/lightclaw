@@ -555,8 +555,12 @@ async function addAdminEndpoint(
   }
 
   // openai | anthropic: the raw key is stored directly in the admin endpoint
-  // (admin config.json is host-only). Probe + gate BEFORE persisting.
-  const endpoint: Record<string, unknown> = { apiKey: parsed.key }
+  // (admin config.json is host-only). The wire-protocol family is recorded as
+  // `type` so `backend add` can derive the model schema — pre-fix admin
+  // endpoints dropped it, silently deriving `openai` for a `--type anthropic`
+  // add (mirrors /config's per-user endpoint shape). Probe + gate BEFORE
+  // persisting.
+  const endpoint: Record<string, unknown> = { type: parsed.type, apiKey: parsed.key }
   if (parsed.baseUrl) endpoint.baseUrl = parsed.baseUrl
   if (parsed.proxy) endpoint.proxy = parsed.proxy
   const probe = await probeEndpointModels({
@@ -710,10 +714,10 @@ function removeAdminEndpoint(
 //
 // Same shapes as /config backend (B3) but writing the ADMIN model registry +
 // deployment defaultModel. The model schema is derived from the referenced
-// endpoint's shape (auth → openai-auth; apiKey → openai unless an explicit
-// type is recorded — admin endpoints don't carry a `type` field, so apiKey
-// endpoints derive `openai`; admin can override the schema only via direct
-// config.json edit, consistent with B3's apiKey-endpoint default).
+// endpoint's shape (auth → codex; apiKey → the endpoint's recorded `type`,
+// mirroring B3's schemaForEndpoint). Endpoints persisted before `type` was
+// recorded (pre endpoint-type fix) lack the field and derive `openai`; re-add
+// the endpoint or edit config.json to retrofit them.
 
 async function runAdminBackend(
   parts: string[],

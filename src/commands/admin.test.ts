@@ -73,6 +73,11 @@ describe('/admin endpoint add (system-scope write-back)', () => {
     const persisted = readConfig()
     const endpoints = persisted.endpoints as Record<string, { apiKey?: string; type?: string }>
     assert.equal(endpoints.ep!.apiKey, 'K')
+    // The wire-protocol family must be persisted: `backend add` derives the
+    // model schema from it, and the result card renders it. Pre-fix the admin
+    // add path dropped `type`, silently deriving `openai` for anthropic adds.
+    assert.equal(endpoints.ep!.type, 'anthropic')
+    assert.match(out, /type=anthropic/)
     // Live config refreshed without restart: resolveEndpoints drops `type` and
     // keeps apiKey — the live endpoint must reflect the new alias.
     assert.ok(cfg.endpoints['ep'], 'live config endpoints should include the new alias')
@@ -249,6 +254,22 @@ describe('/admin backend add (system-scope write-back)', () => {
     await runAdminCommand('backend add m --endpoint ep --reasoning high', { config: liveConfig(), userId: 'admin' })
     const models = readConfig().models as Record<string, { reasoningEffort?: string }>
     assert.equal(models.m!.reasoningEffort, 'high')
+  })
+
+  it('derives the anthropic schema from an endpoint added with --type anthropic', async () => {
+    const cfg = liveConfig()
+    await runAdminCommand('endpoint add ep --type anthropic --key K --base-url https://x', {
+      config: cfg,
+      userId: 'admin',
+    })
+    const out = await runAdminCommand('backend add m --endpoint ep --upstream glm-x', {
+      config: cfg,
+      userId: 'admin',
+    })
+    assert.match(out, /Added model "m"/)
+    const models = readConfig().models as Record<string, { schema?: string; upstreamModel?: string }>
+    assert.equal(models.m!.schema, 'anthropic')
+    assert.equal(models.m!.upstreamModel, 'glm-x')
   })
 
   it('rejects backend add referencing a missing endpoint (no write)', async () => {
