@@ -15,7 +15,7 @@ import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
 import { lightclawHome } from './paths.js'
 import { userSessionsRoot, workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
-import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
+import { getAdmin, getIdentity, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
 import { loadEnabledSecrets } from './secrets/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
@@ -272,10 +272,20 @@ async function runRlaunchStartupPreheat(
   const idleTtlDays = config.runtime.clusterSettings.preheatIdleTtlDays
   if (idleTtlDays > 0) {
     const cutoffMs = Date.now() - idleTtlDays * 24 * 60 * 60 * 1000
+    // Fallback for users with no sessions at all: the identity pairing time.
+    // A just-approved user bounced pre-session (e.g. no model configured yet)
+    // has zero session activity but is the OPPOSITE of dormant — without the
+    // fallback an update-restart right after approval drops them from preheat
+    // and their first task pays the on-demand cold start.
     const { active, idle } = await partitionUsersBySessionActivity(
       users,
       cutoffMs,
       userSessionsRoot,
+      async user => {
+        const createdAt = (await getIdentity(user))?.createdAt
+        const pairedAtMs = createdAt ? Date.parse(createdAt) : NaN
+        return Number.isFinite(pairedAtMs) ? pairedAtMs : null
+      },
     )
     if (idle.length > 0) {
       process.stderr.write(

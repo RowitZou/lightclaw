@@ -146,6 +146,11 @@ export class RlaunchRuntime implements Runtime {
   private workerName: string | null = null
   private lastKnownState: ProcessState = 'unknown'
   private inflightStart: Promise<void> | null = null
+  /** Single-flight guard for the isAvailable() on-demand start kick. Distinct
+   *  from `inflightStart` (which dedups inside start() itself): this one also
+   *  covers the fire-and-forget catch/finally wrapper so repeated
+   *  availability probes never stack error handlers. */
+  private onDemandStart: Promise<void> | null = null
   /** Set to true via `markRetired()` when this runtime has been swapped out
    *  of `RuntimePool` (typically by /system mount applying a new mount config). The
    *  resolver, when set, returns the user's current pool entry — almost
@@ -483,6 +488,33 @@ export class RlaunchRuntime implements Runtime {
     const snap = this.tracker.snapshot()
     if (snap.state === 'ready') return { ok: true }
     if (snap.state === 'scheduling' || snap.state === 'not-attempted') {
+      // On-demand start. The environment-domain tool gate consults
+      // isAvailable() BEFORE tool.call(), so the exec / data-plane
+      // ensureRunning() start path is unreachable while we report
+      // unavailable — for a runtime nobody else started (user skipped by
+      // the preheat idle exemption, then daemon restart dropped their
+      // worker), every tool call reported "preparing (已 0 秒)" forever and
+      // only the periodic WorkerHealthChecker (5 min) eventually spawned a
+      // worker (2026-08-08 prod: guitao's first task stalled 4 minutes).
+      // Kick start() here so the first availability probe becomes the start
+      // driver: the tracker enters 'scheduling' (elapsed starts counting)
+      // and the next probes see real progress. Guarded to 'not-attempted'
+      // with no worker — a scheduling/spawned worker needs no kick — and
+      // single-flight so concurrent probes / repeated tool calls don't
+      // stack; a start that failed BEFORE startSchedule (mount probe) lands
+      // back at 'not-attempted' and the next probe retries, loudly.
+      if (snap.state === 'not-attempted' && !this.workerName && !this.onDemandStart) {
+        this.onDemandStart = this.start('on-demand tool call while worker not started')
+          .catch(error => {
+            process.stderr.write(
+              `[rlaunch] on-demand start for ${this.cfg.canonicalUser} failed: ` +
+              `${error instanceof Error ? error.message : String(error)}\n`,
+            )
+          })
+          .finally(() => {
+            this.onDemandStart = null
+          })
+      }
       const elapsed = snap.scheduleDurationMs ? Math.round(snap.scheduleDurationMs / 1000) : 0
       return {
         ok: false,

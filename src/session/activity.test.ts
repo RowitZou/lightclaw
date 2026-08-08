@@ -75,6 +75,50 @@ describe('partitionUsersBySessionActivity', () => {
     assert.deepEqual(idle, ['stale-user', 'zero-usage-user'])
   })
 
+  // Pairing-time fallback (2026-08-08): a just-approved user with zero
+  // sessions (bounced pre-session, then daemon restarted) must not be
+  // classified dormant — the fallback timestamp reclaims them.
+  it('reclaims a no-session user whose fallback timestamp is within the cutoff', async () => {
+    writeMeta('stale-user', 'dm-1', 1000)
+    const { active, idle } = await partitionUsersBySessionActivity(
+      ['stale-user', 'just-paired', 'old-ghost'],
+      3000,
+      sessionsDirFor,
+      async user => (user === 'just-paired' ? 5000 : user === 'old-ghost' ? 1000 : null),
+    )
+    assert.deepEqual(active, ['just-paired'])
+    assert.deepEqual(idle, ['stale-user', 'old-ghost'])
+  })
+
+  it('fallback is not consulted for users with fresh session activity', async () => {
+    writeMeta('active-user', 'dm-1', 5000)
+    const consulted: string[] = []
+    const { active } = await partitionUsersBySessionActivity(
+      ['active-user'],
+      3000,
+      sessionsDirFor,
+      async user => {
+        consulted.push(user)
+        return null
+      },
+    )
+    assert.deepEqual(active, ['active-user'])
+    assert.deepEqual(consulted, [])
+  })
+
+  it('fails open: a fallback resolver error keeps the user in the active set', async () => {
+    const { active, idle } = await partitionUsersBySessionActivity(
+      ['zero-usage-user'],
+      3000,
+      sessionsDirFor,
+      async () => {
+        throw new Error('identity store unreadable')
+      },
+    )
+    assert.deepEqual(active, ['zero-usage-user'])
+    assert.deepEqual(idle, [])
+  })
+
   it('fails open: a scan error keeps the user in the active set', async () => {
     const { active, idle } = await partitionUsersBySessionActivity(
       ['boom'],

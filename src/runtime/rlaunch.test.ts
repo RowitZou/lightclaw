@@ -1018,6 +1018,7 @@ describe('RlaunchRuntime isAvailable retryable mapping', () => {
   let hostRoot: string
   let runtime: RlaunchRuntime
   let tracker: WorkerReadinessTracker
+  let startCalls: string[]
 
   beforeEach(() => {
     hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-avail-test-'))
@@ -1045,11 +1046,24 @@ describe('RlaunchRuntime isAvailable retryable mapping', () => {
     }
     tracker = new WorkerReadinessTracker('alice')
     runtime = new RlaunchRuntime(config, tracker)
+    // isAvailable()'s not-attempted branch kicks the real start() on demand —
+    // which on a dev box with the rlaunch CLI installed would REALLY submit a
+    // cluster worker. Default stub records trigger reasons and transitions
+    // nothing; tests needing custom start behavior re-stub per-test.
+    startCalls = []
+    ;(runtime as unknown as { start: (reason?: string) => Promise<void> }).start =
+      async (reason?: string) => {
+        startCalls.push(reason ?? '')
+      }
   })
 
   afterEach(() => {
     rmSync(hostRoot, { recursive: true, force: true })
   })
+
+  function onDemandStartOf(rt: RlaunchRuntime): Promise<void> | null {
+    return (rt as unknown as { onDemandStart: Promise<void> | null }).onDemandStart
+  }
 
   it('worker-scheduling is retryable + body has no absolute-negation phrasing', async () => {
     tracker.startSchedule('registry/x:tag')
@@ -1095,6 +1109,52 @@ describe('RlaunchRuntime isAvailable retryable mapping', () => {
     if (avail.ok) return
     assert.equal(avail.reason, 'worker-failed')
     assert.equal(avail.retryable, false)
+  })
+
+  // On-demand start kick (2026-08-08): the environment tool gate consults
+  // isAvailable() BEFORE tool.call(), so for a runtime nobody preheated the
+  // exec-path ensureRunning() start driver is unreachable — without the kick,
+  // every probe reported "preparing (已 0 秒)" until the 5-min health checker
+  // swept (guitao's 4-minute prod stall).
+  it('not-attempted with no worker kicks an on-demand start', async () => {
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-scheduling')
+    await onDemandStartOf(runtime)
+    assert.equal(startCalls.length, 1)
+    assert.match(startCalls[0]!, /on-demand/)
+  })
+
+  it('does not kick when the tracker is already scheduling', async () => {
+    tracker.startSchedule('registry/x:tag')
+    await runtime.isAvailable()
+    await onDemandStartOf(runtime)
+    assert.equal(startCalls.length, 0)
+  })
+
+  it('kicks start only once across concurrent probes', async () => {
+    let calls = 0
+    ;(runtime as unknown as { start: () => Promise<void> }).start = () => {
+      calls += 1
+      return new Promise<void>(() => {})
+    }
+    await runtime.isAvailable()
+    await runtime.isAvailable()
+    assert.equal(calls, 1)
+  })
+
+  it('re-kicks on the next probe after a failed start left state not-attempted', async () => {
+    let calls = 0
+    ;(runtime as unknown as { start: () => Promise<void> }).start = async () => {
+      calls += 1
+      throw new Error('mount probe failed')
+    }
+    await runtime.isAvailable()
+    await onDemandStartOf(runtime)
+    await runtime.isAvailable()
+    await onDemandStartOf(runtime)
+    assert.equal(calls, 2)
   })
 })
 
