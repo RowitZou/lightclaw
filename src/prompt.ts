@@ -32,6 +32,7 @@ import {
 } from './skill/role-validation.js'
 import { DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER } from './skill/dispatch-brief.js'
 import type { SkillMeta } from './skill/types.js'
+import { workspaceFor, workspaceToGpfsMount } from './identity/paths.js'
 import { loadUserRlaunchMounts } from './runtime/rlaunch-mounts.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
@@ -635,6 +636,7 @@ function formatEnvironmentSection(
     '# Environment Info',
     '',
     `Workspace directory: ${environmentRoot}`,
+    ...formatWorkspaceHostPathLines(config),
   ]
   // Scratch guidance is only rendered for roles that can run Bash — the
   // roles that actually do git / build / archive work. A role without Bash
@@ -661,6 +663,48 @@ function formatEnvironmentSection(
     `Model: ${resolveRoleModel(role, config)}`,
   )
   return lines.join('\n')
+}
+
+// On sandboxed backends the workspace directory is the sandbox's private name
+// for storage that really lives elsewhere, and the agent has no way to observe
+// that real location from inside (the mount source is an opaque tag).
+// Surfacing it lets the agent reference its workspace from anything that runs
+// outside the sandbox — cluster job specs, mount configs — without asking the
+// user to dig the path up. Cluster surfaces the gpfs form only (that is the
+// form cluster-side configs consume); docker surfaces the host path (its
+// outside-world form). The local backend skips the line: there the workspace
+// directory IS the host path.
+function formatWorkspaceHostPathLines(config: LightClawConfig): string[] {
+  const backend = config.runtime?.backend
+  const userId = getCurrentUserId()
+  if (!userId) return []
+  if (backend === 'cluster') {
+    let gpfs: { hostPath: string; mount: string }
+    try {
+      gpfs = workspaceToGpfsMount(userId, config.runtime.clusterSettings)
+    } catch {
+      // Workspace not under a configured gpfs prefix (or no gpfsMounts rules):
+      // the runtime cannot start a worker in this state anyway, so there is no
+      // real location to report — render the prompt without the line rather
+      // than fail the whole build.
+      return []
+    }
+    const uri = gpfs.mount.slice(0, gpfs.mount.lastIndexOf(':'))
+    return [
+      `Workspace gpfs path: ${uri} — what the workspace directory actually ` +
+      `points to on the cluster's shared storage. Cluster job specs and mount ` +
+      `configs that run outside this sandbox reach workspace files only through ` +
+      `this gpfs path; the workspace directory name above is meaningful only here.`,
+    ]
+  }
+  if (backend === 'docker') {
+    return [
+      `Workspace host path: ${workspaceFor(userId)} — the same directory as seen ` +
+      `from the host machine; use it when something outside this container needs ` +
+      `to reference workspace files.`,
+    ]
+  }
+  return []
 }
 
 // Paths mounted into the sandbox beyond the workspace, with the access each one

@@ -112,3 +112,52 @@ test('no Mounted paths block when there are no extra mounts', async () => {
   const clusterNoMounts = baseConfig({ backend: 'cluster', clusterSettings: { cpu: 8, memoryMb: 16384, gpu: 0 } })
   assert.doesNotMatch(await renderEnv(clusterNoMounts, 'carol'), /Mounted paths:/)
 })
+
+test('cluster backend surfaces the workspace gpfs path (and not the host path)', async () => {
+  const prevRoot = process.env.LIGHTCLAW_WORKSPACE_ROOT
+  process.env.LIGHTCLAW_WORKSPACE_ROOT = '/mnt/shared-storage-gpfs2/some-share/workspaces'
+  try {
+    const config = baseConfig({
+      backend: 'cluster',
+      clusterSettings: {
+        cpu: 8,
+        memoryMb: 16384,
+        gpu: 0,
+        gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' }],
+      },
+    })
+    const prompt = await renderEnv(config, 'bob')
+    assert.match(prompt, /Workspace gpfs path: gpfs:\/\/gpfs2\/some-share\/workspaces\/bob /)
+    assert.doesNotMatch(prompt, /\/mnt\/shared-storage-gpfs2\/some-share\/workspaces\/bob/)
+  } finally {
+    if (prevRoot === undefined) delete process.env.LIGHTCLAW_WORKSPACE_ROOT
+    else process.env.LIGHTCLAW_WORKSPACE_ROOT = prevRoot
+  }
+})
+
+test('cluster backend omits the gpfs path line when the workspace is outside gpfs rules', async () => {
+  // Default test workspace root (under the tmp lightclaw home) matches no
+  // gpfs hostPrefix — the runtime cannot start a worker there either, so the
+  // prompt must render without the line instead of failing the build.
+  const config = baseConfig({
+    backend: 'cluster',
+    clusterSettings: {
+      cpu: 8,
+      memoryMb: 16384,
+      gpu: 0,
+      gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' }],
+    },
+  })
+  assert.doesNotMatch(await renderEnv(config, 'bob'), /Workspace gpfs path:/)
+})
+
+test('docker backend surfaces the workspace host path; local surfaces neither form', async () => {
+  const docker = baseConfig({ backend: 'docker', dockerSettings: { mounts: [] } })
+  const dockerPrompt = await renderEnv(docker, 'alice')
+  assert.match(dockerPrompt, /Workspace host path: .*alice.*workspace/)
+
+  const local = baseConfig({ backend: 'local' })
+  const localPrompt = await renderEnv(local, 'alice')
+  assert.doesNotMatch(localPrompt, /Workspace host path:/)
+  assert.doesNotMatch(localPrompt, /Workspace gpfs path:/)
+})
