@@ -30,6 +30,17 @@ import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
 const WATCHDOG_EVENT_KINDS = new Set(['watchdog-report', 'escalated'])
 
+// Events that never count as ledger STATE movement for fingerprinting / re-arm
+// purposes. Watchdog's own markers obviously don't; `progress` is narration —
+// and critically, the wake turn's own ack text lands on the root as a progress
+// event (routeSyntheticNarration), so counting it churned the fingerprint every
+// wake, defeating BOTH the reportReArmMs dedup and the same-fingerprint
+// escalation budget: an idle-root goal woke main every poll cycle forever
+// (2026-08-13 prod: 18 acks in 32min on one parked root). A disposition that
+// actually moves the ledger (waiting / cancelled / delivered / resumed / ...)
+// still changes the fingerprint and re-arms reporting.
+const NON_STATE_EVENT_KINDS = new Set([...WATCHDOG_EVENT_KINDS, 'progress'])
+
 export type TaskRunWatchdogFindingKind =
   | 'stranded'
   | 'unsettled-delivered'
@@ -880,7 +891,7 @@ export function formatTaskRunReconcileBlock(
     guidance.push('- deliberately put on hold a while ago and not resumed since → this is a pending decision, not a stall: resume it (message it) if it should continue, or cancel it if it is moot. If it was stopped on the user\'s instruction (reason=user-stop), do not silently restart it — get the user\'s explicit go-ahead first through a question they will actually see (AskUserQuestion, or a no-`to` Message if you do not have it), not a plain reply.')
   }
   if (kinds.has('idle-root')) {
-    guidance.push('- an open goal with nothing moving under it → this goal is yours: dispatch its next stage, or close it (TaskUpdate deliver on its root) if it is actually done — or tell the user why it is parked.')
+    guidance.push('- an open goal with nothing moving under it → this goal is yours: dispatch its next stage, close it (TaskUpdate deliver on its root) if it is actually done, or — if it should pause (e.g. the user asked to) — park it with TaskUpdate { action:\'wait\', runId: <its root runId> } so it stays quiet until you dispatch under it again. A plain reply is not a disposition; only these three move the ledger.')
   }
   guidance.push('Settling these is what unblocks everything that depends on them. If an item repeats here, your last disposition did not move it — change the disposition rather than waiting for it to clear itself.')
   if (options.escalation) {
@@ -1241,13 +1252,13 @@ function latestEscalatedEvent(
 }
 
 function hasStateEventAfter(events: TaskRunEvent[], ts: number): boolean {
-  return events.some(event => !WATCHDOG_EVENT_KINDS.has(event.kind) && event.ts > ts)
+  return events.some(event => !NON_STATE_EVENT_KINDS.has(event.kind) && event.ts > ts)
 }
 
 function lastStateEventSeqFor(events: TaskRunEvent[]): number {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index]
-    if (!WATCHDOG_EVENT_KINDS.has(event.kind)) {
+    if (!NON_STATE_EVENT_KINDS.has(event.kind)) {
       return event.seq
     }
   }

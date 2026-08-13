@@ -10,6 +10,7 @@ import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   acceptTaskRun,
+  appendCheckpoint,
   appendEvent,
   appendProgress,
   createRootTaskRun,
@@ -633,7 +634,11 @@ describe('TaskRun watchdog', () => {
       assert.equal(second.deduped, true)
       assert.equal(delivered.length, 1)
 
-      await appendProgress(child.id, { label: 'post-report breadcrumb' }, 500, 'alice')
+      // Ledger movement re-arms reporting. This must be a STATE event
+      // (checkpoint here); `progress` narration deliberately does NOT count
+      // since 2026-08-13 — the wake ack itself lands as progress and used to
+      // re-arm the very report it answered (see the ack-narration test below).
+      await appendCheckpoint(child.id, 'post-report state movement', 500, 'alice')
       const third = await reconcileTaskRunsOnce('alice', {
         now: 10_000,
         deliveredGraceMs: 1,
@@ -651,7 +656,48 @@ describe('TaskRun watchdog', () => {
     }
   })
 
-  it('escalates after repeated reports for the same root fingerprint and resets after progress', async () => {
+  it('the wake ack narration (a progress event) does not re-arm reporting', async () => {
+    // 2026-08-13 prod loop: an idle-root wake's own answer — main's ack text —
+    // lands on the root as a `progress` event via routeSyntheticNarration.
+    // Counting progress as a state event churned the fingerprint every wake,
+    // so the reportReArmMs dedup never matched and the same-fingerprint
+    // escalation budget never accumulated: 18 wakes in 32 minutes on one
+    // parked goal, each burning a full main turn. Narration must not re-arm
+    // the report it answered.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-ack-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Paused goal.',
+        title: 'Paused goal',
+        now: 100_000,
+      })
+      const first = await reconcileTaskRunsOnce('alice', {
+        now: 200_000,
+        rootIdleGraceMs: 1_000,
+        reportFindings: async () => ({ ok: true, mode: 'queued' }),
+      })
+      assert.equal(first.reported, true)
+      assert.deepEqual(first.findings.map(finding => finding.kind), ['idle-root'])
+
+      // The wake turn answers with a plain reply; it lands as root narration.
+      await appendProgress(root.id, { label: '用户已要求暂停，等用户续跑指令。' }, 210_000, 'alice')
+
+      const second = await reconcileTaskRunsOnce('alice', {
+        now: 220_000,
+        rootIdleGraceMs: 1_000,
+        reportFindings: async () => ({ ok: true, mode: 'queued' }),
+      })
+      assert.equal(second.reported, false)
+      assert.equal(second.deduped, true)
+      assert.equal(second.fingerprint, first.fingerprint)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('escalates after repeated reports for the same root fingerprint and resets after state movement', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-budget-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -736,7 +782,7 @@ describe('TaskRun watchdog', () => {
       assert.equal(reports, 0)
       assert.equal(escalations, 1)
 
-      await appendProgress(child.id, { label: 'state moved' }, 10_005, 'alice')
+      await appendCheckpoint(child.id, 'state moved', 10_005, 'alice')
       const resumed = await reconcileTaskRunsOnce('alice', {
         now: 10_006,
         deliveredGraceMs: 1,

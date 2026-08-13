@@ -32,6 +32,55 @@ function collectSubtreeIds(runs: TaskRunMeta[], rootIds: Set<string>): Set<strin
   return subtreeIds
 }
 
+export type HoldRootResult =
+  | { ok: true; heldRunIds: string[]; abortedSessionIds: string[] }
+  | { ok: false; reason: 'not-found' | 'not-a-root' | 'terminal' | 'already-waiting'; status?: TaskRunMeta['status'] }
+
+/** Park one goal root's whole subtree as waiting{requester-hold} — the
+ *  orchestrator-initiated mirror of /stop's per-chat user-stop park, scoped to
+ *  a single root. Running/blocked runs in the tree get their sessions aborted
+ *  and land waiting; queued children stay queued (same as /stop). The root
+ *  itself is typically `running` with no session (a goal container), which
+ *  markWaiting parks directly. No stop notice: the caller performed the hold
+ *  through a tool call and reads the result inline. */
+export async function holdRootTaskRun(
+  ownerCanonicalUser: string,
+  rootRunId: string,
+  bySessionId: string | undefined,
+  now = Date.now(),
+): Promise<HoldRootResult> {
+  const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  const root = runs.find(run => run.id === rootRunId)
+  if (!root) return { ok: false, reason: 'not-found' }
+  if (!isRoot(root)) return { ok: false, reason: 'not-a-root', status: root.status }
+  if (isTerminal(root.status)) return { ok: false, reason: 'terminal', status: root.status }
+  if (root.status === 'waiting') return { ok: false, reason: 'already-waiting', status: root.status }
+  const subtreeIds = collectSubtreeIds(runs, new Set([rootRunId]))
+  const heldRunIds: string[] = []
+  const abortedSessionIds: string[] = []
+  for (const run of runs) {
+    if (!subtreeIds.has(run.id)) continue
+    if (run.status !== 'running' && run.status !== 'blocked') continue
+    if (run.currentSessionId && abortInFlightForSession(run.currentSessionId)) {
+      abortedSessionIds.push(run.currentSessionId)
+    }
+    const waiting = await markWaiting(
+      run.id,
+      { reason: 'requester-hold', ...(bySessionId ? { bySessionId } : {}) },
+      now,
+      ownerCanonicalUser,
+    )
+    if (waiting?.status === 'waiting') {
+      heldRunIds.push(waiting.id)
+    }
+  }
+  return {
+    ok: true,
+    heldRunIds: [...new Set(heldRunIds)].sort(),
+    abortedSessionIds: [...new Set(abortedSessionIds)].sort(),
+  }
+}
+
 export async function stopActiveTaskRunsForSession(
   ownerCanonicalUser: string,
   chatSessionId: string,

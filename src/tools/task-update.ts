@@ -20,6 +20,7 @@ import {
   rejectTaskRun,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
+import { holdRootTaskRun } from '../taskrun/stop.js'
 import { resolveBackingRun } from '../taskrun/resolve-run-id.js'
 import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, markConcludedRootThisTurn, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -31,7 +32,7 @@ const TASK_UPDATE_DESCRIPTION = [
   "action='deliver' — conclude a run you own. Without runId it targets your current run: records your outcome (ok, plus a one-line summary) and parks it at delivered, awaiting your requester's verdict. Your full result goes in your turn's final reply, not in summary — summary is just a short label. A goal root you opened closes directly instead — pass its runId; the close is refused with an itemized list while the root still has open obligations. Settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
-  "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required): the last thing you do here — the task comes back to you when the wake fires. With runId, set a running direct child waiting.",
+  "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required): the last thing you do here — the task comes back to you when the wake fires. With runId, set a running direct child waiting; a goal root you opened parks instead (e.g. the user asked to pause it) and resumes when you dispatch its next stage.",
   "action='cancel' — cancel work you own by runId: your direct children, or any run inside goals you opened. Queued / waiting runs settle in place; running runs are stopped first; a recurring service's root runId takes the whole service down, schedule included. A dispatch entry id works here too and resolves to its backing run.",
 ].join('\n')
 
@@ -313,6 +314,27 @@ export const taskUpdateTool = buildTool({
       if (input.runId && !input.wake) {
         const target = await resolveBackingRun(owner, input.runId)
         if (!target) return { output: `TaskRun not found: ${input.runId}`, isError: true }
+        // A goal ROOT the orchestrator owns can be held even when idle: a root
+        // is a bookkeeping container (status 'running', no session), so the
+        // running-with-session gate below can never accept it — yet "the user
+        // asked to pause this goal" needs a recordable disposition, or the
+        // idle-root reconcile keeps re-surfacing the goal every sweep
+        // (2026-08-13 prod wake loop). The park mirrors /stop's semantics
+        // scoped to one root: subtree waiting{requester-hold}, exempt from
+        // idle-root, revived by the existing descendant-active reactivation
+        // when the next stage is dispatched.
+        if (isOrchestrator && (target.kind ?? 'dispatch') === 'root') {
+          const held = await holdRootTaskRun(owner, target.id, getSessionId())
+          if (!held.ok) {
+            const detail = held.reason === 'already-waiting'
+              ? `TaskRun ${target.id} is already waiting.`
+              : `TaskRun ${target.id} is ${held.status ?? held.reason}, not holdable.`
+            return { output: detail, isError: true }
+          }
+          return {
+            output: `${JSON.stringify({ runId: target.id, status: 'waiting', reason: 'requester-hold', heldRunIds: held.heldRunIds })}\nGoal parked. It stays quiet until you dispatch its next stage under it (which resumes it), or close / cancel it.`,
+          }
+        }
         if (target.status !== 'running' || !target.currentSessionId) {
           return { output: `TaskRun ${target.id} is ${target.status}, not a running run.`, isError: true }
         }

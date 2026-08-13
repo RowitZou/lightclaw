@@ -199,6 +199,52 @@ test('orchestrator wait on a running child WITHOUT a wake still holds it (reques
   assert.equal(meta?.waitReason, 'requester-hold')
 })
 
+test('orchestrator wake-less wait on an idle goal root parks the tree as requester-hold', async () => {
+  // 2026-08-13 prod: the user asked to pause a goal; the root is a bookkeeping
+  // container (status running, no session), so the running-with-session gate
+  // rejected every park attempt — the goal stayed `running` and the idle-root
+  // reconcile woke main every sweep, forever. A wake-less wait naming an owned
+  // goal root must park it (subtree requester-hold, /stop semantics scoped to
+  // one root) instead of erroring.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Pausable goal' })
+  const child = await startedRun({ callerRole: 'main', parentRunId: root.id })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'wait', runId: root.id }, toolContext()),
+  )
+
+  assert.equal(result.isError, undefined)
+  const rootMeta = await getTaskRun(root.id, 'alice')
+  assert.equal(rootMeta?.status, 'waiting')
+  assert.equal(rootMeta?.waitReason, 'requester-hold')
+  const childMeta = await getTaskRun(child.id, 'alice')
+  assert.equal(childMeta?.status, 'waiting')
+  assert.equal(childMeta?.waitReason, 'requester-hold')
+
+  // Idempotence: holding an already-held root is a clear error, not a re-park.
+  const again = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'wait', runId: root.id }, toolContext()),
+  )
+  assert.equal(again.isError, true)
+  assert.match(again.output, /already waiting/)
+})
+
+test('dispatching the next stage under a held root reactivates it (descendant-active resume)', async () => {
+  // The hold's resume path: the user says "continue", main dispatches the next
+  // stage under the goal — markStarted's ancestor reactivation must treat a
+  // requester-hold park exactly like a user-stop park, or the root stays
+  // frozen waiting under an actively working subtree.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Resumable goal' })
+  await runAsMain(() => taskUpdateTool.call({ action: 'wait', runId: root.id }, toolContext()))
+  assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'waiting')
+
+  const next = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  assert.equal((await getTaskRun(next.id, 'alice'))?.status, 'running')
+  const rootMeta = await getTaskRun(root.id, 'alice')
+  assert.equal(rootMeta?.status, 'running')
+  assert.equal(rootMeta?.waitReason, undefined)
+})
+
 test('worker accepts its own delivered child but not siblings or undelivered runs', async () => {
   const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
   const child = await startedRun({ callerRole: 'coder', parentRunId: workerRun.id })

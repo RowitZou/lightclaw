@@ -559,13 +559,17 @@ export async function markRebuilt(
  *  ancestor's user-stop is stale: nothing else will ever clear it, and the live
  *  task card stays frozen at "等待中" while its subtree actively works.
  *
- *  Walk up from the reactivated run and flip each `waiting{user-stop}` ancestor
- *  back to running, restoring its OWN lastSessionId (never the descendant's
- *  session — the root's session is its channel turn, a child's is a bg session;
- *  conflating them would mis-point a later /stop or cancel abort). Stop at the
- *  first ancestor waiting for any OTHER reason: it owns a legitimate wake (or a
- *  deliberate holder) and absorbs the subtree-active signal through its own
- *  path, so reaching past it would corrupt that wait. */
+ *  Walk up from the reactivated run and flip each `waiting{user-stop}` /
+ *  `waiting{requester-hold}` ancestor back to running, restoring its OWN
+ *  lastSessionId (never the descendant's session — the root's session is its
+ *  channel turn, a child's is a bg session; conflating them would mis-point a
+ *  later /stop or cancel abort). requester-hold joined 2026-08-13: an
+ *  orchestrator-held goal root (TaskUpdate wait on the root) is the same shape
+ *  of wake-less deliberate park, and dispatching the goal's next stage IS its
+ *  resume path — without reactivation the root stays waiting under a working
+ *  subtree. Stop at the first ancestor waiting for any OTHER reason: it owns a
+ *  legitimate wake and absorbs the subtree-active signal through its own path,
+ *  so reaching past it would corrupt that wait. */
 async function reactivateUserStoppedAncestors(
   run: TaskRunMeta,
   now: number,
@@ -576,7 +580,10 @@ async function reactivateUserStoppedAncestors(
   for (let hops = 0; parentId && hops < 64; hops++) {
     const ancestor = await getTaskRun(parentId, owner)
     if (!ancestor) break
-    if (ancestor.status !== 'waiting' || ancestor.waitReason !== 'user-stop') break
+    if (
+      ancestor.status !== 'waiting' ||
+      (ancestor.waitReason !== 'user-stop' && ancestor.waitReason !== 'requester-hold')
+    ) break
     const sessionId = ancestor.lastSessionId ?? ancestor.currentSessionId
     if (!sessionId) break
     await appendEvent(
@@ -739,6 +746,13 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       currentSessionId: event.sessionId,
       lastSessionId: event.sessionId,
       wake: consumeWake(next.wake),
+      // A running run holds no wait: leaving the prior park's reason/timestamp
+      // behind reads as "waiting" to anything that snapshots meta fields
+      // without re-checking status (every current consumer status-gates, but
+      // the stale pair was already a trap — surfaced by the requester-hold
+      // resume test, same residue existed for user-stop reactivation).
+      waitReason: undefined,
+      waitingAt: undefined,
     }
   }
   if (isRejectedEvent(event)) {
