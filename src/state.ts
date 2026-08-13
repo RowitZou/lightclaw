@@ -170,10 +170,14 @@ export function getResourceGrantTarget(): import('./session-context.js').Resourc
   return getCurrentSessionContext()?.resourceGrantTarget
 }
 
-/** TaskUpdate deliver marks the current handling as having concluded a run
- *  (a root closed / a run delivered). The channel runner reads this to send a
- *  synthetic-wake final block to chat. Tolerant + best-effort — never throw on
- *  a missing context (a routing-quality signal must not break the turn). */
+/** TaskUpdate marks the current handling as having taken a user-facing
+ *  disposition on a run — deliver (a root closed / a run delivered), accept
+ *  of a standing fire, or a requester-hold parking a goal root. The common
+ *  test: after this disposition the ball is in the user's court (a result to
+ *  read, a report to consume, or a held goal only the user can revive). The
+ *  channel runner reads this to send a synthetic-wake final block to chat.
+ *  Tolerant + best-effort — never throw on a missing context (a
+ *  routing-quality signal must not break the turn). */
 export function markConcludedRootThisTurn(): void {
   const ctx = getCurrentSessionContext()
   if (ctx) ctx.concludedRootThisTurn = true

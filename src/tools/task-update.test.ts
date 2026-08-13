@@ -229,6 +229,40 @@ test('orchestrator wake-less wait on an idle goal root parks the tree as request
   assert.match(again.output, /already waiting/)
 })
 
+test('parking a goal root flags concludedRoot so the hold announcement routes to chat', async () => {
+  // 2026-08-13 prod, the hold's missing half: main autonomously parked a goal
+  // (endpoint 502, "waiting for the user to confirm recovery") in a background
+  // wake — no user interjection, no deliver/accept — so the turn's final block
+  // folded onto the task card and the user never learned the ball was theirs.
+  // A requester-hold on a root is the one disposition after which NO further
+  // autonomous wake occurs until the user acts, so it must set the same
+  // user-facing disposition signal as deliver/accept.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Blocked goal' })
+
+  const flagged = await runAsMain(async () => {
+    assert.equal(didConcludeRootThisTurn(), false, 'no disposition before the hold')
+    const result = await taskUpdateTool.call({ action: 'wait', runId: root.id }, toolContext())
+    assert.equal(result.isError, undefined)
+    return didConcludeRootThisTurn()
+  })
+  assert.equal(flagged, true, 'parking a goal root is a user-facing disposition')
+})
+
+test('holding a running child does NOT flag concludedRoot', async () => {
+  // Pausing a runaway child is mid-task management: the root stays open, the
+  // system still owes the user a later report through the root close. Its
+  // narration folds onto the task card like any other intermediate step.
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Hold a child quietly' })
+  const child = await startedRun({ callerRole: 'main', parentRunId: root.id })
+
+  const flagged = await runAsMain(async () => {
+    const result = await taskUpdateTool.call({ action: 'wait', runId: child.id }, toolContext())
+    assert.equal(result.isError, undefined)
+    return didConcludeRootThisTurn()
+  })
+  assert.equal(flagged, false, 'a child hold is not a user-facing report')
+})
+
 test('dispatching the next stage under a held root reactivates it (descendant-active resume)', async () => {
   // The hold's resume path: the user says "continue", main dispatches the next
   // stage under the goal — markStarted's ancestor reactivation must treat a

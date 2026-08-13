@@ -447,10 +447,18 @@ export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
  *    `hadInterjection` signal, since such a wake drains as an interjection),
  *  - `hadInterjection` — this handling drained queued interjections (the agent
  *    is answering the user),
- *  - `concludedRoot` — this handling took a disposition on a run: a `TaskUpdate
- *    deliver` (close / incremental delivery) OR a `TaskUpdate accept` (settling
- *    a delivered run, including a standing service's auto-delivered per-fire
- *    result). Both mean "main acted on a result the user should hear about."
+ *  - `concludedRoot` — this handling took a USER-FACING disposition on a run:
+ *    a `TaskUpdate deliver` (close / incremental delivery), a `TaskUpdate
+ *    accept` (settling a delivered run, including a standing service's
+ *    auto-delivered per-fire result), or a `TaskUpdate wait` parking a goal
+ *    root (requester-hold). The common test: after the disposition the ball
+ *    is in the user's court — a result to read, a report to consume, or a
+ *    held goal that stays quiet (exempt from idle-root, no autonomous wake)
+ *    until the user acts. A held root's announcement carded instead of
+ *    chatted left the user unaware their input was the only way forward
+ *    (2026-08-13 prod: a 502-blocked goal parked from a background wake).
+ *    Holding a running CHILD does not qualify — the root stays open and
+ *    still owes its close-time report.
  * The disposition signal replaced a former `isConcludingWake` disk lookup that
  * routed to chat whenever the wake's root was a standing service OR already
  * terminal. That blanket was too loose: for a recurring service every wake

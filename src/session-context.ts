@@ -119,12 +119,14 @@ export type SessionContext = {
    *  the recall-root index so a later recall of that opener message can find
    *  the root TaskRun(s) it started and surface a withdrawal signal to main. */
   openerMessageId?: string
-  /** Transient per-handling flag: set when this turn-sequence concluded a
-   *  TaskRun via TaskUpdate deliver (a root closed / a run delivered). The
-   *  channel runner reads it to route a synthetic-wake FINAL block to chat —
-   *  a conclusion the user should see even while OTHER roots stay open (the
-   *  wake's own root may not be terminal). Naturally per-handling: a fresh
-   *  SessionContext is created per inbound, so it starts unset. Best-effort. */
+  /** Transient per-handling flag: set when this turn-sequence took a
+   *  user-facing disposition on a TaskRun via TaskUpdate — deliver (a root
+   *  closed / a run delivered), accept of a standing fire, or a
+   *  requester-hold parking a goal root. The channel runner reads it to route
+   *  a synthetic-wake FINAL block to chat — an outcome the user should see
+   *  even while OTHER roots stay open (the wake's own root may not be
+   *  terminal). Naturally per-handling: a fresh SessionContext is created per
+   *  inbound, so it starts unset. Best-effort. */
   concludedRootThisTurn?: boolean
 }
 

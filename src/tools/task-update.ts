@@ -331,6 +331,13 @@ export const taskUpdateTool = buildTool({
               : `TaskRun ${target.id} is ${held.status ?? held.reason}, not holdable.`
             return { output: detail, isError: true }
           }
+          // A root hold is a user-facing disposition: the subtree goes quiet
+          // (exempt from idle-root) and NO autonomous wake will occur until
+          // the user acts, so the hold announcement must reach chat — carding
+          // it leaves the user unaware the ball is theirs (2026-08-13 prod:
+          // main parked a 502-blocked goal from a background wake and the
+          // "waiting for you to confirm recovery" block never surfaced).
+          markConcludedRootThisTurn()
           return {
             output: `${JSON.stringify({ runId: target.id, status: 'waiting', reason: 'requester-hold', heldRunIds: held.heldRunIds })}\nGoal parked. It stays quiet until you dispatch its next stage under it (which resumes it), or close / cancel it.`,
           }
