@@ -115,7 +115,7 @@ describe('/system command', () => {
   it('routes `mount rm <path>` to the mount remove path', async () => {
     const dataPath = path.join(gpfsRoot, 'team', 'datasets') // depth 2 — clears the shared-root guard
     mkdirSync(dataPath, { recursive: true })
-    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { unmountable: [] } }) }
+    const deps = { restartRlaunch: async () => ({ worker: 'worker-1', report: { unmountable: [], observed: [] } }) }
     await runSystemCommand(`mount add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     // A writable real dir is observed read-write by the daemon (same identity as
     // the worker), so the mount lands at mode 'rw'.

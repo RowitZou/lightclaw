@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  applyObservedWorkerModes,
   buildGpfsMountString,
   findWorkspaceMountConflict,
   loadUserRlaunchMounts,
@@ -172,11 +173,53 @@ describe('findWorkspaceMountConflict', () => {
   })
 })
 
+describe('applyObservedWorkerModes', () => {
+  it('records the worker-observed mode on a worker-only mount', () => {
+    // The daemon cannot see this path, so its stored `ro` is a placeholder.
+    // The worker's /proc/mounts is the only witness of the real mode.
+    setUserRlaunchMount('alice', '/remote-team/datasets', 'ro', 'worker-only')
+    const changed = applyObservedWorkerModes('alice', [
+      { path: '/remote-team/datasets', mode: 'rw' },
+    ])
+    assert.deepEqual(changed, [{ path: '/remote-team/datasets', from: 'ro', to: 'rw' }])
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [
+      { path: '/remote-team/datasets', mode: 'rw', scope: 'worker-only' },
+    ])
+  })
+
+  it('leaves a daemon-visible (shared) mount alone', () => {
+    // Write / Edit on a shared mount go through the daemon-side host fast path,
+    // and LayeredDataPlane treats a host EACCES as fatal with no relay
+    // fallback — so the daemon's own access verdict, not the worker's, must
+    // decide whether that byte path may write.
+    const data = path.join(gpfsRoot, 'shared-ro')
+    mkdirSync(data, { recursive: true })
+    setUserRlaunchMount('alice', data, 'ro')
+    assert.deepEqual(applyObservedWorkerModes('alice', [{ path: data, mode: 'rw' }]), [])
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: data, mode: 'ro' }])
+  })
+
+  it('is a no-op for an unchanged mode, an unknown path, or an empty report', () => {
+    setUserRlaunchMount('alice', '/remote-team/datasets', 'rw', 'worker-only')
+    assert.deepEqual(applyObservedWorkerModes('alice', []), [])
+    assert.deepEqual(applyObservedWorkerModes('alice', [{ path: '/elsewhere', mode: 'ro' }]), [])
+    assert.deepEqual(
+      applyObservedWorkerModes('alice', [{ path: '/remote-team/datasets', mode: 'rw' }]),
+      [],
+    )
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [
+      { path: '/remote-team/datasets', mode: 'rw', scope: 'worker-only' },
+    ])
+  })
+})
+
 describe('probeDaemonMountAccess', () => {
-  it('reports worker-only for a path the daemon cannot stat', async () => {
+  it('reports worker-only with NO mode for a path the daemon cannot stat', async () => {
+    // `mode: null` = "the daemon has no opinion". Asserting `ro` here would
+    // clobber the worker's own observation on every daemon restart.
     assert.deepEqual(
       await probeDaemonMountAccess('/no/such/path/xyz'),
-      { kind: 'ok', scope: 'worker-only', mode: 'ro' },
+      { kind: 'ok', scope: 'worker-only', mode: null },
     )
   })
 
@@ -199,8 +242,23 @@ describe('probeDaemonMountAccess', () => {
 })
 
 describe('refreshUserRlaunchMountAccess', () => {
-  const ok = (scope: 'shared' | 'worker-only', mode: 'ro' | 'rw') =>
+  const ok = (scope: 'shared' | 'worker-only', mode: 'ro' | 'rw' | null) =>
     ({ kind: 'ok', scope, mode }) as const
+
+  it('keeps a worker-observed rw on a still-invisible worker-only mount', async () => {
+    // Regression: the daemon probe used to assert `ro` for anything it could
+    // not stat, so every restart read a worker-only rw mount as a downgrade,
+    // persisted `ro` after the confirmation window, and the next worker
+    // provisioning observed `rw` again — a fingerprint ping-pong that rebuilt
+    // the pod and mislabeled the mount read-only in between.
+    setUserRlaunchMount('alice', '/remote-team/datasets', 'rw', 'worker-only')
+    const result = await refreshUserRlaunchMountAccess('alice', { confirmDelayMs: 5 })
+    assert.equal(result.changed, 0)
+    assert.equal(result.downgradeConfirmation, null)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [
+      { path: '/remote-team/datasets', mode: 'rw', scope: 'worker-only' },
+    ])
+  })
 
   it('flips a worker-only mount to shared/rw once the daemon can see and write it', async () => {
     const data = path.join(gpfsRoot, 'now-visible')
@@ -224,7 +282,7 @@ describe('refreshUserRlaunchMountAccess', () => {
     const result = await refreshUserRlaunchMountAccess('alice', {
       confirmDelayMs: 5,
       // first probe: gpfs not mounted yet; re-probes: it came up
-      probe: async () => (calls++ === 0 ? ok('worker-only', 'ro') : ok('shared', 'rw')),
+      probe: async () => (calls++ === 0 ? ok('worker-only', null) : ok('shared', 'rw')),
     })
     assert.equal(result.changed, 0)
     assert.ok(result.downgradeConfirmation, 'downgrade must enter confirmation, not persist')
@@ -240,7 +298,7 @@ describe('refreshUserRlaunchMountAccess', () => {
       confirmDelayMs: 5,
       probe: async () => {
         calls += 1
-        return ok('worker-only', 'ro')
+        return ok('worker-only', null)
       },
     })
     assert.equal(result.changed, 0)
@@ -285,7 +343,7 @@ describe('refreshUserRlaunchMountAccess', () => {
     let confirmation: Promise<{ changed: number }> | null = null
     const result = await refreshUserRlaunchMountAccess('alice', {
       confirmDelayMs: 5,
-      probe: async () => ok('worker-only', 'ro'),
+      probe: async () => ok('worker-only', null),
     })
     confirmation = result.downgradeConfirmation
     assert.ok(confirmation)

@@ -19,7 +19,7 @@ const runMount = async (
   deps?: Parameters<typeof runMountCommand>[2],
 ): Promise<string> => (await runMountCommand(args, ctx, deps)) ?? ''
 
-const emptyReport: MountReport = { unmountable: [] }
+const emptyReport: MountReport = { unmountable: [], observed: [] }
 
 // The mode a mount lands at is the cluster's observed ro/rw for the service
 // identity, which daemon-side we predict via access(W_OK) on the real dir. A
@@ -203,6 +203,45 @@ describe('/mount command', () => {
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{
       path: workerOnlyPath,
       mode: 'ro',
+      scope: 'worker-only',
+    }])
+  })
+
+  it('reports a worker-only mount as read-write once the worker observes rw', async () => {
+    // The user's case: the daemon host does not mount this path at all, but the
+    // cluster mounts it rw for the worker. The daemon probe cannot see that, so
+    // the entry starts at the `ro` placeholder; the rebuild's /proc/mounts
+    // observation is what makes the response — and the store the prompt and the
+    // mount card read — say read-write.
+    const workerOnlyPath = '/remote-team/rw-for-worker/dataset'
+    const added = await runMount(
+      `add ${workerOnlyPath}`,
+      { config: makeConfig(), userId: 'alice' },
+      {
+        restartRlaunch: async () => ({
+          worker: 'worker-observed-rw',
+          report: { unmountable: [], observed: [{ path: workerOnlyPath, mode: 'rw' }] },
+        }),
+      },
+    )
+    assert.match(added, /mode: rw/)
+    assert.doesNotMatch(added, /Mounted read-only for the Agent/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{
+      path: workerOnlyPath,
+      mode: 'rw',
+      scope: 'worker-only',
+    }])
+
+    // Re-adding it must not reset the observed rw back to the placeholder.
+    const readded = await runMount(
+      `add ${workerOnlyPath}`,
+      { config: makeConfig(), userId: 'alice' },
+      { restartRlaunch: async () => ({ worker: 'worker-2', report: emptyReport }) },
+    )
+    assert.match(readded, /rw/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{
+      path: workerOnlyPath,
+      mode: 'rw',
       scope: 'worker-only',
     }])
   })

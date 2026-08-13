@@ -119,6 +119,52 @@ export function setUserRlaunchMount(
   }
 }
 
+/** One mount whose recorded mode the worker observation corrected. */
+export type ObservedModeChange = { path: string; from: RlaunchMountMode; to: RlaunchMountMode }
+
+/**
+ * Fold the worker's `/proc/mounts` view (see `observePuyuclawMode`) back into
+ * the user's saved mounts, and return what changed.
+ *
+ * Scoped to `worker-only` entries ON PURPOSE — the two observers own disjoint
+ * halves of the store, which is what keeps them from fighting each other:
+ * - `worker-only`: the daemon cannot stat the path at all, so its recorded
+ *   `ro` is a placeholder, not an observation (`probeMountScope` /
+ *   `probeDaemonMountAccess` both report `mode: null` for these). The worker is
+ *   the only observer, and its verdict is the truth the agent experiences —
+ *   writes land through exec-relay INSIDE the worker, where the cluster's real
+ *   permission applies. Before this write-back, a rw worker mount was rendered
+ *   `read-only` in `/system mount` and in the prompt's `Mounted paths:` block,
+ *   so the agent never even attempted a write it was allowed to make.
+ * - `shared`: the daemon owns the mode, because that is where the bytes flow.
+ *   Write / Edit on a daemon-visible mount go through the host fast path
+ *   (`shared-cluster-fs`), and `LayeredDataPlane` treats a host EACCES as
+ *   FATAL with no exec-relay fallback — recording the worker's `rw` for a path
+ *   the daemon cannot write would promise a write the byte path cannot make.
+ *   Such a mount stays `ro` for Write / Edit; Bash still writes it in-worker.
+ */
+export function applyObservedWorkerModes(
+  canonicalUser: string,
+  observed: readonly { path: string; mode: RlaunchMountMode }[],
+): ObservedModeChange[] {
+  if (observed.length === 0) return []
+  const byPath = new Map<string, RlaunchMountMode>()
+  for (const entry of observed) {
+    byPath.set(normalizeRlaunchMountPath(entry.path), entry.mode)
+  }
+  const current = loadUserRlaunchMounts(canonicalUser)
+  const changes: ObservedModeChange[] = []
+  const next = current.map(mount => {
+    if (mount.scope !== 'worker-only') return mount
+    const workerMode = byPath.get(mount.path)
+    if (!workerMode || workerMode === mount.mode) return mount
+    changes.push({ path: mount.path, from: mount.mode, to: workerMode })
+    return { ...mount, mode: workerMode }
+  })
+  if (changes.length > 0) saveUserRlaunchMounts(canonicalUser, next)
+  return changes
+}
+
 export function removeUserRlaunchMount(
   canonicalUser: string,
   mountPath: string,
@@ -228,7 +274,16 @@ export const DOWNGRADE_CONFIRM_PROBES = 3
  *  defaults) is sized for "daemon restarted before gpfs finished mounting". */
 export const DOWNGRADE_CONFIRM_DELAY_MS = 10_000
 
-export type DaemonMountAccess = { scope: RlaunchMountScope; mode: RlaunchMountMode }
+/**
+ * `mode: null` means the daemon has NO opinion — it cannot reach the path, so
+ * it cannot observe ro / rw. Callers must treat that as "keep what is
+ * recorded", never as `ro`: for a worker-only mount the recorded mode comes
+ * from the worker's own `/proc/mounts` (see `applyObservedWorkerModes`), and
+ * asserting `ro` here would clobber that observation on every daemon restart —
+ * then the next worker provisioning would flip it back, ping-ponging the mount
+ * fingerprint (and rebuilding the pod) forever.
+ */
+export type DaemonMountAccess = { scope: RlaunchMountScope; mode: RlaunchMountMode | null }
 
 export type DaemonMountProbeResult =
   | ({ kind: 'ok' } & DaemonMountAccess)
@@ -275,7 +330,7 @@ export async function probeDaemonMountAccess(
   const work = (async (): Promise<DaemonMountProbeResult> => {
     try {
       const stat = await fs.stat(mountPath)
-      if (!stat.isDirectory()) return { kind: 'ok', scope: 'worker-only', mode: 'ro' }
+      if (!stat.isDirectory()) return { kind: 'ok', scope: 'worker-only', mode: null }
       await fs.access(mountPath, fsConstants.R_OK)
       try {
         await fs.access(mountPath, fsConstants.W_OK)
@@ -284,7 +339,7 @@ export async function probeDaemonMountAccess(
         return { kind: 'ok', scope: 'shared', mode: 'ro' }
       }
     } catch {
-      return { kind: 'ok', scope: 'worker-only', mode: 'ro' }
+      return { kind: 'ok', scope: 'worker-only', mode: null }
     }
   })()
   const result = await Promise.race([work, timeout])
@@ -317,18 +372,27 @@ export type MountRefreshResult = {
 function isDowngrade(previous: UserRlaunchMount, probed: DaemonMountAccess): boolean {
   const wasWorkerOnly = previous.scope === 'worker-only'
   const nowWorkerOnly = probed.scope === 'worker-only'
-  return (!wasWorkerOnly && nowWorkerOnly) || (previous.mode === 'rw' && probed.mode === 'ro')
+  return (!wasWorkerOnly && nowWorkerOnly)
+    || (probed.mode !== null && previous.mode === 'rw' && probed.mode === 'ro')
 }
 
 function sameAccess(previous: UserRlaunchMount, probed: DaemonMountAccess): boolean {
-  return previous.mode === probed.mode
-    && (previous.scope === 'worker-only') === (probed.scope === 'worker-only')
+  const sameScope = (previous.scope === 'worker-only') === (probed.scope === 'worker-only')
+  // A null probe mode is "no opinion", so it can never be the thing that
+  // differs — only the scope decides.
+  return sameScope && (probed.mode === null || previous.mode === probed.mode)
 }
 
-function toMountEntry(mountPath: string, probed: DaemonMountAccess): UserRlaunchMount {
+/** Apply a probe verdict to an entry. A `null` probe mode keeps the recorded
+ *  mode when the entry was ALREADY worker-only (the worker owns that value),
+ *  and resets to the conservative `ro` when a shared entry just became
+ *  worker-only — its old mode described a daemon byte path that no longer
+ *  exists, and the next worker provisioning re-observes the real one. */
+function toMountEntry(previous: UserRlaunchMount, probed: DaemonMountAccess): UserRlaunchMount {
+  const keptMode = previous.scope === 'worker-only' ? previous.mode : 'ro'
   return {
-    path: mountPath,
-    mode: probed.mode,
+    path: previous.path,
+    mode: probed.mode ?? keptMode,
     ...(probed.scope === 'worker-only' ? { scope: 'worker-only' as const } : {}),
   }
 }
@@ -385,7 +449,7 @@ export async function refreshUserRlaunchMountAccess(
       return mount
     }
     changed += 1
-    return toMountEntry(mount.path, probed)
+    return toMountEntry(mount, probed)
   })
   if (changed > 0) saveUserRlaunchMounts(canonicalUser, next)
   if (candidates.length === 0) return { changed, downgradeConfirmation: null }
@@ -441,7 +505,7 @@ async function confirmMountDowngrades(
       `[rlaunch-mount-refresh] ${canonicalUser}: confirmed downgrade for ${mount.path} `
       + `(${mount.scope ?? 'shared'}/${mount.mode} -> ${hit.probed.scope}/${hit.probed.mode})\n`,
     )
-    return toMountEntry(mount.path, hit.probed)
+    return toMountEntry(mount, hit.probed)
   })
   if (changed > 0) saveUserRlaunchMounts(canonicalUser, next)
   return { changed }

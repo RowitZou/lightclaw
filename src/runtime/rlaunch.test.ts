@@ -29,6 +29,8 @@ import {
 } from './rlaunch-state.js'
 import { translateRlaunchError } from './rlaunch-errors.js'
 import { WorkerReadinessTracker } from './worker-readiness.js'
+import type { MountReport } from './mount-authz.js'
+import { loadUserRlaunchMounts, setUserRlaunchMount } from './rlaunch-mounts.js'
 
 describe('parseWorkerName', () => {
   it('parses real rlaunch detached output', () => {
@@ -306,7 +308,7 @@ describe('buildLaunchArgs', () => {
       workerName: string
       runBrainctlExec(input: ExecInput): Promise<ExecResult>
       applyMountAuthorizations(): Promise<void>
-      consumeMountReport(): { unmountable: Array<{ fileset: string; path: string }> }
+      consumeMountReport(): MountReport
     }
     internals.workerName = 'ws-test-ro'
     internals.runBrainctlExec = async input => {
@@ -321,12 +323,72 @@ describe('buildLaunchArgs', () => {
       return { stdout: '', stderr: '', exitCode: 0 }
     }
 
-    await internals.applyMountAuthorizations()
+    const home = mkdtempSync(path.join(tmpdir(), 'lightclaw-mount-observe-'))
+    setLightclawHomeOverride(home)
+    try {
+      await internals.applyMountAuthorizations()
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(home, { recursive: true, force: true })
+    }
     // No bind / remount exec is ever issued.
     assert.equal(calls.some(input => input.command.includes('mount --bind')), false)
     assert.equal(calls.some(input => input.command.includes('remount')), false)
-    // A mounted path is not reported unmountable.
-    assert.deepEqual(internals.consumeMountReport(), { unmountable: [] })
+    // A mounted path is not reported unmountable — and its observed mode is
+    // carried out of the pass, keyed by host path (the mount store's key).
+    assert.deepEqual(internals.consumeMountReport(), {
+      unmountable: [],
+      observed: [{ path: '/host/dataset', mode: 'ro' }],
+    })
+  })
+
+  it('writes the worker-observed mode back into a worker-only mount entry', async () => {
+    // The whole point of the observation: the daemon cannot stat a worker-only
+    // path, so its recorded `ro` is a placeholder. The worker's /proc/mounts is
+    // the only witness of the real mode — without this write-back the mount
+    // renders `read-only` in /system mount and in the prompt's `Mounted paths:`
+    // block, and the agent never attempts a write the cluster would allow.
+    const home = mkdtempSync(path.join(tmpdir(), 'lightclaw-mount-writeback-'))
+    setLightclawHomeOverride(home)
+    try {
+      setUserRlaunchMount('alice', '/remote-team/datasets', 'ro', 'worker-only')
+      const runtime = new RlaunchRuntime({
+        ...baseCfg,
+        extraMounts: [{
+          hostPath: '/remote-team/datasets',
+          workerPath: '/remote-team/datasets',
+          gpfsMount: 'gpfs://gpfs1/team/datasets:/remote-team/datasets',
+          mode: 'ro',
+          requestedMode: 'ro',
+          fileset: 'gpfs://gpfs1/team',
+          daemonVisible: false,
+        }],
+      }, new WorkerReadinessTracker('alice'))
+      const internals = runtime as unknown as {
+        workerName: string
+        runBrainctlExec(input: ExecInput): Promise<ExecResult>
+        applyMountAuthorizations(): Promise<void>
+      }
+      internals.workerName = 'ws-test-rw'
+      internals.runBrainctlExec = async input => (
+        input.command === 'cat /proc/mounts'
+          ? {
+              stdout: 'kataShared /remote-team/datasets virtiofs rw,relatime 0 0\n',
+              stderr: '',
+              exitCode: 0,
+            }
+          : { stdout: '', stderr: '', exitCode: 0 }
+      )
+
+      await internals.applyMountAuthorizations()
+
+      assert.deepEqual(loadUserRlaunchMounts('alice'), [
+        { path: '/remote-team/datasets', mode: 'rw', scope: 'worker-only' },
+      ])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it('wrapCommand exports HOME=<workspace>/.home before setpriv for agent execs', () => {
@@ -371,6 +433,8 @@ describe('buildLaunchArgs', () => {
     await internals.applyMountAuthorizations()
     assert.deepEqual(internals.consumeMountReport(), {
       unmountable: [{ fileset: 'gpfs://gpfs1/team', path: '/datasets/team' }],
+      // An unmounted path yields no mode observation — it is an issue, not a fact.
+      observed: [],
     })
   })
 })

@@ -23,10 +23,12 @@ import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/moun
 import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
+  emptyMountReport,
   filesetKeyFromGpfsMount,
   observePuyuclawMode,
   type MountReport,
 } from './mount-authz.js'
+import { applyObservedWorkerModes } from './rlaunch-mounts.js'
 import {
   deleteWorkerRecord,
   lookupWorkerRecord,
@@ -179,10 +181,10 @@ export class RlaunchRuntime implements Runtime {
   private provisionDriveFor: string | null = null
   private mountAuthReadyFor: string | null = null
   private inflightMountAuth: Promise<void> | null = null
-  /** Mounts from the last applyMountAuthorizations pass that the cluster did not
-   *  provide for the service identity at all. Read once by a mount-change
-   *  rebuild via consumeMountReport(). */
-  private lastMountReport: MountReport = { unmountable: [] }
+  /** What the last applyMountAuthorizations pass saw in the worker: mounts the
+   *  cluster did not provide at all, plus the mode it materialized for the ones
+   *  it did. Read once by a mount-change rebuild via consumeMountReport(). */
+  private lastMountReport: MountReport = emptyMountReport()
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -957,7 +959,7 @@ export class RlaunchRuntime implements Runtime {
    *  can be told which paths the cluster could not mount. */
   consumeMountReport(): MountReport {
     const report = this.lastMountReport
-    this.lastMountReport = { unmountable: [] }
+    this.lastMountReport = emptyMountReport()
     return report
   }
 
@@ -976,24 +978,54 @@ export class RlaunchRuntime implements Runtime {
    *  or kernel-enforces the mode, it only observes it. A path the cluster did
    *  not mount at all (observed 'none') is surfaced as an unmountable issue so a
    *  bad path is reported rather than silently absent; it never throws and never
-   *  bricks the worker. */
+   *  bricks the worker.
+   *
+   *  The ro / rw observation is fed back into the user's mount store for
+   *  worker-only entries — see `applyObservedWorkerModes`. The worker's
+   *  `/proc/mounts` is the ONLY place their real mode is knowable (the daemon
+   *  cannot even stat those paths), and this pass runs once per worker
+   *  lifetime, so every acquire / respawn / mount-change self-heals a stale
+   *  recorded mode. */
   private async applyMountAuthorizations(): Promise<void> {
     const mounts = this.cfg.extraMounts ?? []
-    const unmountable: MountReport['unmountable'] = []
+    const report = emptyMountReport()
     if (mounts.length > 0) {
       const procMounts = await this.readProcMounts()
       for (const mount of mounts) {
         const observed = observePuyuclawMode(procMounts, mount.workerPath)
         if (observed === 'none') {
-          unmountable.push({
+          report.unmountable.push({
             fileset: mount.fileset ?? filesetKeyFromGpfsMount(mount.gpfsMount),
             path: mount.workerPath,
           })
+          continue
         }
+        report.observed.push({ path: mount.hostPath, mode: observed })
       }
+      this.persistObservedMountModes(report.observed)
     }
-    this.lastMountReport = { unmountable }
+    this.lastMountReport = report
     this.mountAuthReadyFor = this.workerName
+  }
+
+  /** Best-effort store write-back. A failure here must not brick provisioning:
+   *  the observation is a display / prompt correctness improvement, not a
+   *  precondition for running the worker. */
+  private persistObservedMountModes(observed: MountReport['observed']): void {
+    try {
+      const changed = applyObservedWorkerModes(this.cfg.canonicalUser, observed)
+      for (const entry of changed) {
+        process.stderr.write(
+          `[rlaunch] observed worker mount mode for ${this.cfg.canonicalUser}: `
+          + `${entry.path} ${entry.from} -> ${entry.to}\n`,
+        )
+      }
+    } catch (error) {
+      process.stderr.write(
+        `[rlaunch] failed to record observed mount modes for ${this.cfg.canonicalUser}: `
+        + `${error instanceof Error ? error.message : String(error)}\n`,
+      )
+    }
   }
 
   private async readProcMounts(): Promise<string> {

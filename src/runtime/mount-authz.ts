@@ -7,8 +7,21 @@ export type ObservedMountMode = 'none' | 'ro' | 'rw'
  *  absent. */
 export type MountIssue = { fileset: string; path: string }
 
-/** Per-rebuild summary of mounts the cluster could not provide. */
-export type MountReport = { unmountable: MountIssue[] }
+/** One path the cluster DID mount, with the mode it materialized for the
+ *  service identity. This is the only place the worker-side mode is knowable:
+ *  the daemon's own `access()` describes the daemon's mount, which for a
+ *  worker-only path does not exist at all. Keyed by host path (= the key the
+ *  user mount store uses). */
+export type MountObservation = { path: string; mode: 'ro' | 'rw' }
+
+/** Per-rebuild summary of what the cluster actually provided. */
+export type MountReport = { unmountable: MountIssue[]; observed: MountObservation[] }
+
+/** A fresh empty report. A factory, not a shared const: callers append to the
+ *  arrays, so one shared instance would accumulate across rebuilds. */
+export function emptyMountReport(): MountReport {
+  return { unmountable: [], observed: [] }
+}
 
 /** Read the worker's `/proc/mounts` view of a path. The daemon and the worker
  *  share one cluster identity (puyuclaw), so the mount the cluster materializes

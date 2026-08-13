@@ -5,6 +5,7 @@ import type { LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
+  applyObservedWorkerModes,
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
   RlaunchMountPathNotAbsoluteError,
@@ -16,7 +17,7 @@ import {
 } from '../runtime/rlaunch-mounts.js'
 import { findShallowGpfsRoot, GpfsHostPrefixMismatchError } from '../runtime/gpfs-mount-rules.js'
 import { MountOverlapError, MountTablePathPolicy } from '../runtime/path-policy/mount-table.js'
-import { type MountReport } from '../runtime/mount-authz.js'
+import { emptyMountReport, type MountReport } from '../runtime/mount-authz.js'
 import { pruneUnmountableMounts, type MountRebuildResult } from './mount-ops.js'
 
 type MountCommandContext = {
@@ -63,6 +64,11 @@ export async function runMountCommand(
     const { mountPaths } = parsed
     const modeByPath = new Map<string, RlaunchMountMode>()
     const scopeByPath = new Map<string, RlaunchMountScope>()
+    const current = loadUserRlaunchMounts(userId)
+    const currentByPath = new Map(current.map(mount => [mount.path, {
+      mode: mount.mode,
+      scope: mount.scope ?? 'shared' as RlaunchMountScope,
+    }] as const))
     for (const mountPath of mountPaths) {
       // Refuse a top-level shared-storage dir (mount root or team/project share)
       // before probing. The `mode` we would observe is unreliable here — it is a
@@ -76,21 +82,26 @@ export async function runMountCommand(
       // Auto-detect: a path the daemon can reach is served on the host fast
       // path; one it cannot is mounted into the worker only and served via
       // relay. The mode is the cluster's observed mode for the service
-      // identity — daemon and worker share that identity, so a daemon-side
-      // access(W_OK) exactly predicts the worker's mount mode. The user never
-      // picks either dimension.
+      // identity — for a daemon-reachable path a daemon-side access(W_OK)
+      // predicts the worker's mount mode, and for a worker-only path the probe
+      // returns no mode at all and the worker's /proc/mounts settles it after
+      // the rebuild. The user never picks either dimension.
       const probe = await probeMountScope(ctxWithUser, mountPath)
       if ('error' in probe) {
         return probe.error
       }
       scopeByPath.set(mountPath, probe.scope)
-      modeByPath.set(mountPath, probe.mode)
+      // A null probe mode is "the daemon cannot observe this" (worker-only).
+      // Keep the mode already recorded for such a path — it came from the
+      // worker's own /proc/mounts — so re-adding an existing worker-only mount
+      // does not reset a known rw back to the ro placeholder. A first-time add
+      // starts at ro and is corrected by the rebuild's observation below.
+      const previous = currentByPath.get(mountPath)
+      modeByPath.set(
+        mountPath,
+        probe.mode ?? (previous?.scope === 'worker-only' ? previous.mode : 'ro'),
+      )
     }
-    const current = loadUserRlaunchMounts(userId)
-    const currentByPath = new Map(current.map(mount => [mount.path, {
-      mode: mount.mode,
-      scope: mount.scope ?? 'shared' as RlaunchMountScope,
-    }] as const))
     const nextByPath = new Map(currentByPath)
     for (const mountPath of mountPaths) {
       nextByPath.set(mountPath, {
@@ -136,8 +147,16 @@ export async function runMountCommand(
     saveUserRlaunchMounts(userId, next)
     const { line: restart, report: rebuildReport } = await restartAfterMountChange(deps)
     pruneUnmountableMounts(userId, rebuildReport)
+    // The rebuilt worker just told us the mode the cluster materialized. For a
+    // worker-only path that is the FIRST real observation of its mode, so the
+    // response below must report the corrected value, not the placeholder we
+    // saved a moment ago.
+    applyObservedWorkerModes(userId, rebuildReport.observed)
+    const savedModes = new Map(loadUserRlaunchMounts(userId).map(mount => [mount.path, mount.mode]))
+    const finalMode = (mountPath: string): RlaunchMountMode =>
+      savedModes.get(mountPath) ?? modeByPath.get(mountPath) ?? 'ro'
     if (mountPaths.length === 1) {
-      const mode = modeByPath.get(mountPaths[0]) ?? 'ro'
+      const mode = finalMode(mountPaths[0])
       return [
         updated.length > 0
           ? t('mount.updatedSingle', { path: mountPaths[0] })
@@ -150,7 +169,7 @@ export async function runMountCommand(
         '',
       ].join('\n')
     }
-    const modes = new Set(modeByPath.values())
+    const modes = new Set(mountPaths.map(finalMode))
     return [
       ...(added.length > 0 ? [t('mount.addedMultiHeader'), ...formatPathList(added)] : []),
       ...(updated.length > 0 ? [t('mount.updatedMultiHeader'), ...formatPathList(updated)] : []),
@@ -284,21 +303,22 @@ function mountErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Auto-detect a mount's scope AND observed mode from daemon visibility. The
- *  daemon process IS the service identity (puyuclaw, same uid as the worker), so
- *  a daemon-side `access` exactly predicts what the cluster will mount for the
- *  worker: a path the daemon can stat + read is served shared (host fast path)
- *  and its mode is `rw` if the daemon also holds write else `ro`; a path the
- *  daemon cannot reach is worker-only (served via relay) and defaults to `ro`
- *  since the daemon cannot observe its mode. Returns a `{ error }` only when the
- *  path is a non-directory the daemon can see, or its gpfs-mount shape cannot be
- *  built on this deployment. */
+/** Auto-detect a mount's scope AND — when it can — its mode, from daemon
+ *  visibility. The daemon process IS the service identity (puyuclaw, same uid as
+ *  the worker), so for a path the daemon can reach, a daemon-side `access`
+ *  predicts what the cluster mounts for the worker: stat + read → served shared
+ *  (host fast path), plus write → `rw`, else `ro`. A path the daemon cannot
+ *  reach is worker-only (served via relay) and its mode comes back **`null`** —
+ *  the daemon has no view of it at all, so it must not claim `ro`; the worker's
+ *  own `/proc/mounts` answers that after the rebuild (`applyObservedWorkerModes`).
+ *  Returns a `{ error }` only when the path is a non-directory the daemon can
+ *  see, or its gpfs-mount shape cannot be built on this deployment. */
 async function probeMountScope(
   ctx: MountCommandContext & { userId: string },
   mountPath: string,
-): Promise<{ scope: RlaunchMountScope; mode: RlaunchMountMode } | { error: string }> {
+): Promise<{ scope: RlaunchMountScope; mode: RlaunchMountMode | null } | { error: string }> {
   let scope: RlaunchMountScope = 'shared'
-  let mode: RlaunchMountMode = 'ro'
+  let mode: RlaunchMountMode | null = null
   try {
     const stat = statSync(mountPath)
     if (!stat.isDirectory()) {
@@ -313,7 +333,7 @@ async function probeMountScope(
     }
   } catch {
     scope = 'worker-only'
-    mode = 'ro'
+    mode = null
   }
   try {
     userMountToRuntimeMount(
@@ -370,13 +390,11 @@ function formatPathList(paths: readonly string[]): string[] {
   return paths.map(mountPath => `- ${mountPath}`)
 }
 
-const EMPTY_MOUNT_REPORT: MountReport = { unmountable: [] }
-
 async function restartAfterMountChange(
   deps: MountCommandDeps,
 ): Promise<{ line: string; report: MountReport }> {
   if (!deps.restartRlaunch) {
-    return { line: t('mount.restart.skipped'), report: EMPTY_MOUNT_REPORT }
+    return { line: t('mount.restart.skipped'), report: emptyMountReport() }
   }
   try {
     const result = await deps.restartRlaunch()
@@ -384,7 +402,7 @@ async function restartAfterMountChange(
   } catch (error) {
     return {
       line: t('mount.restart.failed', { detail: error instanceof Error ? error.message : String(error) }),
-      report: EMPTY_MOUNT_REPORT,
+      report: emptyMountReport(),
     }
   }
 }
