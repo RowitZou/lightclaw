@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
+import { userConfigPath } from '../identity/paths.js'
 import { loadUserSecrets } from '../secrets/store.js'
 import { resolveAuditDir } from '../config.js'
 import { setLang } from '../i18n/index.js'
@@ -64,6 +65,49 @@ describe('/secret command', () => {
     )
     assert.match(await runSecret('status GH_TOKEN', { userId: 'alice' }), /stored, disabled,/)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, 'secret')
+  })
+
+  // A secret that backs a BYO endpoint is load-bearing: deleting it disables
+  // that endpoint AND every model on it. Pre-fix `/secret rm` deleted with no
+  // warning at all (the gate existed only on the `/system key rm` wrapper), so
+  // one removal silently took four models offline in prod on 2026-08-13.
+  // Fails on old code.
+  it('rm of a referenced secret needs --y and names what goes offline', async () => {
+    await runSecret('set BYO_KEY_1 sk-live', { userId: 'alice' })
+    mkdirSync(path.dirname(userConfigPath('alice')), { recursive: true })
+    writeFileSync(
+      userConfigPath('alice'),
+      JSON.stringify({
+        endpoints: { gateway: { type: 'openai', apiKeyRef: 'BYO_KEY_1' } },
+        models: {
+          'gpt-gw': { endpoint: 'gateway', schema: 'openai', upstreamModel: 'gpt-5.5' },
+          'gpt-gw-mini': { endpoint: 'gateway', schema: 'openai', upstreamModel: 'gpt-5.4-mini' },
+        },
+      }),
+    )
+
+    // No --y: preview names the endpoint + both models, and deletes nothing.
+    const preview = await runSecret('rm BYO_KEY_1', { userId: 'alice' })
+    assert.match(preview, /gateway/)
+    assert.match(preview, /gpt-gw/)
+    assert.match(preview, /gpt-gw-mini/)
+    assert.match(preview, /--y/)
+    assert.ok(loadUserSecrets('alice').BYO_KEY_1, 'the secret must survive an unconfirmed rm')
+
+    // With --y: removed, and the result says what just went offline.
+    const done = await runSecret('rm BYO_KEY_1 --y', { userId: 'alice' })
+    assert.match(done, /removed/)
+    assert.match(done, /gateway/)
+    assert.match(done, /gpt-gw/)
+    assert.equal(loadUserSecrets('alice').BYO_KEY_1, undefined)
+  })
+
+  it('rm of an unreferenced secret still deletes with no --y', async () => {
+    await runSecret('set LONE sk-live', { userId: 'alice' })
+    const out = await runSecret('rm LONE', { userId: 'alice' })
+    assert.match(out, /removed/)
+    assert.doesNotMatch(out, /--y/)
+    assert.equal(loadUserSecrets('alice').LONE, undefined)
   })
 
   it('removes a secret and reports missing entries idempotently', async () => {

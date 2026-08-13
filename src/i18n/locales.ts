@@ -24,6 +24,8 @@ export const LOCALES = {
     'confirm.endpoint.rmNoModels': '将删除模型服务 "{name}"（没有模型引用它）。',
     'confirm.key.rm':
       '将删除密钥 "{name}"，并断开引用它的模型服务：{endpoints}。',
+    'confirm.key.rmModels':
+      '将删除密钥 "{name}"，并禁用引用它的模型服务：{endpoints}；这些服务上的模型也会一并停用：{models}。',
     'confirm.workspace.set': '将把你的工作目录迁移到：{path}。',
     'confirm.workspace.reset': '将把你的工作目录恢复为默认（回落 admin 配置）。',
     'confirm.data.import': '将以 {mode} 模式用 {src} 更新你的记忆 / 数据（密钥与本机配置不受影响）。',
@@ -63,6 +65,7 @@ export const LOCALES = {
     'card.show.options': '可选项',
     'card.show.configured': '已配置',
     'card.show.current': '当前',
+    'card.show.disabled': '已禁用（{count}）',
     'card.subcommands': '子命令',
     'card.config.currentValues': '当前配置',
     'card.config.value.defaultSuffix': '（默认）',
@@ -698,6 +701,7 @@ export const LOCALES = {
     'secret.disabled': '密钥 {name} 已停用，存储的值仍保留 —— 运行 /system key enable {name} 重新启用。',
     'secret.notStored': '密钥 {name} 未存储。',
     'secret.removed': '密钥 {name} 已删除。',
+    'secret.removedDisabled': '已停用引用它的模型服务：{endpoints}；受影响的模型：{models}。恢复：/secret set <NAME> <VALUE>。',
     'secret.list.empty': '该用户没有存储任何密钥。',
     'secret.state.on': '已启用',
     'secret.state.off': '已停用',
@@ -967,6 +971,18 @@ export const LOCALES = {
     'config.model.checkFail': '模型连通性检查：失败；{detail}。',
     'config.byo.invalidConfig': '用户配置无效：{detail}',
     'config.byo.rejected': '错误：该改动会让用户配置不可用（{detail}）；未写入。',
+    // One line per BYO entry the resolver had to disable: what is off + the
+    // single command that turns it back on. Rendered on the /config model /
+    // backend / endpoint cards so a shrunken registry never reads as data loss.
+    'config.byo.issue.secretMissing':
+      '端点「{alias}」引用的密钥 {secret} 未存储；运行 /secret set {secret} <VALUE> 恢复。',
+    'config.byo.issue.codexAuthMissing':
+      '端点「{alias}」的登录 codex:{auth} 未导入；运行 /config endpoint add {auth} --type codex --login 恢复。',
+    'config.byo.issue.refInvalid': '端点「{alias}」的凭据引用无效（{detail}）；用 /config endpoint set {alias} 重新指定。',
+    'config.byo.issue.endpointMissing':
+      '模型「{name}」指向的端点「{endpoint}」不可用；先修好该端点，或用 /config backend set {name} --endpoint <可用端点> 改指。',
+    'config.byo.issue.schemaMismatch':
+      '模型「{name}」用 {schema} 协议，与端点「{endpoint}」的鉴权方式不匹配；用 /config backend set {name} --endpoint <匹配端点> 改指。',
     'config.codex.importFail': '错误：导入 Codex 凭据失败；{detail}。',
     'config.codex.importShareWarning':
       '⚠️ 注意：--auth-path 导入后，此处与 codex CLI 共用同一个 refresh token（单次有效、每次刷新轮换）。任一侧刷新都会使另一侧凭证失效——如果你还会继续使用 codex CLI，推荐改用 --login 网页登录，二者互不影响。',
@@ -1101,6 +1117,8 @@ export const LOCALES = {
     'confirm.endpoint.rmNoModels': 'This will remove model service "{name}" (no models reference it).',
     'confirm.key.rm':
       'This will remove secret "{name}" and detach the model services referencing it: {endpoints}.',
+    'confirm.key.rmModels':
+      'This will remove secret "{name}" and disable the model services referencing it: {endpoints}; the models on those services also go offline: {models}.',
     'confirm.workspace.set': 'This will migrate your workspace directory to: {path}.',
     'confirm.workspace.reset': 'This will restore your workspace directory to the default (falls back to the admin config).',
     'confirm.data.import': 'This will update your memory / data from {src} ({mode} mode); your keys and local config are untouched.',
@@ -1134,6 +1152,7 @@ export const LOCALES = {
     'card.show.options': 'Options',
     'card.show.configured': 'Configured',
     'card.show.current': 'Current',
+    'card.show.disabled': 'Disabled ({count})',
     'card.subcommands': 'Subcommands',
     'card.config.currentValues': 'Current config',
     'card.config.value.defaultSuffix': ' (default)',
@@ -1766,6 +1785,7 @@ export const LOCALES = {
     'secret.disabled': 'Secret {name} disabled. Stored value retained — /system key enable {name} to re-activate.',
     'secret.notStored': 'Secret {name} was not stored.',
     'secret.removed': 'Secret {name} removed.',
+    'secret.removedDisabled': 'Disabled the model services referencing it: {endpoints}; affected models: {models}. Restore with /secret set <NAME> <VALUE>.',
     'secret.list.empty': 'No secrets stored for this user.',
     'secret.state.on': 'enabled',
     'secret.state.off': 'disabled',
@@ -2032,6 +2052,16 @@ export const LOCALES = {
     'config.model.checkFail': 'Model check: failed; {detail}.',
     'config.byo.invalidConfig': 'User config is invalid: {detail}',
     'config.byo.rejected': 'Error: this change would leave the user config unusable ({detail}); not written.',
+    'config.byo.issue.secretMissing':
+      'Endpoint "{alias}" references secret {secret}, which is not stored; run /secret set {secret} <VALUE> to restore it.',
+    'config.byo.issue.codexAuthMissing':
+      'Endpoint "{alias}" references login codex:{auth}, which is not imported; run /config endpoint add {auth} --type codex --login to restore it.',
+    'config.byo.issue.refInvalid':
+      'Endpoint "{alias}" has an invalid credential reference ({detail}); re-point it with /config endpoint set {alias}.',
+    'config.byo.issue.endpointMissing':
+      'Model "{name}" points at endpoint "{endpoint}", which is unavailable; fix that endpoint, or re-point with /config backend set {name} --endpoint <working endpoint>.',
+    'config.byo.issue.schemaMismatch':
+      'Model "{name}" uses the {schema} protocol, which does not match how endpoint "{endpoint}" authenticates; re-point with /config backend set {name} --endpoint <matching endpoint>.',
     'config.codex.importFail': 'Error: failed to import Codex credentials; {detail}.',
     'config.codex.importShareWarning':
       '⚠️ Note: after an --auth-path import, this credential SHARES one refresh token with the codex CLI (single-use, rotated on every refresh). A refresh on either side invalidates the other — if you keep using the codex CLI, prefer --login (web login), which mints an independent token.',

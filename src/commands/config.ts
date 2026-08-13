@@ -19,12 +19,15 @@ import { streamChat as defaultStreamChat } from '../api.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
   buildUserRegistry,
+  listUserRegistryIssues,
   loadUserConfigOverride,
   parseUserConfigOverride,
   readUserConfig,
   resolveUserConfig,
   setUserConfigField,
+  userRegistryIssueKey,
   writeUserConfig,
+  type UserRegistryIssue,
 } from '../config/user-override.js'
 import { validateBaseUrl, type BaseUrlValidation } from '../config/base-url.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
@@ -43,6 +46,7 @@ import {
   configRuleCardSpec,
   configWorkspaceCardSpec,
   formatCommandListSpecAsText,
+  type DisabledEntryRow,
   type LaneShowRow,
   type ModelShowRow,
 } from './card-specs.js'
@@ -356,7 +360,7 @@ async function runEndpointSubcommand(
         type: ep.authRef ? 'codex' : (ep.type ?? 'openai'),
         details: endpointDetails(ep as Record<string, unknown>),
       }))
-    const spec = configEndpointCardSpec(rows)
+    const spec = configEndpointCardSpec(rows, disabledRowsFor(userId, ['endpoint']))
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
   }
@@ -1044,7 +1048,7 @@ async function runBackendSubcommand(
           (override.endpoints ?? {}) as Record<string, unknown>,
         ),
       }))
-    const spec = configBackendCardSpec(rows)
+    const spec = configBackendCardSpec(rows, disabledRowsFor(userId, ['model']))
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
   }
@@ -1388,17 +1392,62 @@ function adminModelNames(): Set<string> {
   }
 }
 
+/** Localized "why is this off, and what turns it back on" line for one disabled
+ *  BYO entry. The builder's `reason` stays English (stderr + write-guard
+ *  detail); this is the user-facing face of the same failure. */
+function describeRegistryIssue(issue: UserRegistryIssue): string {
+  const p = issue.params
+  switch (issue.code) {
+    case 'secret-missing':
+      return t('config.byo.issue.secretMissing', { alias: p.alias, secret: p.secretName })
+    case 'codex-auth-missing':
+      return t('config.byo.issue.codexAuthMissing', { alias: p.alias, auth: p.authName })
+    case 'ref-invalid':
+      return t('config.byo.issue.refInvalid', { alias: p.alias, detail: p.detail })
+    case 'endpoint-missing':
+      return t('config.byo.issue.endpointMissing', { name: p.name, endpoint: p.endpoint })
+    case 'schema-mismatch':
+      return t('config.byo.issue.schemaMismatch', {
+        name: p.name,
+        schema: p.schema,
+        endpoint: p.endpoint,
+      })
+  }
+}
+
+/** Disabled-entry card rows for one scope (`/config endpoint` shows endpoint
+ *  failures, `/config backend` shows model failures, `/config model` shows
+ *  both — a user reading the model list needs the endpoint cause too). */
+function disabledRowsFor(
+  userId: string,
+  scopes: ReadonlyArray<UserRegistryIssue['scope']>,
+): DisabledEntryRow[] {
+  return listUserRegistryIssues(userId)
+    .filter(issue => scopes.includes(issue.scope))
+    .map(issue => ({ name: issue.name, reason: describeRegistryIssue(issue) }))
+}
+
 /** Re-parse the would-be-written object through the strict schema + registry
  *  builder so the user is not silently left with a config the resolver would
- *  reject and fall back from. Returns a localized error to surface, or null. */
+ *  reject and fall back from. Returns a localized error to surface, or null.
+ *
+ *  The registry check is a DIFF against the current on-disk state, not an
+ *  absolute "no issues" gate: since `buildUserRegistry` degrades per entry, an
+ *  entry that is already broken (a secret the user removed) must not block an
+ *  unrelated `endpoint add` / `backend set` on the entries that still work. Any
+ *  issue this write would INTRODUCE — including one it introduces indirectly,
+ *  e.g. repointing an endpoint that other models reference — still rejects. */
 function guardWritable(userId: string, obj: Record<string, unknown>): string | null {
   const parsed = parseUserConfigOverride(obj)
   if (!parsed.ok) {
     return `${t('config.byo.rejected', { detail: parsed.error })}\n`
   }
-  const built = buildUserRegistry(userId, parsed.value)
-  if (!built.ok) {
-    return `${t('config.byo.rejected', { detail: built.error })}\n`
+  const before = new Set(listUserRegistryIssues(userId).map(userRegistryIssueKey))
+  const introduced = buildUserRegistry(userId, parsed.value).issues.filter(
+    issue => !before.has(userRegistryIssueKey(issue)),
+  )
+  if (introduced.length > 0) {
+    return `${t('config.byo.rejected', { detail: introduced[0].reason })}\n`
   }
   return null
 }
@@ -1594,7 +1643,14 @@ async function runConfigModelScalar(
       isDefault: name === config.defaultModel,
       isCurrent: name === current,
     }))
-    const spec = configModelCardSpec(rows)
+    // The model list is where a shrunken registry is actually noticed, so it
+    // carries BOTH scopes: the disabled models AND the endpoint failure that
+    // usually caused them.
+    const listUserId = ctx.userId ?? getCurrentUserId()
+    const spec = configModelCardSpec(
+      rows,
+      listUserId ? disabledRowsFor(listUserId, ['endpoint', 'model']) : [],
+    )
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
   }

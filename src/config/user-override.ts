@@ -172,13 +172,55 @@ export function loadUserConfigOverride(canonicalUser: string): UserConfigOverrid
   return result.success ? result.data : {}
 }
 
+/** One BYO entry the registry builder could not resolve. `reason` is the
+ *  English one-liner used for daemon stderr and for the write-guard's rejection
+ *  detail; `code` + `params` let the command layer render a localized card line
+ *  without re-deriving the failure. */
+export type UserRegistryIssueCode =
+  | 'secret-missing'
+  | 'codex-auth-missing'
+  | 'ref-invalid'
+  | 'endpoint-missing'
+  | 'schema-mismatch'
+
+export interface UserRegistryIssue {
+  scope: 'endpoint' | 'model'
+  /** Endpoint alias or model display name — the entry that got disabled. */
+  name: string
+  code: UserRegistryIssueCode
+  reason: string
+  params: Record<string, string>
+}
+
+export interface UserRegistryBuild {
+  endpoints: Record<string, EndpointConfig>
+  models: Record<string, ModelEntry>
+  /** Entries dropped from the build. Empty when the whole registry resolved. */
+  issues: UserRegistryIssue[]
+}
+
+/** Stable identity of an issue, used to diff two builds (see `guardWritable`). */
+export function userRegistryIssueKey(issue: UserRegistryIssue): string {
+  return `${issue.scope}:${issue.name}:${issue.code}`
+}
+
 /**
  * Build the user's BYO endpoint / model registry from their override.
  * Resolves each `apiKeyRef` from the user's secrets.json into a live
  * `EndpointConfig.apiKey` (in-memory only — never written back to disk), and
  * validates that each custom model references one of the just-built USER
- * endpoints (NOT admin's). Any problem returns `{ ok: false, error }` so the
- * caller can fall back to the admin-only registry without throwing.
+ * endpoints (NOT admin's).
+ *
+ * **Failures are PER-ENTRY, never whole-registry.** An endpoint whose secret /
+ * codex auth is missing is dropped along with the models that reference it; the
+ * user's other endpoints and models still resolve. The all-or-nothing
+ * `{ok:false}` return this replaced was a live trap: removing one apiKey secret
+ * (`/secret rm BYO_KEY_1`, 2026-08-13 prod) disabled every BYO model the user
+ * had — including codex-OAuth ones whose credentials were intact — and dropped
+ * their `defaultModel` back to the admin default with no user-visible signal.
+ * It also contradicted the admin-collision path below, which has dropped only
+ * the colliding entries since 2026-06-26. Callers surface `issues`; nothing
+ * about a broken entry may disable a healthy one.
  *
  * `credentialIdentity` (`user:<canonical>:secret:<NAME>`) discriminates the
  * provider cache so two users' same-aliased endpoints with different keys
@@ -187,11 +229,10 @@ export function loadUserConfigOverride(canonicalUser: string): UserConfigOverrid
 export function buildUserRegistry(
   canonical: string,
   override: UserConfigOverride,
-):
-  | { ok: true; endpoints: Record<string, EndpointConfig>; models: Record<string, ModelEntry> }
-  | { ok: false; error: string } {
+): UserRegistryBuild {
   const endpoints: Record<string, EndpointConfig> = {}
   const models: Record<string, ModelEntry> = {}
+  const issues: UserRegistryIssue[] = []
 
   for (const [alias, ep] of Object.entries(override.endpoints ?? {})) {
     // BYO codex (PR5 checkpoint 2): `authRef` (codex:<name>) -> resolve the
@@ -202,20 +243,27 @@ export function buildUserRegistry(
       try {
         authName = parseCodexAuthRef(ep.authRef)
       } catch (error) {
-        return {
-          ok: false,
-          error: `endpoint "${alias}" authRef is invalid: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        }
+        const detail = error instanceof Error ? error.message : String(error)
+        issues.push({
+          scope: 'endpoint',
+          name: alias,
+          code: 'ref-invalid',
+          reason: `endpoint "${alias}" authRef is invalid: ${detail}`,
+          params: { alias, detail },
+        })
+        continue
       }
       // The named auth must actually be imported into the user's codex store —
       // config.json carries only the ref, never the tokens.
       if (!readUserCodexAuth(canonical, authName)) {
-        return {
-          ok: false,
-          error: `endpoint "${alias}" authRef "codex:${authName}" not imported; run /config endpoint add ${authName} --type codex --login (or --auth-path)`,
-        }
+        issues.push({
+          scope: 'endpoint',
+          name: alias,
+          code: 'codex-auth-missing',
+          reason: `endpoint "${alias}" authRef "codex:${authName}" not imported; run /config endpoint add ${authName} --type codex --login (or --auth-path)`,
+          params: { alias, authName },
+        })
+        continue
       }
       const authRef = `codex:${authName}`
       endpoints[alias] = {
@@ -235,19 +283,26 @@ export function buildUserRegistry(
     try {
       secretName = validateSecretName(ep.apiKeyRef!)
     } catch (error) {
-      return {
-        ok: false,
-        error: `endpoint "${alias}" apiKeyRef is invalid: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      }
+      const detail = error instanceof Error ? error.message : String(error)
+      issues.push({
+        scope: 'endpoint',
+        name: alias,
+        code: 'ref-invalid',
+        reason: `endpoint "${alias}" apiKeyRef is invalid: ${detail}`,
+        params: { alias, detail },
+      })
+      continue
     }
     const secret = loadUserSecrets(canonical)[secretName]
     if (!secret) {
-      return {
-        ok: false,
-        error: `endpoint "${alias}" apiKeyRef "${secretName}" is not stored; run /secret set ${secretName} <VALUE> first`,
-      }
+      issues.push({
+        scope: 'endpoint',
+        name: alias,
+        code: 'secret-missing',
+        reason: `endpoint "${alias}" apiKeyRef "${secretName}" is not stored; run /secret set ${secretName} <VALUE> first`,
+        params: { alias, secretName },
+      })
+      continue
     }
     endpoints[alias] = {
       apiKey: secret.value,
@@ -260,10 +315,16 @@ export function buildUserRegistry(
   for (const [displayName, m] of Object.entries(override.models ?? {})) {
     const endpoint = endpoints[m.endpoint]
     if (!endpoint) {
-      return {
-        ok: false,
-        error: `user model "${displayName}" references missing user endpoint "${m.endpoint}"`,
-      }
+      // Either the endpoint was never declared, or it was just dropped above —
+      // both leave this model unusable, and both must disable ONLY this model.
+      issues.push({
+        scope: 'model',
+        name: displayName,
+        code: 'endpoint-missing',
+        reason: `user model "${displayName}" references missing user endpoint "${m.endpoint}"`,
+        params: { name: displayName, endpoint: m.endpoint },
+      })
+      continue
     }
     // Schema / endpoint consistency: an openai-auth (codex) model must point at
     // a codex (OAuth) endpoint; an anthropic / openai model must point at an
@@ -273,16 +334,24 @@ export function buildUserRegistry(
     // Normalize the legacy `openai-auth` alias to canonical `codex`.
     const canonicalSchema: Schema = m.schema === 'openai-auth' ? 'codex' : m.schema
     if (canonicalSchema === 'codex' && !isOAuthEndpoint) {
-      return {
-        ok: false,
-        error: `user model "${displayName}" uses codex but endpoint "${m.endpoint}" is an apiKey endpoint`,
-      }
+      issues.push({
+        scope: 'model',
+        name: displayName,
+        code: 'schema-mismatch',
+        reason: `user model "${displayName}" uses codex but endpoint "${m.endpoint}" is an apiKey endpoint`,
+        params: { name: displayName, schema: canonicalSchema, endpoint: m.endpoint },
+      })
+      continue
     }
     if (canonicalSchema !== 'codex' && isOAuthEndpoint) {
-      return {
-        ok: false,
-        error: `user model "${displayName}" uses ${canonicalSchema} but endpoint "${m.endpoint}" is a codex (authRef) endpoint`,
-      }
+      issues.push({
+        scope: 'model',
+        name: displayName,
+        code: 'schema-mismatch',
+        reason: `user model "${displayName}" uses ${canonicalSchema} but endpoint "${m.endpoint}" is a codex (authRef) endpoint`,
+        params: { name: displayName, schema: canonicalSchema, endpoint: m.endpoint },
+      })
+      continue
     }
     models[displayName] = {
       endpoint: m.endpoint,
@@ -294,7 +363,44 @@ export function buildUserRegistry(
     }
   }
 
-  return { ok: true, endpoints, models }
+  return { endpoints, models, issues }
+}
+
+/** The BYO entries currently disabled for this user, in card / notice order
+ *  (endpoints first — a broken endpoint is usually the root cause of the model
+ *  rows beside it). Reads the on-disk override, so command surfaces can report
+ *  the degrade without re-running a resolve. */
+export function listUserRegistryIssues(canonical: string): UserRegistryIssue[] {
+  const issues = buildUserRegistry(canonical, loadUserConfigOverride(canonical)).issues
+  return [...issues].sort((a, b) => {
+    if (a.scope !== b.scope) return a.scope === 'endpoint' ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+/**
+ * Which BYO entries depend on one stored secret. `/secret rm` calls this BEFORE
+ * deleting: removing a referenced secret disables the endpoint that names it
+ * and every model pointing at that endpoint, and the user has no way to see
+ * that coming from the secret store alone (2026-08-13 prod: `/secret rm
+ * BYO_KEY_1` silently took four models offline). Returns empty arrays when the
+ * secret backs nothing.
+ */
+export function findSecretReferences(
+  canonical: string,
+  secretName: string,
+): { endpoints: string[]; models: string[] } {
+  const override = loadUserConfigOverride(canonical)
+  const endpoints = Object.entries(override.endpoints ?? {})
+    .filter(([, ep]) => ep.apiKeyRef === secretName)
+    .map(([alias]) => alias)
+    .sort()
+  if (endpoints.length === 0) return { endpoints: [], models: [] }
+  const models = Object.entries(override.models ?? {})
+    .filter(([, model]) => endpoints.includes(model.endpoint))
+    .map(([name]) => name)
+    .sort()
+  return { endpoints, models }
 }
 
 /**
@@ -306,10 +412,11 @@ export function buildUserRegistry(
  *     admin model unchanged. (Swapping in a user-owned registry, REPLACING the
  *     admin one, was qm's P0 bug.)
  *   - A user endpoint alias that collides with an admin alias, a user model
- *     name that collides with an admin model name, or any registry build
- *     failure (bad apiKeyRef / missing secret / dangling endpoint) is handled
- *     GRACEFULLY: a stderr warning, then fall back to the admin-only registry
- *     for this resolve. resolveUserConfig NEVER throws on bad user input.
+ *     name that collides with an admin model name, or a registry build failure
+ *     (bad apiKeyRef / missing secret / dangling endpoint) is handled
+ *     GRACEFULLY and PER ENTRY: a stderr warning, then that one entry is
+ *     dropped while the user's other BYO entries still resolve.
+ *     resolveUserConfig NEVER throws on bad user input.
  *   - `lang` = override.lang ?? base.lang.
  *   - `defaultModel` follows a three-step chain (the heart of PR4), evaluated
  *     against the UNION registry:
@@ -335,7 +442,7 @@ export function resolveUserConfig(
 
   let userEndpoints: Record<string, EndpointConfig> = {}
   let userModels: Record<string, ModelEntry> = {}
-  if (built.ok) {
+  {
     // A user must not SHADOW an admin endpoint / model — admin always wins a
     // name. But a single collision must NOT nuke the user's whole BYO registry
     // (dogfood trap: the user named one endpoint the same as an admin one and
@@ -380,8 +487,16 @@ export function resolveUserConfig(
         }, kept the rest\n`,
       )
     }
-  } else {
-    process.stderr.write(`[user-config] ${canonical}: ${built.error}; ignoring user BYO registry\n`)
+  }
+  // Unresolvable entries (missing secret / un-imported codex auth / dangling
+  // endpoint / schema mismatch) are reported one line each and disable ONLY
+  // themselves. `/config model` and `/config backend list` render the same set
+  // on their cards — stderr alone left the user staring at a registry that had
+  // silently shrunk.
+  for (const issue of built.issues) {
+    process.stderr.write(
+      `[user-config] ${canonical}: ${issue.reason}; disabled that ${issue.scope}, kept the rest\n`,
+    )
   }
 
   // Lane merge: per-bucket user-over-admin precedence. A non-empty user bucket

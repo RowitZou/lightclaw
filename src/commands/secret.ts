@@ -1,4 +1,5 @@
 import { appendSecretOpAudit, type SecretOp } from '../audit/secret-ops.js'
+import { findSecretReferences } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
 import {
   listUserSecretMetadata,
@@ -8,6 +9,8 @@ import {
   setUserSecret,
   validateSecretName,
 } from '../secrets/store.js'
+import { requireConfirm } from './confirm.js'
+import { canonicalizeFlagTokens } from './flag-normalize.js'
 
 type SecretCommandContext = {
   userId?: string
@@ -70,12 +73,43 @@ export async function runSecretCommand(
       }
       case 'remove':
       case 'rm': {
-        if (parts.length !== 2) return null
-        const name = validateSecretName(parts[1])
+        // Dash-canonicalized VIEW for the `--y` gate only; the name itself is
+        // read from the positional token so a canonicalization never rewrites it.
+        const flagged = canonicalizeFlagTokens(parts)
+        const positional = flagged.filter(part => !part.startsWith('--'))
+        if (positional.length !== 2) return null
+        const name = validateSecretName(positional[1])
+        // A secret that backs a BYO endpoint is load-bearing: removing it
+        // disables that endpoint AND every model on it (2026-08-13 prod:
+        // `/secret rm BYO_KEY_1` took four models offline with no warning).
+        // The gate lives HERE, at the store-mutating chokepoint, so every
+        // caller inherits it — `/system key rm` used to carry its own copy and
+        // the plain `/secret rm` path had none.
+        const refs = findSecretReferences(userId, name)
+        if (refs.endpoints.length > 0) {
+          const gate = requireConfirm(parts, {
+            preview:
+              refs.models.length > 0
+                ? t('confirm.key.rmModels', {
+                    name,
+                    endpoints: refs.endpoints.join(', '),
+                    models: refs.models.join(', '),
+                  })
+                : t('confirm.key.rm', { name, endpoints: refs.endpoints.join(', ') }),
+          })
+          if (!gate.confirmed) return gate.message
+        }
         const result = removeUserSecret(userId, name)
         if (!result.removed) return `${t('secret.notStored', { name: result.name })}\n`
         await auditSecretOp(userId, 'remove', name)
-        return `${t('secret.removed', { name: result.name })}\n`
+        const disabled =
+          refs.endpoints.length > 0
+            ? `\n${t('secret.removedDisabled', {
+                endpoints: refs.endpoints.join(', '),
+                models: refs.models.length > 0 ? refs.models.join(', ') : '-',
+              })}`
+            : ''
+        return `${t('secret.removed', { name: result.name })}${disabled}\n`
       }
       default:
         return null

@@ -63,6 +63,25 @@ export function numberedShow(items: readonly ShowItem[]): string {
     .join('\n')
 }
 
+/** A BYO entry the resolver had to disable, rendered as its own card section so
+ *  a shrunken model list explains itself instead of reading as data loss. */
+export interface DisabledEntryRow {
+  name: string
+  /** Already-localized one-liner: why it is off + how to turn it back on. */
+  reason: string
+}
+
+/** The 已禁用 section, or nothing when the whole registry resolved. */
+function disabledSection(
+  disabled: readonly DisabledEntryRow[] | undefined,
+): CommandListCardSection | null {
+  if (!disabled || disabled.length === 0) return null
+  return {
+    heading: t('card.show.disabled', { count: String(disabled.length) }),
+    markdown: disabled.map(row => `- **${row.name}** — ${row.reason}`).join('\n'),
+  }
+}
+
 // ── /config model (selection) ────────────────────────────────────────────────
 
 export interface ModelShowRow {
@@ -71,7 +90,10 @@ export interface ModelShowRow {
   isCurrent: boolean
 }
 
-export function configModelCardSpec(models: readonly ModelShowRow[]): CommandListCardSpec {
+export function configModelCardSpec(
+  models: readonly ModelShowRow[],
+  disabled?: readonly DisabledEntryRow[],
+): CommandListCardSpec {
   const sections: CommandListCardSection[] = []
   sections.push({
     heading: t('card.show.options'),
@@ -80,6 +102,8 @@ export function configModelCardSpec(models: readonly ModelShowRow[]): CommandLis
         ? t('card.config.model.empty')
         : numberedShow(models.map(m => ({ label: m.name, isDefault: m.isDefault, isCurrent: m.isCurrent }))),
   })
+  const disabledModels = disabledSection(disabled)
+  if (disabledModels) sections.push(disabledModels)
   sections.push({
     heading: t('card.subcommands'),
     rows: [
@@ -291,7 +315,11 @@ function paramBullets(values: readonly string[]): string {
   return values.map(v => `- ${v}`).join('\n')
 }
 
-export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): CommandListCardSpec {
+export function configEndpointCardSpec(
+  rows: readonly EndpointShowRow[],
+  disabled?: readonly DisabledEntryRow[],
+): CommandListCardSpec {
+  const disabledEndpoints = disabledSection(disabled)
   return {
     title: t('card.cmdHelp.title', { cmd: '/config endpoint' }),
     sections: [
@@ -302,6 +330,7 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
             ? t('config.endpoint.none')
             : numberedShow(rows.map(r => ({ label: `${r.name}（${r.details ?? r.type}）` }))),
       },
+      ...(disabledEndpoints ? [disabledEndpoints] : []),
       {
         heading: t('card.subcommands'),
         rows: [
@@ -345,7 +374,11 @@ export interface BackendShowRow {
   details?: string
 }
 
-export function configBackendCardSpec(rows: readonly BackendShowRow[]): CommandListCardSpec {
+export function configBackendCardSpec(
+  rows: readonly BackendShowRow[],
+  disabled?: readonly DisabledEntryRow[],
+): CommandListCardSpec {
+  const disabledBackends = disabledSection(disabled)
   return {
     title: t('card.cmdHelp.title', { cmd: '/config backend' }),
     sections: [
@@ -359,6 +392,7 @@ export function configBackendCardSpec(rows: readonly BackendShowRow[]): CommandL
                 isDefault: r.isDefault,
               }))),
       },
+      ...(disabledBackends ? [disabledBackends] : []),
       {
         heading: t('card.subcommands'),
         rows: [

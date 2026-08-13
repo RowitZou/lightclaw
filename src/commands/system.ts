@@ -3,7 +3,6 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
-import { loadUserConfigOverride } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
 import { expandHomePath } from '../paths.js'
 import { getChannelFileSender, getRuntimeIfInitialized } from '../state.js'
@@ -134,16 +133,17 @@ export async function runSystemCommand(
 }
 
 /**
- * `key` noun. Delegates to the shared secret runner, but interposes a --y gate
- * on `rm <NAME>` when the key is referenced by one of the user's BYO endpoints
- * (apiKeyRef). An unreferenced key deletes directly (no --y) — there is nothing
- * to cascade. A referenced key without --y returns a preview listing the
- * dependent endpoint(s) and performs no delete.
+ * `key` noun. Thin delegation to the shared secret runner — the `rm <NAME>`
+ * --y gate for a key referenced by a BYO endpoint lives INSIDE that runner
+ * (`runSecretCommand`), the single store-mutating chokepoint, so the bare
+ * `/secret rm` path is gated identically. This wrapper used to carry its own
+ * copy of the gate, which left `/secret rm` ungated — that is exactly how a
+ * referenced key was removed in prod on 2026-08-13.
  */
 async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
-  // Dash-canonicalized tokens for verb detection + the --y gate only. The
-  // fall-through below hands the RAW `rest` to the secret runner so a
-  // dash-led secret value (`key set NAME -abc...`) is never rewritten.
+  // Dash-canonicalized tokens for verb detection only. The call below hands the
+  // RAW `rest` to the secret runner so a dash-led secret value
+  // (`key set NAME -abc...`) is never rewritten.
   const parts = canonicalizeFlagTokens(rest.split(/\s+/).filter(Boolean))
   const verb = (parts[0] ?? '').toLowerCase()
   // Structured card from the live secret store = the show output AND the usage
@@ -161,27 +161,7 @@ async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<stri
   if (verb === '' || verb === 'list') {
     return keyCard()
   }
-  if ((verb === 'rm' || verb === 'remove') && parts[1] && ctx.userId) {
-    const name = parts[1]
-    const dependents = endpointsReferencingKey(ctx.userId, name)
-    if (dependents.length > 0) {
-      const gate = requireConfirm(parts, {
-        preview: t('confirm.key.rm', { name, endpoints: dependents.join(', ') }),
-      })
-      if (!gate.confirmed) return gate.message
-      // Strip --y, then hand the cleaned arg string to the secret runner.
-      return (await runSecretCommand(gate.rest.join(' '), { userId: ctx.userId })) ?? keyCard()
-    }
-  }
   return (await runSecretCommand(rest, { userId: ctx.userId })) ?? keyCard()
-}
-
-/** The user's BYO endpoint aliases whose `apiKeyRef` points at `name`. */
-function endpointsReferencingKey(userId: string, name: string): string[] {
-  const override = loadUserConfigOverride(userId)
-  return Object.entries(override.endpoints ?? {})
-    .filter(([, ep]) => ep.apiKeyRef === name)
-    .map(([alias]) => alias)
 }
 
 /**

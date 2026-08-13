@@ -249,6 +249,68 @@ describe('/config model (scalar face)', () => {
     )
     assert.match(out, /unknown model: nope/)
   })
+
+  // A BYO entry the resolver had to disable used to be invisible on this card:
+  // the list just came back shorter (2026-08-13 prod — the user read it as
+  // "my gpt config vanished"). The 已禁用 / Disabled section names each dropped
+  // entry and the command that restores it. Fails on old code (no section).
+  it('bare model surfaces disabled BYO entries with a restore hint', async () => {
+    const cfg = modelConfig()
+    // A gateway endpoint whose secret was removed, plus a model on it.
+    mkdirSync(path.dirname(userConfigPath('frank')), { recursive: true })
+    writeFileSync(
+      userConfigPath('frank'),
+      JSON.stringify({
+        endpoints: { gateway: { type: 'openai', apiKeyRef: 'BYO_KEY_1' } },
+        models: { 'gpt-gw': { endpoint: 'gateway', schema: 'openai', upstreamModel: 'gpt-5.5' } },
+      }),
+    )
+    const out = await inSession('frank', cfg, () =>
+      runConfigCommand('model', { config: cfg, userId: 'frank' }),
+    )
+    // The admin models still list normally.
+    assert.match(out, /sonnet/)
+    // Both the broken endpoint and the model it took down are named...
+    assert.match(out, /Disabled \(2\)/)
+    assert.match(out, /gateway/)
+    assert.match(out, /gpt-gw/)
+    // ...each with the one command that brings it back.
+    assert.match(out, /\/secret set BYO_KEY_1 <VALUE>/)
+  })
+
+  // Per-entry degrade means an ALREADY-broken entry must not block an unrelated
+  // write. Pre-fix guardWritable rejected any write while any entry was broken.
+  it('an unrelated backend write still succeeds while another entry is broken', async () => {
+    const cfg = modelConfig()
+    mkdirSync(path.dirname(userConfigPath('grace')), { recursive: true })
+    writeFileSync(
+      userConfigPath('grace'),
+      JSON.stringify({
+        endpoints: {
+          gateway: { type: 'openai', apiKeyRef: 'MISSING_KEY' },
+          good: { type: 'openai', apiKeyRef: 'GOOD_KEY' },
+        },
+        models: {},
+      }),
+    )
+    mkdirSync(path.dirname(userSecretsPath('grace')), { recursive: true })
+    writeFileSync(
+      userSecretsPath('grace'),
+      JSON.stringify({
+        version: 1,
+        secrets: { GOOD_KEY: { value: 'sk-good', enabled: true, updatedAt: new Date().toISOString() } },
+      }),
+    )
+    const out = await inSession('grace', cfg, () =>
+      runConfigCommand('backend add gpt-ok --endpoint good --upstream gpt-5.5', {
+        config: cfg,
+        userId: 'grace',
+      }),
+    )
+    assert.doesNotMatch(out, /not written/)
+    const written = JSON.parse(readFileSync(userConfigPath('grace'), 'utf8'))
+    assert.ok(written.models['gpt-ok'], 'the healthy write must land')
+  })
 })
 
 describe('/config model disambiguation (scalar switch vs BYO registry)', () => {

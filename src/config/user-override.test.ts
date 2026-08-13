@@ -11,6 +11,8 @@ import { identityPreferencesPath } from '../identity/preferences.js'
 import type { LightClawConfig, ModelEntry } from '../config.js'
 import {
   buildUserRegistry,
+  findSecretReferences,
+  listUserRegistryIssues,
   loadUserConfigOverride,
   readUserConfig,
   resolveUserConfig,
@@ -485,10 +487,12 @@ describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
     })
     assert.equal(resolved!.models['gpt-codex'], undefined)
     assert.deepEqual(resolved!.models, base.models)
-    // The build error surfaces the import hint.
+    // The per-entry issue surfaces the import hint.
     const built = buildUserRegistry('alice', loadUserConfigOverride('alice'))
-    assert.equal(built.ok, false)
-    assert.match((built as { error: string }).error, /not imported; run \/config endpoint add .* --type codex --login/)
+    assert.equal(built.issues.length, 2, 'the endpoint plus the model that dangles off it')
+    const endpointIssue = built.issues.find(issue => issue.scope === 'endpoint')
+    assert.equal(endpointIssue?.code, 'codex-auth-missing')
+    assert.match(endpointIssue!.reason, /not imported; run \/config endpoint add .* --type codex --login/)
   })
 
   it('(d) config.json carries authRef but NOT any token value', () => {
@@ -598,5 +602,137 @@ describe('setUserConfigField (the /model per-user writer)', () => {
     const merged = readUserConfig('alice')
     assert.equal(merged.defaultModel, undefined)
     assert.equal(merged.workspace, '/data/alice-ws')
+  })
+})
+
+// ── per-entry degrade (2026-08-13 prod regression) ───────────────────────────
+//
+// Reproduces the exact production shape: two BYO endpoints, one apiKey-backed
+// (its secret removed via `/secret rm`) and one codex-OAuth-backed (credential
+// intact), with models on each and `defaultModel` pointing at a codex model.
+// Pre-fix `buildUserRegistry` returned `{ok:false}` on the first bad endpoint,
+// `resolveUserConfig` dropped the WHOLE user registry, and the user's model
+// list collapsed to the admin default — the healthy codex models disappeared
+// with it. Fails on old code.
+describe('resolveUserConfig BYO registry per-entry degrade', () => {
+  let tmpHome: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-byo-degrade-test-'))
+    setLightclawHomeOverride(tmpHome)
+  })
+
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  function writeUserConfigJson(user: string, data: Record<string, unknown>): void {
+    const target = userConfigPath(user)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, JSON.stringify(data, null, 2))
+  }
+
+  function writeFakeUserCodex(user: string, name = 'default'): void {
+    const file = userCodexAuthPath(user, name)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({
+        tokens: {
+          access_token: 'fake-access-token',
+          refresh_token: 'fake-refresh-token',
+          expires_at: Date.now() + 86_400_000,
+        },
+        account_id: 'acct-fake',
+        imported_at: new Date().toISOString(),
+        source: 'codex-cli-import',
+      }),
+    )
+  }
+
+  /** The prod shape: gateway endpoint (secret missing) + codex endpoint (auth
+   *  present), two models each, defaultModel on a codex model. */
+  function writeProdShape(user: string): void {
+    writeFakeUserCodex(user, 'default')
+    writeUserConfigJson(user, {
+      endpoints: {
+        gateway: { type: 'openai', apiKeyRef: 'BYO_KEY_1', baseUrl: 'https://gw.example/v1' },
+        'codex-ep': { authRef: 'codex:default' },
+      },
+      models: {
+        'gpt-gw': { endpoint: 'gateway', schema: 'openai', upstreamModel: 'gpt-5.5' },
+        'gpt-gw-mini': { endpoint: 'gateway', schema: 'openai', upstreamModel: 'gpt-5.4-mini' },
+        'gpt-sol': { endpoint: 'codex-ep', schema: 'codex', upstreamModel: 'gpt-5.6-sol' },
+        'gpt-sol-mini': { endpoint: 'codex-ep', schema: 'codex', upstreamModel: 'gpt-5.4-mini' },
+      },
+      defaultModel: 'gpt-sol',
+      lane: { system: 'gpt-sol-mini' },
+    })
+    // No secrets.json at all — the `/secret rm BYO_KEY_1` end state.
+  }
+
+  it('a missing secret disables only its own endpoint and models, never the healthy ones', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeProdShape('alice')
+    const resolved = resolveUserConfig('alice', base)
+
+    // The two codex models — credential intact — must still be selectable.
+    assert.ok(resolved.models['gpt-sol'], 'healthy codex model must survive a broken sibling endpoint')
+    assert.ok(resolved.models['gpt-sol-mini'], 'healthy codex model must survive a broken sibling endpoint')
+    // Only the models on the broken endpoint are gone.
+    assert.equal(resolved.models['gpt-gw'], undefined)
+    assert.equal(resolved.models['gpt-gw-mini'], undefined)
+    // Admin models are untouched (union semantics).
+    assert.ok(resolved.models.m && resolved.models.mine)
+    // The user's chosen default still resolves — it did NOT fall back to admin.
+    assert.equal(resolved.defaultModel, 'gpt-sol')
+    // A lane pointing at a surviving model keeps working too.
+    assert.equal(resolved.lane.system, 'gpt-sol-mini')
+  })
+
+  it('reports one issue per disabled entry, endpoints first, with an actionable reason', () => {
+    writeProdShape('alice')
+    const issues = listUserRegistryIssues('alice')
+    assert.deepEqual(
+      issues.map(issue => `${issue.scope}:${issue.name}:${issue.code}`),
+      [
+        'endpoint:gateway:secret-missing',
+        'model:gpt-gw:endpoint-missing',
+        'model:gpt-gw-mini:endpoint-missing',
+      ],
+    )
+    assert.match(issues[0].reason, /run \/secret set BYO_KEY_1 <VALUE> first/)
+    assert.equal(issues[0].params.secretName, 'BYO_KEY_1')
+  })
+
+  it('findSecretReferences names the endpoint and every model that would go dark', () => {
+    writeProdShape('alice')
+    assert.deepEqual(findSecretReferences('alice', 'BYO_KEY_1'), {
+      endpoints: ['gateway'],
+      models: ['gpt-gw', 'gpt-gw-mini'],
+    })
+    // A secret nothing references is free to delete.
+    assert.deepEqual(findSecretReferences('alice', 'GITHUB_TOKEN'), { endpoints: [], models: [] })
+  })
+
+  it('a schema/endpoint mismatch disables only that model', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeFakeUserCodex('bob', 'default')
+    writeUserConfigJson('bob', {
+      endpoints: { 'codex-ep': { authRef: 'codex:default' } },
+      models: {
+        // openai schema on an OAuth endpoint — rejected.
+        bad: { endpoint: 'codex-ep', schema: 'openai', upstreamModel: 'gpt-5.5' },
+        good: { endpoint: 'codex-ep', schema: 'codex', upstreamModel: 'gpt-5.6-sol' },
+      },
+    })
+    const resolved = resolveUserConfig('bob', base)
+    assert.equal(resolved.models.bad, undefined)
+    assert.ok(resolved.models.good, 'the sibling model on the same endpoint must survive')
+    assert.deepEqual(
+      listUserRegistryIssues('bob').map(issue => issue.code),
+      ['schema-mismatch'],
+    )
   })
 })
