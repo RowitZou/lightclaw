@@ -7,7 +7,12 @@ import {
 } from '../skill/registry.js'
 import { hasSkillAssets, materializeSkillAssets } from '../skill/skill-assets.js'
 import { recordSkillUsage } from '../skill/loader.js'
-import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
+import {
+  isSkillCompatibleWithRole,
+  isSkillCompatibleWithRuntime,
+  isSkillNameAllowedForRole,
+  missingSkillToolsForRole,
+} from '../skill/role-validation.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { getCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -48,12 +53,46 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           isError: true,
         }
       }
-      if (role && skill && !isSkillCompatibleWithRole(skill, role, {
-        runtimeDriver: context.config?.runtime.driver ?? null,
-      })) {
-        return {
-          output: `Unknown skill: ${input.name}`,
-          isError: true,
+      if (role) {
+        const gate = { runtimeDriver: context.config?.runtime.driver ?? null }
+        if (role.kind === 'internal') {
+          // Curation roles rewrite skills across the roster; they never
+          // execute one, so they keep the full visibility gate.
+          if (!isSkillCompatibleWithRole(skill, role, gate)) {
+            return {
+              output: `Unknown skill: ${input.name}`,
+              isError: true,
+            }
+          }
+        } else {
+          // Explicit load by name: a user skill's `roles` frontmatter is an
+          // ownership list, not a read fence — see role-validation.ts. What
+          // still blocks the load is genuine inapplicability: a runtime-driver
+          // mismatch, a bundled skill outside the role's authored allowlist,
+          // or declared tools this role cannot see.
+          if (!isSkillCompatibleWithRuntime(skill, gate)) {
+            return {
+              output:
+                `Skill "${skill.name}" requires the "${skill.requiresDriver}" runtime driver, ` +
+                'which is not active in this session.',
+              isError: true,
+            }
+          }
+          if (skill.source !== 'user' && !isSkillNameAllowedForRole(skill, role)) {
+            return {
+              output: `Unknown skill: ${input.name}`,
+              isError: true,
+            }
+          }
+          const missingTools = missingSkillToolsForRole(skill, role)
+          if (missingTools.length > 0) {
+            return {
+              output:
+                `Skill "${skill.name}" requires tools that are not available in this session: ` +
+                `${missingTools.join(', ')}. It cannot be applied here.`,
+              isError: true,
+            }
+          }
         }
       }
       const session = getCurrentSessionContext()

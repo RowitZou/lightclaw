@@ -4,6 +4,7 @@ import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+import type { Role } from '../agents/types.js'
 import { userSkillsRoot } from '../identity/paths.js'
 import type { Runtime } from '../runtime/index.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -133,6 +134,155 @@ describe('UseSkill transcript output', () => {
         )
         assert.deepEqual(roster, ['guard-skill'])
       })
+    })
+  })
+})
+
+function testRole(overrides: Partial<Role> = {}): Role {
+  return {
+    agentType: 'generalist',
+    whenToUse: 'test',
+    systemPrompt: 'test',
+    tools: ['*'],
+    skills: [],
+    ...overrides,
+  } as Role
+}
+
+async function callUseSkillAs(
+  home: string,
+  name: string,
+  currentRole: Role,
+): Promise<{ output: string; isError?: boolean }> {
+  const ctx = createSessionContext({
+    cwd: process.cwd(),
+    model: 'claude-sonnet-4-6',
+    sessionsDir: path.join(home, 'sessions'),
+    memoryDir: path.join(home, 'memory', 'alice'),
+    currentUserId: 'alice',
+    currentRole,
+    runtime: emptyRuntime,
+  })
+
+  return await runWithSessionContext(ctx, async () => {
+    return await useSkillTool.call(
+      { name },
+      {
+        cwd: process.cwd(),
+        abortSignal: new AbortController().signal,
+        runtime: emptyRuntime,
+      } satisfies ToolCallContext,
+    )
+  })
+}
+
+describe('UseSkill explicit load across roles', () => {
+  it('loads a user skill owned by another role when tools are compatible', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'main-owned-skill',
+        markdown:
+          '---\n' +
+          'name: main-owned-skill\n' +
+          'description: Owned by main via roles stamp.\n' +
+          'roles:\n' +
+          '  - main\n' +
+          '---\n\n' +
+          'Cross-role body content.\n',
+      })
+
+      const result = await callUseSkillAs(home, 'main-owned-skill', testRole())
+
+      assert.equal(result.isError, undefined)
+      assert.match(result.output, /Cross-role body content\./)
+    })
+  })
+
+  it('refuses a skill declaring tools the role cannot see, naming them', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'feishu-writer-skill',
+        markdown:
+          '---\n' +
+          'name: feishu-writer-skill\n' +
+          'description: Needs a Feishu write tool.\n' +
+          'roles:\n' +
+          '  - main\n' +
+          'allowed-tools:\n' +
+          '  - FeishuWriteDoc\n' +
+          '---\n\n' +
+          'Write the doc.\n',
+      })
+
+      const result = await callUseSkillAs(
+        home,
+        'feishu-writer-skill',
+        testRole({ tools: ['Read', 'Grep'] }),
+      )
+
+      assert.equal(result.isError, true)
+      assert.match(result.output, /FeishuWriteDoc/)
+      assert.doesNotMatch(result.output, /Unknown skill/)
+    })
+  })
+
+  it('still hides bundled skills outside the role skills allowlist', async () => {
+    await withTempHome(async home => {
+      const result = await callUseSkillAs(home, 'remember', testRole({ skills: [] }))
+
+      assert.equal(result.isError, true)
+      assert.match(result.output, /Unknown skill: remember/)
+    })
+  })
+
+  it('keeps the full visibility gate for internal curation roles', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'worker-owned-skill',
+        markdown:
+          '---\n' +
+          'name: worker-owned-skill\n' +
+          'description: Owned by generalist.\n' +
+          'roles:\n' +
+          '  - generalist\n' +
+          '---\n\n' +
+          'Worker method body.\n',
+      })
+
+      const result = await callUseSkillAs(
+        home,
+        'worker-owned-skill',
+        testRole({ agentType: 'skillConsolidator', kind: 'internal' }),
+      )
+
+      assert.equal(result.isError, true)
+      assert.match(result.output, /Unknown skill: worker-owned-skill/)
+    })
+  })
+
+  it('refuses a driver-gated skill with an honest driver message', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'cluster-only-skill',
+        markdown:
+          '---\n' +
+          'name: cluster-only-skill\n' +
+          'description: Needs the brainpp driver.\n' +
+          'roles:\n' +
+          '  - main\n' +
+          'requires-driver: brainpp\n' +
+          '---\n\n' +
+          'Submit the batch job.\n',
+      })
+
+      const result = await callUseSkillAs(home, 'cluster-only-skill', testRole())
+
+      assert.equal(result.isError, true)
+      assert.match(result.output, /requires the "brainpp" runtime driver/)
     })
   })
 })

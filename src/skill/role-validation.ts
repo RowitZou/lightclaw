@@ -6,6 +6,19 @@ import type { SkillMeta } from './types.js'
 // PR19 retired the main<->generalist skill bridge: the two surfaces are
 // orthogonal now (manager vs executor), so a user skill is visible exactly
 // to the roles its frontmatter names.
+//
+// 2026-08-13 scoped that gate to DISCOVERY surfaces (prompt listing,
+// ListRoleSkill, dream curation). A user skill's `roles` frontmatter is an
+// OWNERSHIP list (who may revise it — see writeUserSkill's stampRoles), not a
+// read fence: when a non-internal role loads a skill by exact name via
+// UseSkill, the requester that named it in the dispatch brief already decided
+// it applies, so ownership does not block the load. Tool compatibility
+// (`missingSkillToolsForRole`) and the runtime-driver gate still do — a skill
+// whose tools the role cannot see is unusable regardless of who asked.
+// Bundled skills keep the role.skills allowlist on every path (that list is
+// authored role policy, not an ownership stamp), and internal curation roles
+// keep the full gate everywhere (they rewrite skills, they don't execute
+// them).
 
 export type SkillRuntimeGate = {
   runtimeDriver?: RuntimeDriver
@@ -40,6 +53,18 @@ function baseToolName(declared: string): string {
   return (parenIndex === -1 ? declared : declared.slice(0, parenIndex)).trim()
 }
 
+/** Declared tools the role cannot see. Explicit-load callers report these by
+ *  name so the agent can tell its requester exactly why the skill does not
+ *  apply here, instead of a blanket "unknown skill". */
+export function missingSkillToolsForRole(skill: SkillMeta, role: Role): string[] {
+  if (!skill.allowedTools || skill.allowedTools.length === 0) {
+    return []
+  }
+  return skill.allowedTools.filter(
+    declared => !isToolVisibleToRole(role, baseToolName(declared)),
+  )
+}
+
 export function isSkillCompatibleWithRole(
   skill: SkillMeta,
   role: Role,
@@ -51,10 +76,7 @@ export function isSkillCompatibleWithRole(
   if (!isSkillNameAllowedForRole(skill, role)) {
     return false
   }
-  if (!skill.allowedTools || skill.allowedTools.length === 0) {
-    return true
-  }
-  return skill.allowedTools.every(declared => isToolVisibleToRole(role, baseToolName(declared)))
+  return missingSkillToolsForRole(skill, role).length === 0
 }
 
 // A mis-fitting skill is a config fact, not a per-turn event: log each
