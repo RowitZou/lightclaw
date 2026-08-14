@@ -7,6 +7,7 @@ import { safeWriteJson } from '../atomic-write.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
 import { sanitizePathSegment, userTaskRunsRoot, usersRoot } from '../identity/paths.js'
 import { getCurrentSessionContext } from '../session-context.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
   TaskRunArtifactEvent,
   TaskRunCancelledEvent,
@@ -46,6 +47,7 @@ type CreateTaskRunInput = {
   chainId: string
   depth: number
   interjectionSessionId?: string
+  chainState?: ChainState
   now?: number
 }
 
@@ -315,6 +317,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     status: 'queued',
     currentSessionId: null,
     ...(input.interjectionSessionId ? { interjectionSessionId: input.interjectionSessionId } : {}),
+    ...(input.chainState ? { chainState: input.chainState } : {}),
     createdAt: now,
     updatedAt: now,
     lastEventSeq: 0,
@@ -331,6 +334,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     mode: input.mode,
     parentRunId,
     chainId: input.chainId,
+    ...(input.chainState ? { chainState: input.chainState } : {}),
   }
   await withRunLock(id, async () => {
     await appendRawEvents(input.ownerCanonicalUser, id, [created])

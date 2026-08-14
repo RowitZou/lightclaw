@@ -1,3 +1,5 @@
+import type { ChainState } from '../signal-bus/chain-state.js'
+
 export type TaskRunMode = 'blocking' | 'background'
 
 export type TaskRunKind = 'root' | 'dispatch'
@@ -48,6 +50,22 @@ export type TaskRunMeta = {
   // key falls back to `currentSessionId` (= the bg session) — matching the bg
   // runner's own `chainState?.path.at(-1)?.sessionId ?? sessionId`.
   interjectionSessionId?: string
+  // The chain snapshot this run was dispatched with — the fire's own
+  // `deriveChildChainState` output, recorded at creation and immutable for the
+  // life of the run. It is the durable home for four things every shift needs:
+  // owner-secret eligibility (`resolveDispatchedFireSecrets` reads
+  // `path.at(-2)`), dispatch chain guards (depth / cycle / privilege), progress
+  // attribution (`[main → role]`), and bg-result routing back to a live
+  // spawner. Before this field the ONLY copy lived on the backing
+  // `BackgroundTaskEntry`, which the scheduler prunes the moment a oneshot fire
+  // returns a terminal outcome — including the ordinary "worker parked at
+  // TaskUpdate wait" case. So every shift after the first ran chain-less and
+  // secret-less: `$BRAINPP_ACCESS_KEY_ID` vanished from Bash between the
+  // initial fire and every retry, and cluster jobs the retry submitted were
+  // attributed to the daemon host's own account instead of the owner's
+  // (2026-08-14). Evidence for a grant must outlive the schedule record that
+  // happened to carry it; the ledger is the run's own durable state.
+  chainState?: ChainState
   outcome?: TaskRunOutcome
   checkpoint?: string
   wake?: TaskRunWakeSpec
@@ -107,6 +125,9 @@ export type TaskRunCreatedEvent = {
   mode: TaskRunMode
   parentRunId: string | null
   chainId: string
+  // Creation-time chain snapshot; `meta.chainState` is its reduction, so a meta
+  // rebuilt from this event stream keeps the grant evidence.
+  chainState?: ChainState
 }
 
 export type TaskRunStartedEvent = {

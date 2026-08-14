@@ -261,6 +261,11 @@ async function createQueuedDispatchTaskRunBestEffort(input: {
       ...(input.chainState.path.at(-1)?.sessionId
         ? { interjectionSessionId: input.chainState.path.at(-1)!.sessionId }
         : {}),
+      // Record the fire's chain snapshot on the run itself. The backing bg
+      // entry carries the same object, but a oneshot entry is pruned as soon as
+      // the fire returns — which happens at the END OF THE FIRST SHIFT for a
+      // worker that parks at TaskUpdate wait. Resumed shifts read it from here.
+      chainState: input.chainState,
     })
     return run.id
   } catch (error) {

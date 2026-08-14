@@ -98,6 +98,10 @@ async function createBackgroundTaskRunBestEffort(
       ...(task.chainState?.path.at(-1)?.sessionId
         ? { interjectionSessionId: task.chainState.path.at(-1)!.sessionId }
         : {}),
+      // Same durability reason as dispatch.ts: the run must carry its own chain
+      // snapshot so a resumed shift keeps secret eligibility / chain guards /
+      // routing after the backing entry is pruned or the daemon restarts.
+      ...(task.chainState ? { chainState: task.chainState } : {}),
     })
     return run.id
   } catch (error) {
@@ -258,6 +262,10 @@ async function createNextStandingTaskRunBestEffort(
       ...(task.chainState?.path.at(-1)?.sessionId
         ? { interjectionSessionId: task.chainState.path.at(-1)!.sessionId }
         : {}),
+      // Same durability reason as dispatch.ts: the run must carry its own chain
+      // snapshot so a resumed shift keeps secret eligibility / chain guards /
+      // routing after the backing entry is pruned or the daemon restarts.
+      ...(task.chainState ? { chainState: task.chainState } : {}),
     })
     updateBackgroundTask(canonicalUser, task.id, {
       parentTaskRunId: task.standingRootRunId,

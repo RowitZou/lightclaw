@@ -517,24 +517,16 @@ async function seedWaitingRun(opts: {
   sessionId: string
   chainId: string
   dispatcherRole: 'main' | 'generalist'
+  /** Prune the backing bg entry after seeding, reproducing the real oneshot
+   *  lifecycle: the scheduler removes the entry as soon as the fire returns a
+   *  terminal outcome, and a worker parking at `TaskUpdate wait` returns one at
+   *  the end of its FIRST shift — so by the time any resume runs, the entry is
+   *  normally already gone. */
+  pruneEntry?: boolean
 }): Promise<{ runId: string }> {
-  const run = await createTaskRun({
-    ownerCanonicalUser: 'alice',
-    role: 'generalist',
-    callerRole: 'main',
-    callerSessionId: 's-main',
-    mode: 'background',
-    objective: 'Clone the repo, then keep going.',
-    parentRunId: null,
-    chainId: opts.chainId,
-    depth: 1,
-  })
-  await markStarted(run.id, opts.sessionId, Date.now(), 'alice')
-  await rewriteTranscript(opts.sessionId, [createUserMessage('earlier work on the task')])
-  await markWaiting(run.id, { reason: 'awaiting-reply', bySessionId: 's-main' }, Date.now(), 'alice')
-  // The backing bg entry carries the SAME chainState the fire was dispatched
-  // with — its dispatcher node is what the resume gate reloads. main-dispatched
-  // → [main, generalist]; sub-worker-dispatched → [main, generalist, generalist].
+  // The fire's chainState — its dispatcher node is what the resume gate reads.
+  // main-dispatched → [main, generalist]; sub-worker-dispatched →
+  // [main, generalist, generalist].
   const fireChain =
     opts.dispatcherRole === 'main'
       ? [
@@ -546,7 +538,30 @@ async function seedWaitingRun(opts: {
           { role: 'generalist', sessionId: 's-mid', dispatchId: 'mid', at: 2 },
           { role: 'generalist', sessionId: opts.sessionId, dispatchId: 'fire', at: 3 },
         ]
-  saveBackgroundTasks('alice', [{
+  const chainState = {
+    chainId: opts.chainId,
+    depth: fireChain.length - 1,
+    path: fireChain,
+    chainStartedAt: 1,
+  }
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Clone the repo, then keep going.',
+    parentRunId: null,
+    chainId: opts.chainId,
+    depth: 1,
+    // Production records it on the run at creation (dispatch.ts / scheduler.ts).
+    chainState,
+  })
+  await markStarted(run.id, opts.sessionId, Date.now(), 'alice')
+  await rewriteTranscript(opts.sessionId, [createUserMessage('earlier work on the task')])
+  await markWaiting(run.id, { reason: 'awaiting-reply', bySessionId: 's-main' }, Date.now(), 'alice')
+  // The backing bg entry carries the SAME chainState the fire was dispatched with.
+  saveBackgroundTasks('alice', opts.pruneEntry ? [] : [{
     id: 'bg-clone',
     ownerCanonicalUser: 'alice',
     prompt: 'clone',
@@ -558,12 +573,7 @@ async function seedWaitingRun(opts: {
     enabled: true,
     createdAt: new Date().toISOString(),
     taskRunId: run.id,
-    chainState: {
-      chainId: opts.chainId,
-      depth: fireChain.length - 1,
-      path: fireChain,
-      chainStartedAt: 1,
-    },
+    chainState,
   }])
   return { runId: run.id }
 }
@@ -730,6 +740,165 @@ test('a resumed shift carries the fire chainState on BOTH the invocation and the
     channelInterjectionQueue.unmarkInFlight('taskrun-resume-chainstate')
     channelInterjectionQueue.drain('taskrun-resume-chainstate')
   }
+})
+
+test('a resumed top-level main fire keeps the owner secrets after its bg entry is pruned', async () => {
+  // The production shape, and the one every earlier test in this file missed by
+  // always seeding a live entry. A oneshot entry is removed by the scheduler as
+  // soon as its fire returns a terminal outcome — and a worker that parks at
+  // `TaskUpdate wait` returns one at the end of its FIRST shift. So the entry is
+  // gone before ANY resume runs, and sourcing the grant evidence from it meant
+  // shift 1 had the owner's secrets and shifts 2..N had none.
+  //
+  // Prod symptom (2026-08-14): a cluster-eval worker submitted its first round
+  // with the owner's `$BRAINPP_ACCESS_KEY_ID` in Bash env and every retry
+  // without it, so the retry jobs authenticated with the daemon host's fallback
+  // credential and showed up on the cluster console owned by the service
+  // account. Same machine, same command, different owner — the only difference
+  // was which shift issued it.
+  writeMinimalConfig(tmpHome)
+  setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+  setEnabled('alice', 'GH_TOKEN', true)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-secret-pruned',
+    chainId: 'chain-resume-secret-pruned',
+    dispatcherRole: 'main',
+    pruneEntry: true,
+  })
+  try {
+    const { secrets, systemPrompt } = await observeResumeSecrets(tmpHome, runId)
+    assert.equal(
+      secrets?.get('GH_TOKEN'),
+      'ghp_secret_value',
+      'grant evidence must live on the run, not on the schedule record that gets pruned',
+    )
+    assert.ok(
+      systemPrompt.includes('## Available Secrets') && systemPrompt.includes('GH_TOKEN'),
+      'env injection and the prompt section must stay one source',
+    )
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-secret-pruned')
+    channelInterjectionQueue.drain('taskrun-resume-secret-pruned')
+  }
+})
+
+test('a resumed sub-worker fire stays stripped even with its chainState on the run', async () => {
+  // The durability fix must not widen the gate: eligibility is still "the
+  // dispatcher node is the orchestrator". A depth-2 fire keeps no secrets no
+  // matter which source its chainState came from.
+  writeMinimalConfig(tmpHome)
+  setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+  setEnabled('alice', 'GH_TOKEN', true)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-secret-sub-pruned',
+    chainId: 'chain-resume-secret-sub-pruned',
+    dispatcherRole: 'generalist',
+    pruneEntry: true,
+  })
+  try {
+    const { secrets, systemPrompt } = await observeResumeSecrets(tmpHome, runId)
+    assert.equal(secrets, undefined)
+    assert.ok(!systemPrompt.includes('## Available Secrets'))
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-secret-sub-pruned')
+    channelInterjectionQueue.drain('taskrun-resume-secret-sub-pruned')
+  }
+})
+
+test('a resumed shift keeps its chain snapshot after the bg entry is pruned', async () => {
+  // Secrets were only the visible half. The same pruned-entry read fed
+  // invocation.chainState (Dispatch depth / cycle / privilege guards + audit
+  // lineage) and childCtx.chainState (TodoWrite progress attribution), so every
+  // post-park shift also dispatched as a fresh root and lost its breadcrumb.
+  writeMinimalConfig(tmpHome)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-chainstate-pruned',
+    chainId: 'chain-resume-chainstate-pruned',
+    dispatcherRole: 'main',
+    pruneEntry: true,
+  })
+  let invocationChainId: string | undefined
+  let invocationDepth: number | undefined
+  let contextChainId: string | undefined
+  try {
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'fake-model',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 's-main',
+      currentUserId: 'alice',
+      runtime: fakeRuntime(tmpHome),
+    })
+    await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(runId, {
+        via: 'child-join',
+        reason: 'continue',
+        body: '<taskrun-child-result>done</taskrun-child-result>',
+      }, 'alice', async params => {
+        const m = await import('../session-context.js')
+        invocationChainId = params.invocation.chainState?.chainId
+        invocationDepth = params.invocation.chainState?.depth
+        contextChainId = m.getCurrentSessionContext()?.chainState?.chainId
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'continuing' }],
+              stopReason: 'end_turn',
+              usage: { input_tokens: 0, output_tokens: 0 },
+            }),
+          ],
+          assistantText: 'continuing',
+          finalReplyText: 'continuing',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }
+      }),
+    )
+    assert.equal(invocationChainId, 'chain-resume-chainstate-pruned')
+    assert.equal(invocationDepth, 1)
+    assert.equal(contextChainId, 'chain-resume-chainstate-pruned')
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-chainstate-pruned')
+    channelInterjectionQueue.drain('taskrun-resume-chainstate-pruned')
+  }
+})
+
+test('a dispatched run records its fire chainState on the ledger at creation', async () => {
+  // The structural half: the durable copy must exist before anything needs it.
+  // Asserting on the run's own meta (not a resume observation) is what keeps a
+  // future refactor from quietly dropping the write and leaving resume to fall
+  // back to the entry again.
+  const chainState = {
+    chainId: 'chain-ledger-snapshot',
+    depth: 1,
+    path: [
+      { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
+      { role: 'generalist', sessionId: 'bg-fire', dispatchId: 'fire', at: 2 },
+    ],
+    chainStartedAt: 1,
+  }
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'do the thing',
+    parentRunId: null,
+    chainId: chainState.chainId,
+    depth: 1,
+    chainState,
+  })
+  const reloaded = await getTaskRun(run.id, 'alice')
+  assert.equal(reloaded?.chainState?.chainId, 'chain-ledger-snapshot')
+  assert.equal(reloaded?.chainState?.path.length, 2)
+  assert.equal(reloaded?.chainState?.path.at(-2)?.role, 'main', 'the dispatcher node is what the secrets gate reads')
 })
 
 test('resume resolves the owner BYO model (per-user config), not the empty global base', async () => {

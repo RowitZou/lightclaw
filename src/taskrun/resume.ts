@@ -226,16 +226,35 @@ export async function resumeRunWithBlock(
     })),
   )
   // Re-grant top-level-fire secrets on resume using the SAME gate the initial
-  // fire used (resolveDispatchedFireSecrets). A TaskRunMeta carries no
-  // chainState, so reload it from the backing bg entry — that is the exact
-  // chainState dispatched-agent evaluated at fire time, so a resumed shift of a
-  // top-level main fire keeps `$GH_TOKEN` and a resumed sub-worker / internal
-  // shift stays stripped, with no separate predicate to drift. If the entry is
-  // gone (e.g. a swept oneshot) there is nothing to prove eligibility, so the
-  // safe fallback is no secrets.
-  const fireChainState = loadBackgroundTasks(run.ownerCanonicalUser)
-    .find(e => e.taskRunId === run.id || e.standingRootRunId === run.id)
-    ?.chainState
+  // fire used (resolveDispatchedFireSecrets), fed the SAME chainState — the
+  // predicate must never drift between a fire's first shift and a resumed one.
+  // The snapshot comes from the RUN's own ledger (`meta.chainState`, recorded at
+  // creation); the backing bg entry is only a fallback for runs created before
+  // that field existed. It used to be the other way round, and that was the bug:
+  // the scheduler prunes a oneshot entry the moment its fire returns a terminal
+  // outcome, and a worker parking at `TaskUpdate wait` returns one at the end of
+  // its FIRST shift. So the entry was reliably gone by the time any resume ran —
+  // "swept oneshot" was not the edge case the old comment assumed, it was the
+  // normal path — and every shift after the first silently ran with no chain and
+  // no secrets. Prod symptom (2026-08-14): a cluster-eval worker submitted its
+  // first round under the owner's `$BRAINPP_ACCESS_KEY_ID` and every retry under
+  // the daemon host's fallback credential, so the retries showed up on the
+  // cluster console owned by the service account instead of the user.
+  const fireChainState = run.chainState
+    ?? loadBackgroundTasks(run.ownerCanonicalUser)
+      .find(e => e.taskRunId === run.id || e.standingRootRunId === run.id)
+      ?.chainState
+  if (!fireChainState && run.depth > 0) {
+    // A dispatched run always had a chain; reaching here means neither source
+    // has it (a legacy run whose entry is already pruned). The shift still runs
+    // — degrading is better than refusing to resume — but it runs chain-less and
+    // secret-less, so say so instead of failing silently the way the old code
+    // did for every resume.
+    process.stderr.write(
+      `[taskrun] ${run.id} resumed without a chain snapshot (legacy run, backing entry gone): `
+      + 'this shift runs with no owner secrets and no chain guards\n',
+    )
+  }
   const resumedSecrets = resolveDispatchedFireSecrets(
     fireChainState,
     role,
@@ -264,13 +283,13 @@ export async function resumeRunWithBlock(
     sessionId,
     currentRole: role,
     currentTaskRunId: run.id,
-    // Pin the chain snapshot the fire was dispatched with (reloaded from the
-    // backing bg entry above — the same source resolveDispatchedFireSecrets
-    // uses), exactly as dispatched-agent sets it on its childCtx. Without it a
-    // resumed dispatcher's getCurrentChainState() reads undefined, so its
-    // TodoWrite progress loses the [main → role] breadcrumb + chain-root
-    // routing. Undefined when the backing entry is gone (swept oneshot) — an
-    // honest "no chain to assert", matching dispatched-agent's semantics.
+    // Pin the chain snapshot the fire was dispatched with (resolved above — the
+    // same source resolveDispatchedFireSecrets uses), exactly as
+    // dispatched-agent sets it on its childCtx. Without it a resumed
+    // dispatcher's getCurrentChainState() reads undefined, so its TodoWrite
+    // progress loses the [main → role] breadcrumb + chain-root routing.
+    // Undefined only for a legacy run with no ledger snapshot and no surviving
+    // entry — warned about above, never silently.
     chainState: fireChainState,
     discoveredTools: new Map(),
     turnCounter: 0,
@@ -536,9 +555,10 @@ function isSessionTurnInFlight(sessionId: string): boolean {
 /** Turn-end fallback for a resumed shift whose result no waiting parent
  *  consumed inline: mirror the fire path's second half (onFireComplete →
  *  deliverCompletion) by assembling the background-result payload from the
- *  run — plus its backing bg entry when one still exists (a completed
- *  oneshot's entry is usually pruned by the time a resume happens) — and
- *  handing routing to the shared chokepoint in result-route.ts. Best-effort:
+ *  run's own ledger — plus its backing bg entry when one still exists (a
+ *  oneshot's entry is pruned as soon as its fire returns, so by the time any
+ *  resume happens it is normally gone) — and handing routing to the shared
+ *  chokepoint in result-route.ts. Best-effort:
  *  a delivery failure must never mask the resumed turn's own outcome; the
  *  watchdog reconcile remains the cold backstop. */
 export async function deliverResumedResultBestEffort(
@@ -556,6 +576,12 @@ export async function deliverResumedResultBestEffort(
       return
     }
     const entry = loadBackgroundTasks(canonicalUser).find(e => e.taskRunId === run.id)
+    // Ledger first, entry as the legacy fallback — same precedence as the
+    // resume path above. Routing back to a live spawner and the chain-root
+    // sessionId both hang off this, so reading it only from the (usually
+    // pruned) entry meant a resumed shift's result fell back to main-origin
+    // delivery even when the worker that spawned it was still alive.
+    const chainState = run.chainState ?? entry?.chainState
     const failed = run.outcome?.ok === false
     if (entry) {
       const shouldNotify =
@@ -580,15 +606,15 @@ export async function deliverResumedResultBestEffort(
           '(resumed shift returned no final text)',
         taskRunId: run.id,
       },
-      ...(entry?.chainState ? { chainState: entry.chainState } : {}),
+      ...(chainState ? { chainState } : {}),
       suppressSpawnerRouting: Boolean(entry?.standingRootRunId),
       ...(entry?.originSessionId
         ? { originSessionId: entry.originSessionId }
         : run.callerSessionId
           ? { originSessionId: run.callerSessionId }
           : {}),
-      ...(entry?.chainState?.path[0]?.sessionId
-        ? { chainRootSessionId: entry.chainState.path[0].sessionId }
+      ...(chainState?.path[0]?.sessionId
+        ? { chainRootSessionId: chainState.path[0].sessionId }
         : {}),
       backendIsLocal: getConfig().runtime.backend === 'local',
       logContext: `resume ${run.id}`,
