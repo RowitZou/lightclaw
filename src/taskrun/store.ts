@@ -494,14 +494,57 @@ export async function markDelivered(
   )
 }
 
+/** Wait reasons a run revives itself from: the wake fires and the run comes
+ *  back on its own. The two HELD reasons (user-stop / requester-hold) have no
+ *  wake and no self-revival — someone must act. Parking one goal or one chat
+ *  therefore has to convert the former into the latter, or "paused" is a claim
+ *  the ledger does not honor: a descendant parked on a timer keeps its wake and
+ *  resumes minutes later (2026-08-15 prod: the user asked to pause, the root
+ *  was held, and the monitoring worker woke on its 30-minute timer and carried
+ *  on reporting). */
+const SELF_REVIVING_WAIT_REASONS: ReadonlySet<TaskRunWaitReason> = new Set([
+  'timer',
+  'child-join',
+  'awaiting-reply',
+])
+
+export function isSelfRevivingWait(meta: TaskRunMeta): boolean {
+  return meta.status === 'waiting' &&
+    meta.waitReason !== undefined &&
+    SELF_REVIVING_WAIT_REASONS.has(meta.waitReason)
+}
+
 export async function markWaiting(
   id: string,
-  input: { reason: TaskRunWaitReason; bySessionId?: string; wake?: TaskRunWakeSpec },
+  input: {
+    reason: TaskRunWaitReason
+    bySessionId?: string
+    wake?: TaskRunWakeSpec
+    /** Allow re-parking a run that is ALREADY waiting on a self-reviving wake
+     *  (timer / child-join / awaiting-reply) into this wake-less hold. Opt-in,
+     *  because the default guard is what stops a late completion path from
+     *  overwriting a user-stop — this transition is the deliberate opposite:
+     *  a hold that must reach descendants which already parked themselves. */
+    overParkedWake?: boolean
+  },
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
   const meta = await getTaskRun(id, ownerCanonicalUser)
-  if (!meta || meta.status === 'waiting' || isTerminalStatus(meta.status)) return meta
+  if (!meta || isTerminalStatus(meta.status)) return meta
+  if (meta.status === 'waiting') {
+    if (!input.overParkedWake || !isSelfRevivingWait(meta)) return meta
+    return appendEvent(
+      id,
+      'waiting',
+      {
+        reason: input.reason,
+        ...(input.bySessionId ? { bySessionId: input.bySessionId } : {}),
+      },
+      now,
+      meta.ownerCanonicalUser,
+    )
+  }
   if (meta.status !== 'running' && meta.status !== 'blocked') return meta
   return appendEvent(
     id,
@@ -829,7 +872,14 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       currentSessionId: null,
       waitingAt: event.ts,
       waitReason: normalizeWaitReason(event.reason),
-      ...(event.wake ? { wake: event.wake } : {}),
+      // Take the event's wake verbatim, INCLUDING absent: a wake-less park
+      // (user-stop / requester-hold) means "nothing revives this on its own",
+      // so a prior timer must not survive underneath it. Spreading `next` and
+      // only overwriting when the event carried one left the old wake in place
+      // — and the watchdog's due-wake sweep gates on status==='waiting' plus
+      // the wake, so a held run would still have been resumed by the timer it
+      // was supposedly held from.
+      wake: event.wake,
     }
   }
   if (isCheckpointEvent(event)) {
