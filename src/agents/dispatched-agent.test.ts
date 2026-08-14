@@ -334,7 +334,7 @@ test('dispatched worker shift does NOT clear reply-codes at turn end (they live 
     // NOT wipe a reply-code: a monitoring worker can receive the code in one
     // shift and only reply several shifts later. The code survives until the run
     // reaches a terminal state (covered by the store terminal-clear test).
-    assert.equal(consumeReplyCode(runId, code), true)
+    assert.ok(consumeReplyCode(runId, code), 'the code is still live after the shift ended')
   } finally {
     resetReplyCodeRegistryForTest()
     setLightclawHomeOverride(undefined)

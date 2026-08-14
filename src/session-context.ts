@@ -128,6 +128,13 @@ export type SessionContext = {
    *  terminal). Naturally per-handling: a fresh SessionContext is created per
    *  inbound, so it starts unset. Best-effort. */
   concludedRootThisTurn?: boolean
+  /** True when THIS turn is driven by the user: its opener is a genuine
+   *  inbound message, or it drained a real user interjection. Set by the
+   *  channel runner, read when a downward Message mints a reply code so the
+   *  eventual answer knows whether anyone is waiting for it in chat. Unlike
+   *  "is this content user-facing" — a semantic call the daemon cannot make —
+   *  this is provenance, which it can. */
+  userDrivenTurn?: boolean
 }
 
 export const sessionContextStorage = new AsyncLocalStorage<SessionContext>()

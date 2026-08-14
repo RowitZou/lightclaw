@@ -70,7 +70,12 @@ const EXPECTED = {
   // result reaches the user on its own, reporting it right before delivering
   // it would say the same thing twice — so report narrowed from "a result they
   // would act on" to "a result that cannot wait until you finish".
-  Message: '1850a191d138fbf95fbf2acdb5bfb2630d955f4ea1be2a2ee32f015ea24518f5',
+  // report criterion: cannot-wait → CHANGED (2026-08-15). A 3-hour unattended
+  // window spent 10 self-initiated reports on 4 real events; the other 6 were
+  // scheduled checks whose answer matched the previous one. "Cannot wait until
+  // you finish" reads TRUE for any status line on a long run, so the criterion
+  // had to key on change rather than urgency.
+  Message: 'a11486da7a962aa2e2cfa11fcca8659d312493b19a11ddedf1bfb1e12416953b',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',

@@ -14,6 +14,7 @@ import { setAbortControllerForSession } from '../state.js'
 import { closeRootTaskRun, createRootTaskRun, createTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
 import { drainScheduledResumesForTest, resetResumeScheduleForTest, setResumeRunnerForTest } from '../taskrun/resume-schedule.js'
 import { consumeReplyCode, hasReplyCode, mintReplyCode, resetReplyCodeRegistryForTest } from '../taskrun/reply-code-registry.js'
+import { markUserDrivenTurn } from '../state.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -765,6 +766,127 @@ describe('Message ask waits in place', () => {
   })
 })
 
+describe('reply-code provenance decides whether an answer reaches chat', () => {
+  // The framework cannot judge whether a result is worth interrupting the user
+  // — but it knows exactly whether the user asked. Before the code carried
+  // that, EVERY answer forced chat: main relaying one user message down cost
+  // two chat messages (its own reply plus its relay of the worker's ack), and
+  // a 3-hour window in which the user said nothing still spent 4 chat messages
+  // answering questions main had asked itself (2026-08-14 prod).
+  it('a code minted in a user-driven turn is user-originated; one minted by main alone is not', async () => {
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-provenance-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 's-main', { objective: 'goal' })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: root.id,
+        chainId: 'chain-provenance',
+        depth: 1,
+      })
+      await markStarted(child.id, 'bg-provenance', Date.now(), 'alice')
+
+      const mainSession = () => createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 's-main',
+        currentUserId: 'alice',
+        currentRole: role('main', 'orchestrator'),
+      })
+
+      // main messaging on its own initiative (a framework wake drove this turn).
+      await runWithSessionContext(mainSession(), () =>
+        messageTool.call({ to: child.id, message: 'go check the retest' }, toolContext()),
+      )
+      // …and main relaying something the user just said.
+      await runWithSessionContext(mainSession(), async () => {
+        markUserDrivenTurn()
+        await messageTool.call({ to: child.id, message: 'the user asks: what is the score?' }, toolContext())
+      })
+
+      const pushed = channelInterjectionQueue.drain('bg-provenance')
+      assert.equal(pushed.length, 2)
+      const codes = pushed.map(entry => /reply-code="(rc_\w+)"/.exec(entry.text)?.[1])
+      assert.ok(codes[0] && codes[1])
+      assert.equal(consumeReplyCode(child.id, codes[0]!)?.userOriginated, false, 'main-initiated')
+      assert.equal(consumeReplyCode(child.id, codes[1]!)?.userOriginated, true, 'user-initiated')
+    } finally {
+      channelInterjectionQueue.drain('bg-provenance')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+
+  it('answering a main-initiated question does not force the relay to chat, and a report always does', async () => {
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-routing-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent',
+        parentRunId: null,
+        chainId: 'chain-routing',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-routing-session', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-routing-session',
+        mode: 'background',
+        objective: 'child',
+        parentRunId: parent.id,
+        chainId: 'chain-routing',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-routing-session', Date.now(), 'alice')
+      const quietCode = mintReplyCode(child.id, { userOriginated: false })
+
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-routing-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'checked, unchanged', reply_code: quietCode }, toolContext()),
+      )
+      await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'the retest finished at 77.53%', reply_code: child.reportCode! }, toolContext()),
+      )
+
+      const events = await getTaskRunEvents(child.id, {}, 'alice')
+      const reported = events.filter(e => e.kind === 'reported') as unknown as Record<string, unknown>[]
+      assert.equal(reported.length, 2)
+      assert.deepEqual(reported.map(e => [e.via, e.userFacing]), [['reply', false], ['report', true]])
+    } finally {
+      channelInterjectionQueue.drain('parent-routing-session')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+})
+
 describe('Message standing report code', () => {
   it('reports on the run\'s own code repeatedly without spending it or concluding the run', async () => {
     // A worker must be able to speak because it HAS something to say, not only
@@ -980,7 +1102,9 @@ describe('Message reply-code uplink replies', () => {
 
       assert.equal(result.isError, undefined)
       assert.match(result.output, /Reply sent/)
-      assert.equal(consumeReplyCode(child.id, replyCode), false, 'code was consumed exactly once')
+      // consumeReplyCode returns the code's provenance, or null when it is no
+      // longer live — so a second consume is `null`, not `false`.
+      assert.equal(consumeReplyCode(child.id, replyCode), null, 'code was consumed exactly once')
       // The worker reply reaches the requester queue via a detached publish;
       // wait for it instead of draining immediately (race under load).
       await waitFor(() => channelInterjectionQueue.size('parent-session') > 0, {

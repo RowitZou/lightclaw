@@ -843,7 +843,7 @@ function formatYourTaskRunSection(
     lines.push('- Message with no `to` reaches your requester two ways. With a `default`, it puts a question only they can settle — the tool returns their answer, or your default if none arrives, so state a default you can act on. With a `reply_code` from a <requester-message> they sent you, it answers that message with what they asked for — fire-and-forget, so reply and carry on.')
     if (reportCode) {
       lines.push(`- Your report code is \`${reportCode}\`. Use it as \`reply_code\` with Message (no \`to\`) to put a result in your requester's hands: it does not block you, does not conclude your run, and you can use it again whenever there is something new.`)
-      lines.push('- Use it for a result that cannot wait until you finish: the reply you end your run on already reaches them in full, so report what would be stale by then — not what you are about to deliver, and not progress they can already see.')
+      lines.push('- Report when something CHANGED that changes what they would do — a stage landed, a number moved, a plan broke. A scheduled check whose answer matches last time is not a change, and neither is work still running; both belong in your ongoing narration. And the reply you end your run on already carries your result in full, so do not report what you are about to deliver.')
     }
   }
   if (has('Message') && has('Dispatch')) {

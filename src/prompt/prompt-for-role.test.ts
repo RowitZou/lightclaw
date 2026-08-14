@@ -293,8 +293,9 @@ test('a tracked worker is told its own report code, and a run without one says n
     // The restraint the framework deliberately does not enforce by rate limit —
     // including the boundary against the delivery path, which now reaches the
     // user on its own and would otherwise be reported twice.
-    assert.match(withCode, /cannot wait until you finish/)
-    assert.match(withCode, /not what you are about to deliver/)
+    assert.match(withCode, /Report when something CHANGED/)
+    assert.match(withCode, /scheduled check whose answer matches last time is not a change/)
+    assert.match(withCode, /do not report what you are about to deliver/)
 
     const withoutCode = await buildPromptForRole(worker, base)
     assert.match(withoutCode, /## Your Task Run/)

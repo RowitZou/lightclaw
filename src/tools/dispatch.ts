@@ -25,6 +25,7 @@ import {
   getCurrentTaskRunId,
   getResourceGrantTarget,
   getSessionId,
+  isUserDrivenTurn,
   requireCurrentUserId,
 } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -118,7 +119,7 @@ const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject. To find out something about a running child's work, prefer TaskInspect — it reads progress without interrupting; message the child with your question only when TaskInspect can't tell you what you need, and it may reply with a short <worker-reply>.
 
 Without \`to\`, you are speaking to your requester, in one of three ways:
-- report — pass your run's own report code as \`reply_code\`: hands them a result. It does not block you and does not conclude your run, and the code stays valid for as long as your run does. Use it for a result that cannot wait until you finish — the reply you end your run on already reaches them in full, so do not report what you are about to deliver, and do not restate progress they can already see.
+- report — pass your run's own report code as \`reply_code\`: hands them a result. It does not block you and does not conclude your run, and the code stays valid for as long as your run does. Report when something CHANGED that changes what they would do — a stage landed, a number moved, a plan broke, a conclusion reversed. A check you ran on schedule whose answer is the same as last time is not a change, and neither is work still in progress; both belong in your ongoing narration, which already reaches them. And do not report what you are about to deliver — the reply you end your run on carries it in full.
 - ask — with \`default\` instead: put a question only they can settle. Use it when you cannot proceed without their decision — it holds your turn until they answer or your required \`default\` applies, so state a default you can act on. Routine judgment calls you can default and verify are still yours.
 - reply — pass the code that came with their message: when a <requester-message> you received carried a reply-code and they asked you for something, answer with that code. Single-use, and only a message a requester actually sent carries one.`
 
@@ -688,7 +689,10 @@ export const messageTool = buildTool({
     const runInbox = run.interjectionSessionId ?? run.currentSessionId
     if (run.status === 'running' && runInbox) {
       const now = Date.now()
-      const replyCode = mintReplyCode(run.id)
+      // Stamp the code with WHERE this downward message came from. A user turn
+      // (their inbound, or an interjection they typed) makes the answer
+      // something they are waiting for; main's own management messages do not.
+      const replyCode = mintReplyCode(run.id, { userOriginated: isUserDrivenTurn() })
       channelInterjectionQueue.push(runInbox, {
         messageId: `message-dispatch-${run.id}-${now}`,
         senderOpenId: `taskrun:${run.id}`,
@@ -717,7 +721,7 @@ export const messageTool = buildTool({
       // strictly one-question-one-answer and a child cannot keep chatting off
       // the back of an answer. Only a genuine downward message (not an answer)
       // mints a code the child may reply against.
-      const replyCode = isAnswer ? undefined : mintReplyCode(run.id)
+      const replyCode = isAnswer ? undefined : mintReplyCode(run.id, { userOriginated: isUserDrivenTurn() })
       scheduleResumeRunWithBlock(userId, run.id, {
         via: isAnswer ? 'answer' : 'message',
         reason: isAnswer ? 'your question was answered' : 'a message arrived for your task',
@@ -888,12 +892,21 @@ async function replyToRequesterFromCurrentRun(input: {
   //    closing half of a round the requester opened, consumed on use so the
   //    exchange stays one-message-one-answer.
   const isStandingReport = own.reportCode !== undefined && own.reportCode === input.replyCode
-  if (!isStandingReport && !consumeReplyCode(ownId, input.replyCode)) {
+  const consumed = isStandingReport ? null : consumeReplyCode(ownId, input.replyCode)
+  if (!isStandingReport && !consumed) {
     return {
       output: 'That code is neither this run\'s report code nor a live reply-code. A reply-code is single-use and arrives with a requester message; your run\'s report code is in your task run panel.',
       isError: true,
     }
   }
+  // Who is waiting for this, and therefore where the requester's relay of it
+  // goes. A self-initiated report is addressed to the user by construction —
+  // the wording is what keeps it rare. An ANSWER is only user-facing when the
+  // question was: a code minted during a user-driven turn carries that fact
+  // forward, so main relaying a user's question down produces one chat message
+  // (the answer) instead of two, and its own management round-trips produce
+  // none. Provenance the framework knows, not a guess about the content.
+  const userFacing = isStandingReport || consumed?.userOriginated === true
   if (!own.parentRunId) return { output: 'This TaskRun has no requester to reply to.', isError: true }
   const parent = await getTaskRun(own.parentRunId, input.owner)
   if (!parent) return { output: `Requester TaskRun not found: ${own.parentRunId}`, isError: true }
@@ -924,9 +937,8 @@ async function replyToRequesterFromCurrentRun(input: {
         source: 'background-task',
         logPrefix: '[worker-reply]',
         taskCardRoot: { owner: input.owner, rootRunId: own.rootRunId },
-        // A worker's reply is content the user is waiting on — main's relay of
-        // it must reach chat, not be carded, even with the root still open.
-        userFacingWake: true,
+        // Only when someone is actually waiting for it in chat — see above.
+        ...(userFacing ? { userFacingWake: true } : {}),
       })
       delivered = wake.ok
     }
@@ -969,6 +981,10 @@ async function replyToRequesterFromCurrentRun(input: {
   await appendEvent(own.id, 'reported', {
     byRole: getCurrentRole()?.agentType ?? own.role,
     via: isStandingReport ? 'report' : 'reply',
+    // Recorded so the report:reply mix AND the share of answers that actually
+    // reached the user stay measurable — the two levers this surface is tuned
+    // with are wording (report) and provenance (reply).
+    userFacing,
     text,
   }, Date.now(), input.owner)
   return {

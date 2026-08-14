@@ -93,6 +93,7 @@ import {
   getSessionId,
   getSessionsDir,
   getTodos,
+  markUserDrivenTurn,
   registerBackgroundTask,
 } from '../state.js'
 import {
@@ -1023,6 +1024,15 @@ export class ChannelRunner {
         // recalled. `TaskCreate` reads it to stamp created roots into the
         // recall-root index.
         sessionContext.openerMessageId = message.synthetic ? undefined : message.messageId
+        // Provenance for anything this turn asks a worker: a genuine inbound
+        // means the user is waiting for whatever comes back. Framework wakes
+        // (bg-result / reconcile / worker relay) and crash-resumes are NOT —
+        // main talking to its workers on its own initiative should not produce
+        // chat traffic. `frameworkText` alone is not enough to exclude: the
+        // post-approval replay is `synthetic` yet carries the user's real
+        // words, so it counts as user-driven. A user interjection drained
+        // mid-turn flips this on later (see the drain callback).
+        sessionContext.userDrivenTurn = !message.frameworkText && !message.resumeExisting
         await runWithSessionContext(sessionContext, async () => {
         // Load session state only INSIDE the scope above, where sessionsDir
         // is pinned to this message's user — never under the caller's
@@ -1469,6 +1479,10 @@ export class ChannelRunner {
                   // entries below so the model sees the framework block.
                   if (drainedInterjectionsAnswerUser(drained)) {
                     queryHadInterjection = true
+                    // The user just spoke into this turn, so anything it asks a
+                    // worker from here on is on their behalf — even if the turn
+                    // itself began as a framework wake.
+                    markUserDrivenTurn()
                   }
                   // …and equally when a framework entry carries content the
                   // user is waiting on (a worker's ask/reply, a finished

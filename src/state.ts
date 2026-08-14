@@ -187,6 +187,21 @@ export function didConcludeRootThisTurn(): boolean {
   return getCurrentSessionContext()?.concludedRootThisTurn === true
 }
 
+/** Mark this turn as driven by the user — a genuine inbound opened it, or a
+ *  real user interjection drained into it. The channel runner is the only
+ *  caller; everything else (framework wakes, scheduled fires, resumed shifts)
+ *  leaves it unset, which is exactly the distinction a downward Message needs
+ *  to stamp on the reply code it mints. Same tolerant shape as
+ *  markConcludedRootThisTurn — a routing signal must never break a turn. */
+export function markUserDrivenTurn(): void {
+  const ctx = getCurrentSessionContext()
+  if (ctx) ctx.userDrivenTurn = true
+}
+
+export function isUserDrivenTurn(): boolean {
+  return getCurrentSessionContext()?.userDrivenTurn === true
+}
+
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
 }
