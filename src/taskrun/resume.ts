@@ -268,6 +268,7 @@ export async function resumeRunWithBlock(
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
     currentTaskRunId: run.id,
+    currentTaskRunReportCode: run.reportCode,
     enabledSecrets: resumedSecrets,
   })
   // A fresh controller per resumed shift, registered under `sessionId` — the

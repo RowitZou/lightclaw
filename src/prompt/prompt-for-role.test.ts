@@ -252,3 +252,49 @@ function snapshotConfig(): LightClawConfig {
     },
   } as unknown as LightClawConfig
 }
+
+test('a tracked worker is told its own report code, and a run without one says nothing about reporting', async () => {
+  // The uplink used to have no verb for "I have a result you are waiting on":
+  // reply_code only existed as an answer to a message the requester sent, so a
+  // worker holding a finding either dressed it as an ask (which blocks its turn
+  // until the ask timeout) or concluded its run to be heard. Printing the code
+  // is what makes the report path reachable without a lookup — a run created
+  // before the code existed must degrade to the old two-way wording, not to a
+  // dangling instruction about a code it does not have.
+  const ctx = createSessionContext({
+    cwd: path.join(tmpRoot, 'workspace'),
+    model: 'claude-sonnet-4-6',
+    sessionsDir: path.join(tmpRoot, 'sessions'),
+    memoryDir: path.join(tmpRoot, 'memory', 'alice'),
+    currentUserId: 'alice',
+    sessionId: 'report-code',
+  })
+
+  await runWithSessionContext(ctx, async () => {
+    const worker = BUNDLED_AGENTS.find(agent => agent.agentType === 'generalist')
+    assert.ok(worker)
+    const base = {
+      tools: toolsForRole(worker),
+      config: snapshotConfig(),
+      cwd: ctx.cwd,
+      sessionId: ctx.sessionId,
+      environmentRoot: '/workspace',
+      scratchRoot: '/scratch',
+      currentTaskRunId: 'tr_report_code_fixture',
+    }
+
+    const withCode = await buildPromptForRole(worker, {
+      ...base,
+      currentTaskRunReportCode: 'rp_1234abcd',
+    })
+    assert.match(withCode, /## Your Task Run/)
+    assert.match(withCode, /Your report code is `rp_1234abcd`/)
+    assert.match(withCode, /does not block you, does not conclude your run/)
+    // The restraint the framework deliberately does not enforce by rate limit.
+    assert.match(withCode, /do not restate progress through it/)
+
+    const withoutCode = await buildPromptForRole(worker, base)
+    assert.match(withoutCode, /## Your Task Run/)
+    assert.equal(/report code/.test(withoutCode), false)
+  })
+})

@@ -57,7 +57,16 @@ const EXPECTED = {
   // ask-prompt cost-framing (2026-06-14): no-`to` ask description reframed
   // from "reserve it / routine calls are yours" to a cost-of-wrong-guess
   // judgment ("reach for it early when guessing wrong would be expensive").
-  Message: '578ee0cb31b5d7136cd34057c9003e4fff8cff4993fe96a311fa6d53529b18ec',
+  // Standing report code (2026-08-14): the no-`to` face is now three ways, not
+  // two — report / ask / reply. Reporting a result the requester is waiting on
+  // used to have no verb: `reply_code` only existed as an answer to a message
+  // they sent, so a worker with a finding either dressed it as an ask (which
+  // blocks its turn to the ask timeout) or concluded its run to be heard. The
+  // ask bullet tightened to "cannot proceed without their decision" for the
+  // same reason, and report carries the restraint the framework deliberately
+  // does not enforce by rate limit ("would act on or are waiting for"; do not
+  // restate progress).
+  Message: '10e26607f71be02bec9b19f99b4f3418dbbec367b985f8ff3a4cba9f78a396e0',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',

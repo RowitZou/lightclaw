@@ -117,9 +117,10 @@ const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
 With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject. To find out something about a running child's work, prefer TaskInspect — it reads progress without interrupting; message the child with your question only when TaskInspect can't tell you what you need, and it may reply with a short <worker-reply>.
 
-Without \`to\`, you reach your requester two ways:
-- with \`default\` — put a question only they can settle: the tool returns their answer, or your required \`default\` if none arrives in time, so you keep moving either way. Reach for it early when guessing wrong would be expensive to undo; routine judgment calls you can default and verify are still yours.
-- with \`reply_code\` — reply to a message they sent you: when a <requester-message> you received carried a reply-code and they asked you for something, pass that code with your answer. Fire-and-forget — it reaches them, nothing comes back, you carry on. You can only reply to a message a requester actually sent; there is no code to invent otherwise.`
+Without \`to\`, you are speaking to your requester, in one of three ways:
+- report — pass your run's own report code as \`reply_code\`: hands them a result. It does not block you and does not conclude your run, and the code stays valid for as long as your run does. Use it when you have something they would act on or are waiting for; your ongoing narration already reaches them, so do not restate progress through it.
+- ask — with \`default\` instead: put a question only they can settle. Use it when you cannot proceed without their decision — it holds your turn until they answer or your required \`default\` applies, so state a default you can act on. Routine judgment calls you can default and verify are still yours.
+- reply — pass the code that came with their message: when a <requester-message> you received carried a reply-code and they asked you for something, answer with that code. Single-use, and only a message a requester actually sent carries one.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -620,7 +621,7 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
 
 export const messageTool = buildTool({
   name: 'Message',
-  whenToUse: `Send a message to a child TaskRun you dispatched, ask your requester a decision (with a default), or reply to a requester's message (with its reply-code).`,
+  whenToUse: `Send a message to a child TaskRun you dispatched, report a result to your requester (with your run's report code), ask them a decision (with a default), or reply to their message (with its reply-code).`,
   shouldDefer: false, // inline since dogfood: core delegation verb
   description: MESSAGE_DISPATCH_DESCRIPTION,
   searchHint: 'message dispatch interject ask answer report status info reply-code resume waiting paused worker 插嘴 提问 回答 回报 状态 信息 续班次',
@@ -632,7 +633,7 @@ export const messageTool = buildTool({
     message: z.string().min(1),
     options: z.array(z.string().min(1)).optional(),
     default: z.string().min(1).optional(),
-    reply_code: z.string().min(1).optional().describe('The reply-code from a <requester-message reply-code="..."> block you received, to send your requester the information they asked you for. Required for such a reply; to ask them a decision instead, omit it and pass `default`.'),
+    reply_code: z.string().min(1).optional().describe('Your run\'s own report code, to hand your requester a result; or the single-use reply-code from a <requester-message reply-code="..."> block, to answer what they asked you for. Required for either; to ask them a decision instead, omit it and pass `default`.'),
   }),
   async call(input) {
     const userId = requireCurrentUserId()

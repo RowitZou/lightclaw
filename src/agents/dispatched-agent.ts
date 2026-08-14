@@ -13,6 +13,7 @@ import type { LightClawConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { buildWorkerProgressForwarder } from '../taskrun/worker-progress.js'
+import { getTaskRun } from '../taskrun/store.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -132,6 +133,15 @@ export async function runDispatchedAgent(
     params.role,
     params.canonicalUser,
   )
+  // The run's own standing report code, printed in `## Your Task Run` so the
+  // worker can report without first looking itself up. Read from the ledger
+  // here rather than threaded through every caller: the fire / subagent entry
+  // points know the runId, not the meta, and this is one cheap read per run
+  // start. A missing run (best-effort ledger write failed) or a pre-report-code
+  // run simply renders the section without the line.
+  const reportCode = params.currentTaskRunId
+    ? (await getTaskRun(params.currentTaskRunId, params.canonicalUser).catch(() => null))?.reportCode
+    : undefined
   const systemPrompt = await buildPromptForRole(params.role, {
     tools: params.tools,
     config: params.config,
@@ -140,6 +150,7 @@ export async function runDispatchedAgent(
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
     currentTaskRunId: params.currentTaskRunId,
+    currentTaskRunReportCode: reportCode,
     enabledSecrets: inheritedSecrets,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)

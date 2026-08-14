@@ -75,6 +75,8 @@ export type SubagentPromptContext = {
   scratchRoot: string
   /** Tracked task run this worker prompt is for — gates `## Your Task Run`. */
   currentTaskRunId?: string
+  /** That run's standing report code, printed in `## Your Task Run`. */
+  currentTaskRunReportCode?: string
   /**
    * Runtime secrets injected into this worker's Bash env. Only top-level
    * main-dispatched fires carry these (see `runDispatchedAgent`); when present
@@ -488,6 +490,11 @@ type RolePromptPartsInput = {
   /** Set when this prompt is for a worker executing a tracked task run —
    *  gates the `## Your Task Run` section (N1). */
   currentTaskRunId?: string
+  /** The run's standing report code, printed in `## Your Task Run` so the
+   *  worker can use it without a lookup. Resolved by the two callers that
+   *  hold the run (a fire and a resumed shift); absent for a run created
+   *  before the code existed. */
+  currentTaskRunReportCode?: string
 }
 
 type RolePromptParts = {
@@ -532,7 +539,7 @@ async function buildRolePromptParts(
     preTodoSections.push(formatTaskLedgerSection())
   }
   if (policy.kind === 'worker' && input.currentTaskRunId) {
-    const taskRunSection = formatYourTaskRunSection(policy.tools)
+    const taskRunSection = formatYourTaskRunSection(policy.tools, input.currentTaskRunReportCode)
     if (taskRunSection) preTodoSections.push(taskRunSection)
   }
 
@@ -822,7 +829,10 @@ function formatTaskLedgerSection(): string {
 
 // N1 — the worker half of the ledger panel. Line-by-line tool gating: a role
 // never reads a verb it cannot use. Renders only on a tracked task run.
-function formatYourTaskRunSection(tools: readonly string[]): string | null {
+function formatYourTaskRunSection(
+  tools: readonly string[],
+  reportCode?: string,
+): string | null {
   const has = (name: string) => tools.includes('*') || tools.includes(name)
   const lines: string[] = []
   if (has('TaskUpdate')) {
@@ -831,6 +841,10 @@ function formatYourTaskRunSection(tools: readonly string[]): string | null {
   }
   if (has('Message')) {
     lines.push('- Message with no `to` reaches your requester two ways. With a `default`, it puts a question only they can settle — the tool returns their answer, or your default if none arrives, so state a default you can act on. With a `reply_code` from a <requester-message> they sent you, it answers that message with what they asked for — fire-and-forget, so reply and carry on.')
+    if (reportCode) {
+      lines.push(`- Your report code is \`${reportCode}\`. Use it as \`reply_code\` with Message (no \`to\`) to put a result in your requester's hands: it does not block you, does not conclude your run, and you can use it again whenever there is something new.`)
+      lines.push('- Use it only for a result they would act on or are waiting for. Your ongoing narration is already visible to them; do not restate progress through it.')
+    }
   }
   if (has('Message') && has('Dispatch')) {
     lines.push('- Message with a `to` sends a message to a child run you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. To find out something about its work, prefer TaskInspect — it reads progress without interrupting; message the child only when TaskInspect can\'t tell you what you need, and it may answer with a short <worker-reply> — information you asked for, not a delivery, so read it and carry on.')
@@ -1251,6 +1265,7 @@ async function buildSubagentPromptContent(
     environmentRoot: context.environmentRoot,
     scratchRoot: context.scratchRoot,
     currentTaskRunId: context.currentTaskRunId,
+    currentTaskRunReportCode: context.currentTaskRunReportCode,
   })
   const template: SystemPromptTemplate = {
     preTodos: prompt.preTodoSections.join('\n\n'),
