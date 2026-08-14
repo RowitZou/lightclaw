@@ -31,10 +31,16 @@ export async function wakeOrInterject(input: {
   /** Root TaskRun this wake settles; rides the synthetic turn (and any
    *  rescue replay) so its narration lands on the task card timeline. */
   taskCardRoot?: { owner: string; rootRunId: string }
-  /** True when the block is a worker's upward ask/reply the user is waiting
-   *  on (not autonomous progress). Rides the idle synthetic turn so its final
-   *  block routes to chat in full; the in-flight path is covered separately by
-   *  the interjection drain. See `NormalizedChannelMessage.userFacingWake`. */
+  /** True when the block carries content the user is waiting on — a worker's
+   *  upward ask/reply, or a finished subtask's result — rather than autonomous
+   *  progress. Rides BOTH paths so the same event routes the same way whether
+   *  or not main happened to be mid-turn: the idle synthetic turn carries it as
+   *  `NormalizedChannelMessage.userFacingWake`, the in-flight queue entry as
+   *  `InterjectionEntry.userFacing`. Marking only the idle path (the shape this
+   *  comment described before delivery joined the set) made the in-flight half
+   *  fold onto the card — `isSyntheticInterjection` classes every framework
+   *  entry as the manager processing delegated work, so the drain predicate
+   *  could never see it. */
   userFacingWake?: boolean
   /** Same-key queue coalescing for idempotent snapshot blocks (taskrun
    *  reconcile): a still-queued entry with this key is replaced in place
@@ -50,6 +56,7 @@ export async function wakeOrInterject(input: {
     synthetic: true,
     ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     ...(input.coalesceKey ? { coalesceKey: input.coalesceKey } : {}),
+    ...(input.userFacingWake ? { userFacing: true } : {}),
   })
   if (channelInterjectionQueue.hasInflightFor(input.targetSessionId)) {
     const { coalesced } = channelInterjectionQueue.push(input.targetSessionId, queueEntry())

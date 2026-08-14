@@ -99,5 +99,20 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
     source: 'background-task',
     logPrefix: '[background-task]',
     ...(taskCardRoot ? { taskCardRoot } : {}),
+    // A finished subtask's result arriving at MAIN is content the user is
+    // waiting on, so main's relay of it reaches chat instead of folding onto
+    // the card. This is the one place that knows the receiver is main —
+    // `routeBackgroundResult` funnels both the initial fire's settle-on-return
+    // AND a resumed shift's delivery here, so marking it at the receiver
+    // resolution (rather than at either caller) is what keeps the two in step.
+    // Marking a caller instead would have delivered exactly the subtasks that
+    // finish in their first shift and silently folded every one that parked on
+    // a timer first — i.e. every long-running stage.
+    //
+    // Deliberately unconditional: failures and standing-service fires are
+    // results too, and no judgment the framework can make here beats "it
+    // arrived at main". Worker-receiver deliveries return above and never
+    // reach this branch — a sub-worker's result is not the user's business.
+    userFacingWake: true,
   })
 }

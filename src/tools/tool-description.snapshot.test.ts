@@ -66,7 +66,11 @@ const EXPECTED = {
   // same reason, and report carries the restraint the framework deliberately
   // does not enforce by rate limit ("would act on or are waiting for"; do not
   // restate progress).
-  Message: '10e26607f71be02bec9b19f99b4f3418dbbec367b985f8ff3a4cba9f78a396e0',
+  // report/deliver boundary (2026-08-14, same day): once a finished subtask's
+  // result reaches the user on its own, reporting it right before delivering
+  // it would say the same thing twice — so report narrowed from "a result they
+  // would act on" to "a result that cannot wait until you finish".
+  Message: '1850a191d138fbf95fbf2acdb5bfb2630d955f4ea1be2a2ee32f015ea24518f5',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',
@@ -104,7 +108,14 @@ const EXPECTED = {
   // breadcrumbs, the final reply is the account the user reads. Option 1 drops
   // "when you finish the root" so it no longer reads as root-close-only (the
   // routing fix also sends concluding/interjection finals to chat).
-  BackgroundTaskResultBlockMain: 'c863799131234b0e21f6cc492b31efecf1817b70ed991ea3be3e08fb5423ab2d',
+  // Subtask results reach chat (2026-08-14): the routing that folded main's
+  // relay of a finished subtask onto the task card is gone, so the paragraph
+  // that told main "the user follows the work on its task card" was now
+  // factually wrong in the other direction — it would have kept main writing
+  // bookkeeping ("accepted subtask 2") into a message the user actually reads.
+  // Option 1 now asks for the result itself, and names the bookkeeping
+  // anti-example outright.
+  BackgroundTaskResultBlockMain: '977fa9683233d16592eaca050ded86fe051b62eaa7a44caa5e09e200c0b73f21',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
   // (final-text only, no Notify equivalent). 2026-05-20: opening sentence

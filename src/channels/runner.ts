@@ -358,6 +358,9 @@ export function buildLeftoverReplayMessage(
     ...(isSyntheticInterjection(entry) && entry.taskCardRoot
       ? { taskCardRoot: entry.taskCardRoot }
       : {}),
+    // Same reason as taskCardRoot: the replay IS the delivery, so the
+    // user-facing mark has to survive it or a late-arriving result folds.
+    ...(entry.userFacing ? { userFacingWake: true } : {}),
     ...(entry.pendingAttachments?.length
       ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
       : {}),
@@ -490,6 +493,24 @@ export function drainedInterjectionsAnswerUser(
   entries: Pick<InterjectionEntry, 'synthetic' | 'source'>[],
 ): boolean {
   return entries.some(entry => !isSyntheticInterjection(entry))
+}
+
+/**
+ * The other reason a drained batch routes to chat: a framework entry that
+ * carries content the user is waiting on — a worker's upward ask/reply, or a
+ * completed subtask's result arriving at main. The class predicate above
+ * cannot see this (every such entry IS synthetic), so marking it at the
+ * producing chokepoint is the only way it survives into the routing decision.
+ * Separate from `drainedInterjectionsAnswerUser` on purpose: that one answers
+ * "is the agent replying to the user", this one answers "did the user's
+ * awaited content just arrive" — both route to chat, for different reasons,
+ * and collapsing them would make the class predicate lie.
+ * Exported for regression coverage.
+ */
+export function drainedInterjectionsCarryUserFacingResult(
+  entries: Pick<InterjectionEntry, 'userFacing'>[],
+): boolean {
+  return entries.some(entry => entry.userFacing === true)
 }
 
 export async function routeSyntheticBlock(
@@ -1440,13 +1461,24 @@ export class ChannelRunner {
                     return drained
                   }
                   // Route this handling's final synthetic-wake block to chat
-                  // ONLY when a genuine user message drained — not for framework
-                  // deliveries (bg-result / resume / reconcile / ask / reply),
-                  // which fold onto the task card. See queryHadInterjection decl
-                  // + drainedInterjectionsAnswerUser (keys on the class, not one
+                  // when a genuine user message drained — not for framework
+                  // narration (reconcile / progress relays), which folds onto
+                  // the task card. See queryHadInterjection decl +
+                  // drainedInterjectionsAnswerUser (keys on the class, not one
                   // delivery kind). Still materialize + record ALL drained
                   // entries below so the model sees the framework block.
                   if (drainedInterjectionsAnswerUser(drained)) {
+                    queryHadInterjection = true
+                  }
+                  // …and equally when a framework entry carries content the
+                  // user is waiting on (a worker's ask/reply, a finished
+                  // subtask's result). The class predicate above cannot see
+                  // that — every such entry is synthetic — so the producing
+                  // chokepoint marks it and it survives to here. Without this
+                  // the in-flight half of every user-facing wake folded while
+                  // the idle half reached chat: same event, opposite outcome,
+                  // decided by whether main happened to be mid-turn.
+                  if (drainedInterjectionsCarryUserFacingResult(drained)) {
                     queryHadInterjection = true
                   }
                   // Record drained entries so a transient retry path can

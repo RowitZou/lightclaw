@@ -537,6 +537,10 @@ async function rescueLeftoverInterjections(
         emittedAt: entry.arrivedAt,
         logPrefix: '[taskrun-resume]',
         ...(entry.taskCardRoot ? { taskCardRoot: entry.taskCardRoot } : {}),
+        // Carry the user-facing mark across the rescue: an entry that outlived
+        // the turn's last tool boundary is the SAME delivery, and losing the
+        // mark here would fold exactly the results that arrived late.
+        ...(entry.userFacing ? { userFacingWake: true } : {}),
       })
     } catch (error) {
       process.stderr.write(

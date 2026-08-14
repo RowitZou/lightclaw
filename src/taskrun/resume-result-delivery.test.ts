@@ -14,6 +14,11 @@ import {
   markDelivered,
   markStarted,
 } from './store.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import {
+  ensureBackgroundResultToInterjectionSubscription,
+  resetBackgroundResultToInterjectionForTest,
+} from '../agents/hooks/background-result-to-interjection.js'
 import { deliverResumedResultBestEffort } from './resume.js'
 
 // Regression for the 2026-07-26 wake-path audit (Class B): a RESUMED run that
@@ -112,6 +117,55 @@ void describe('deliverResumedResultBestEffort', () => {
     assert.equal(payload.taskRunId, child.id)
     assert.equal(payload.outcome, 'success')
     assert.equal(payload.ownerOpenId, 'ou_alice')
+  })
+
+  void it('marks the delivery user-facing all the way through the subscriber — the resume path, not just the fire path', async () => {
+    // The resume-must-mirror-the-normal-path family, applied to chat routing:
+    // if the user-facing mark were set at the fire's completion handler instead
+    // of at receiver resolution, every subtask that finishes in its FIRST shift
+    // would reach the user and every one that parked on a timer first would
+    // fold — i.e. every long-running stage, silently. So the mark lives where
+    // both paths converge, and this test drives the resumed half end to end:
+    // deliverResumedResultBestEffort → routeBackgroundResult → subscriber →
+    // the queued entry main will drain.
+    const root = await createRootTaskRun(OWNER, DM_SESSION, {
+      objective: '长任务：三基准评测',
+      title: '评测',
+    })
+    const child = await createTaskRun({
+      ownerCanonicalUser: OWNER,
+      parentRunId: root.id,
+      chainId: 'chain-resume-userfacing',
+      depth: 1,
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      objective: '子任务：跑完补跑并报分',
+      title: '补跑',
+      mode: 'background',
+    })
+    await markStarted(child.id, 'bg-session-resume-userfacing', Date.now(), OWNER)
+    const delivered = await markDelivered(
+      child.id,
+      { ok: true, summary: '补跑收官' },
+      Date.now(),
+      OWNER,
+    )
+
+    // main is mid-turn: the branch that used to fold every framework delivery.
+    channelInterjectionQueue.markInFlight(DM_SESSION)
+    ensureBackgroundResultToInterjectionSubscription()
+    try {
+      await deliverResumedResultBestEffort(OWNER, delivered!, 'SWE-Pro 补跑收官，最终分 77.53%')
+      const drained = channelInterjectionQueue.drain(DM_SESSION)
+      assert.equal(drained.length, 1, 'the resumed delivery reached main\'s queue')
+      assert.equal(drained[0]!.userFacing, true, 'and is marked as content the user is waiting on')
+      assert.match(drained[0]!.text, /77\.53%/)
+    } finally {
+      resetBackgroundResultToInterjectionForTest()
+      channelInterjectionQueue.unmarkInFlight(DM_SESSION)
+      channelInterjectionQueue.drain(DM_SESSION)
+    }
   })
 
   void it('suppresses main delivery when the direct parent is an active worker', async () => {

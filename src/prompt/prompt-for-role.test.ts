@@ -290,8 +290,11 @@ test('a tracked worker is told its own report code, and a run without one says n
     assert.match(withCode, /## Your Task Run/)
     assert.match(withCode, /Your report code is `rp_1234abcd`/)
     assert.match(withCode, /does not block you, does not conclude your run/)
-    // The restraint the framework deliberately does not enforce by rate limit.
-    assert.match(withCode, /do not restate progress through it/)
+    // The restraint the framework deliberately does not enforce by rate limit —
+    // including the boundary against the delivery path, which now reaches the
+    // user on its own and would otherwise be reported twice.
+    assert.match(withCode, /cannot wait until you finish/)
+    assert.match(withCode, /not what you are about to deliver/)
 
     const withoutCode = await buildPromptForRole(worker, base)
     assert.match(withoutCode, /## Your Task Run/)

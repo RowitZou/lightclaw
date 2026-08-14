@@ -12,7 +12,7 @@ import {
   markFinished,
 } from '../taskrun/store.js'
 import { makeFakeFeishuMessage } from '../__tests__/concurrency-helpers.js'
-import { drainedInterjectionsAnswerUser, routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
+import { buildLeftoverReplayMessage, drainedInterjectionsAnswerUser, drainedInterjectionsCarryUserFacingResult, routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
 import type { NormalizedChannelMessage } from './types.js'
 
 let home: string
@@ -25,6 +25,67 @@ beforeEach(() => {
 afterEach(() => {
   setLightclawHomeOverride(undefined)
   rmSync(home, { recursive: true, force: true })
+})
+
+void describe('drainedInterjectionsCarryUserFacingResult (awaited content vs delegated bookkeeping)', () => {
+  // The class predicate above cannot tell these apart — a finished subtask's
+  // result and a watchdog reconcile are both synthetic + background-task. So
+  // the producing chokepoint marks the ones the user is waiting on, and this
+  // predicate is what carries that mark into the routing decision. Before the
+  // mark existed, the SAME delivery reached chat when main was idle (via the
+  // synthetic message's userFacingWake) and folded onto the card when main
+  // happened to be mid-turn — one event, two outcomes, decided by timing.
+  it('an unmarked framework batch stays folded', () => {
+    assert.equal(
+      drainedInterjectionsCarryUserFacingResult([{}, { userFacing: false }]),
+      false,
+    )
+  })
+
+  it('one marked entry is enough to route the handling to chat', () => {
+    assert.equal(
+      drainedInterjectionsCarryUserFacingResult([{}, { userFacing: true }]),
+      true,
+    )
+  })
+
+  it('the two predicates are independent — a marked framework entry answers nothing, and still routes', () => {
+    const delivered = [{ synthetic: true, source: 'background-task' as const, userFacing: true }]
+    assert.equal(drainedInterjectionsAnswerUser(delivered), false)
+    assert.equal(drainedInterjectionsCarryUserFacingResult(delivered), true)
+  })
+})
+
+void describe('a user-facing mark survives the leftover replay', () => {
+  // A result that lands past the turn's last tool boundary is rescued as a
+  // fresh synthetic turn. It is the same delivery — dropping the mark there
+  // would fold exactly the late arrivals, which on a long task is most of them.
+  it('carries userFacing onto the replay message as userFacingWake', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_owner', text: 'original turn' })
+    const replay = buildLeftoverReplayMessage(original, {
+      messageId: 'bg-123-456',
+      senderOpenId: 'ou_owner',
+      text: '<background-task-result …>',
+      arrivedAt: 1,
+      synthetic: true,
+      source: 'background-task',
+      userFacing: true,
+    })
+    assert.equal(replay.userFacingWake, true)
+  })
+
+  it('leaves an unmarked framework leftover unmarked', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_owner', text: 'original turn' })
+    const replay = buildLeftoverReplayMessage(original, {
+      messageId: 'taskrun-reconcile-1',
+      senderOpenId: 'ou_owner',
+      text: '<taskrun-reconcile …>',
+      arrivedAt: 1,
+      synthetic: true,
+      source: 'background-task',
+    })
+    assert.equal(replay.userFacingWake, undefined)
+  })
 })
 
 void describe('drainedInterjectionsAnswerUser (framework-vs-user chat routing)', () => {

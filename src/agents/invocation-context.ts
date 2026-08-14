@@ -47,6 +47,16 @@ export type InterjectionEntry = {
    *  Distinct from `synthetic`: bg-result / taskrun wakes are synthetic but
    *  carry real deliveries and MUST be rescued. */
   ephemeral?: boolean
+  /** True when this framework-minted entry carries content the user is
+   *  waiting on — a worker's upward ask/reply, or a completed subtask's
+   *  result arriving at main — so the turn that handles it routes its final
+   *  block to chat instead of folding it onto the task card. The idle path
+   *  carries the same fact on the synthetic message (`userFacingWake`); this
+   *  is the in-flight half. Without it every framework entry is classed as
+   *  "the manager processing delegated work" by `isSyntheticInterjection`
+   *  and the handling folds — which silently swallowed a worker's ask/reply
+   *  whenever it happened to land mid-turn. */
+  userFacing?: boolean
   /** Same-key queue coalescing for idempotent state snapshots (taskrun
    *  reconcile blocks). While a prior entry with this key is still QUEUED
    *  (not yet drained into the model), a new push replaces it in place —
