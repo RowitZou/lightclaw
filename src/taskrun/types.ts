@@ -50,6 +50,16 @@ export type TaskRunMeta = {
   // key falls back to `currentSessionId` (= the bg session) — matching the bg
   // runner's own `chainState?.path.at(-1)?.sessionId ?? sessionId`.
   interjectionSessionId?: string
+  // Standing report code: the run's own, permanent ticket for surfacing a
+  // result its requester is waiting on — non-blocking, does not conclude the
+  // run, reusable for the run's whole life. Distinct from the one-shot reply
+  // codes a requester's downward message mints (those live in an in-memory
+  // registry and are consumed on use): a worker must be able to speak because
+  // it HAS something to say, not only because it was spoken to. Minted at
+  // creation for every run that has a requester (roots have none — main
+  // answers the user directly) and persisted here, so it survives the daemon
+  // restart that wipes the one-shot registry.
+  reportCode?: string
   // The chain snapshot this run was dispatched with — the fire's own
   // `deriveChildChainState` output, recorded at creation and immutable for the
   // life of the run. It is the durable home for four things every shift needs:

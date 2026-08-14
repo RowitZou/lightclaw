@@ -870,14 +870,29 @@ async function replyToRequesterFromCurrentRun(input: {
 }) {
   const ownId = getCurrentTaskRunId()
   if (!ownId) return { output: 'No current TaskRun is active for this reply.', isError: true }
-  if (!consumeReplyCode(ownId, input.replyCode)) {
+  const own = await getTaskRun(ownId, input.owner)
+  if (!own) return { output: `TaskRun not found: ${ownId}`, isError: true }
+  // Two codes reach this path, and only their ACCOUNTING differs — delivery,
+  // wake, ledger event and non-blocking-ness are identical:
+  //  - the run's STANDING report code: its own permanent ticket for surfacing
+  //    a result the requester is waiting on. Never consumed, so a worker can
+  //    speak because it has something to say. Before it existed the only
+  //    self-initiated uplink was an ask, which blocks the turn for up to the
+  //    ask timeout — so a worker holding a finding but no question either
+  //    faked a question (2026-08-14 prod: 9 of 11 asks ran out their own
+  //    default, 15-26min blocked each), concluded its run early just to be
+  //    heard (the same day's premature delivery), or left the finding in
+  //    narration that never leaves the task card.
+  //  - a ONE-SHOT reply code minted by a requester's downward message: the
+  //    closing half of a round the requester opened, consumed on use so the
+  //    exchange stays one-message-one-answer.
+  const isStandingReport = own.reportCode !== undefined && own.reportCode === input.replyCode
+  if (!isStandingReport && !consumeReplyCode(ownId, input.replyCode)) {
     return {
-      output: 'This reply needs a live reply-code from a requester message. You have none pending — it may have expired at this turn\'s end, or the requester never sent a message to reply to.',
+      output: 'That code is neither this run\'s report code nor a live reply-code. A reply-code is single-use and arrives with a requester message; your run\'s report code is in your task run panel.',
       isError: true,
     }
   }
-  const own = await getTaskRun(ownId, input.owner)
-  if (!own) return { output: `TaskRun not found: ${ownId}`, isError: true }
   if (!own.parentRunId) return { output: 'This TaskRun has no requester to reply to.', isError: true }
   const parent = await getTaskRun(own.parentRunId, input.owner)
   if (!parent) return { output: `Requester TaskRun not found: ${own.parentRunId}`, isError: true }
@@ -940,11 +955,26 @@ async function replyToRequesterFromCurrentRun(input: {
     }
   }
 
+  // `via` separates self-initiated reports from answers the requester asked
+  // for (and is named `via`, not `kind`, because appendEvent spreads the
+  // payload OVER the event's own `kind: 'reported'` — a payload `kind` would
+  // silently rewrite the event's identity and hide it from every
+  // kind === 'reported' reader). The report code deliberately carries no rate
+  // limit: the framework cannot tell which message in a window is the one the
+  // user is waiting on, so the restraint lives in the tool's wording instead.
+  // This field is how that restraint gets measured — a report:reply ratio that
+  // drifts is the signal to tighten the wording, never to add a time window
+  // (which would only push the model back to faking asks to get around it).
   await appendEvent(own.id, 'reported', {
     byRole: getCurrentRole()?.agentType ?? own.role,
+    via: isStandingReport ? 'report' : 'reply',
     text,
   }, Date.now(), input.owner)
-  return { output: `Reply sent to requester for TaskRun ${own.id}.` }
+  return {
+    output: isStandingReport
+      ? `Report sent to your requester for TaskRun ${own.id}. Your run is unchanged — carry on.`
+      : `Reply sent to requester for TaskRun ${own.id}.`,
+  }
 }
 
 function wrapMessage(message: string, replyCode?: string): string {

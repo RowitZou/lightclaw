@@ -151,6 +151,10 @@ function createRunId(): string {
   return `tr_${randomUUID().replace(/-/g, '').slice(0, 20)}`
 }
 
+function createReportCode(): string {
+  return `rp_${randomUUID().replace(/-/g, '').slice(0, 8)}`
+}
+
 function titleFromObjective(objective: string): string {
   const firstLine = objective.split('\n').map(line => line.trim()).find(Boolean)
   return (firstLine ?? 'Untitled task').slice(0, 120)
@@ -318,6 +322,9 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     currentSessionId: null,
     ...(input.interjectionSessionId ? { interjectionSessionId: input.interjectionSessionId } : {}),
     ...(input.chainState ? { chainState: input.chainState } : {}),
+    // Only a run with a requester gets one. A root is main's own work order:
+    // main talks to the user through the channel, not through an uplink.
+    ...(parentRunId ? { reportCode: createReportCode() } : {}),
     createdAt: now,
     updatedAt: now,
     lastEventSeq: 0,

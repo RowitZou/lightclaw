@@ -39,6 +39,63 @@ import {
 } from './reply-code-registry.js'
 
 describe('TaskRun store', () => {
+  it('mints a standing report code for runs that have a requester, and persists it', async () => {
+    // The one-shot reply codes live in an in-memory registry, so a restart
+    // leaves a worker with no way to speak until its requester happens to
+    // message it again (2026-08-14 prod: the 09:09 restart wiped every
+    // outstanding code). The standing code is meta-resident precisely so a
+    // run's ability to report survives the daemon.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-report-code-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Root work order.',
+        chainId: 'chain-alice-report',
+        depth: 1,
+      })
+      assert.equal(root.reportCode, undefined)
+
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'bg-alice-root',
+        mode: 'background',
+        objective: 'Child work.',
+        parentRunId: root.id,
+        chainId: 'chain-alice-report',
+        depth: 2,
+      })
+      assert.match(child.reportCode ?? '', /^rp_[0-9a-f]{8}$/)
+
+      // Re-read from disk: the code is meta state, not process state.
+      const reloaded = await getTaskRun(child.id, 'alice')
+      assert.equal(reloaded?.reportCode, child.reportCode)
+
+      // Distinct per run — a code is a run's own ticket, not a shared one.
+      const sibling = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'bg-alice-root',
+        mode: 'background',
+        objective: 'Sibling work.',
+        parentRunId: root.id,
+        chainId: 'chain-alice-report',
+        depth: 2,
+      })
+      assert.notEqual(sibling.reportCode, child.reportCode)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
   it('never revives a terminal run through a late resume or rebuild', async () => {
     // 2026-08-14 prod: a wake armed while the worker was alive fired minutes
     // after main had settled the run, and the unconditional `resumed` reducer

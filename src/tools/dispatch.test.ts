@@ -765,6 +765,170 @@ describe('Message ask waits in place', () => {
   })
 })
 
+describe('Message standing report code', () => {
+  it('reports on the run\'s own code repeatedly without spending it or concluding the run', async () => {
+    // A worker must be able to speak because it HAS something to say, not only
+    // because it was spoken to. The one-shot codes are minted by a requester's
+    // downward message, so before the standing code a worker holding a finding
+    // could only fake a question (an ask blocks its turn until the ask timeout)
+    // or conclude its run early to be heard — both observed in 2026-08-14 prod.
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-report-code-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent work',
+        parentRunId: null,
+        chainId: 'chain-report',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-report-session', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-report-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: parent.id,
+        chainId: 'chain-report',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-report-session', Date.now(), 'alice')
+      const reportCode = child.reportCode
+      assert.ok(reportCode, 'a run with a requester is minted a standing report code')
+
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-report-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const first = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Ownership check passed on the new object.', reply_code: reportCode }, toolContext()),
+      )
+      assert.equal(first.isError, undefined)
+      assert.match(first.output, /Report sent/)
+
+      // The whole point of "standing": the second report needs no new ticket.
+      const second = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Retest reached 20/87.', reply_code: reportCode }, toolContext()),
+      )
+      assert.equal(second.isError, undefined)
+
+      await waitFor(() => channelInterjectionQueue.size('parent-report-session') >= 2, {
+        label: 'both reports reach the requester session queue',
+      })
+      const delivered = channelInterjectionQueue.drain('parent-report-session')
+      assert.equal(delivered.length, 2)
+      assert.match(delivered[0]!.text, new RegExp(`<worker-reply childRunId="${child.id}">`))
+
+      const events = await getTaskRunEvents(child.id, {}, 'alice')
+      const reports = events.filter(event => event.kind === 'reported')
+      assert.equal(reports.length, 2)
+      assert.deepEqual(
+        reports.map(event => (event as unknown as { text: string }).text.slice(0, 9)),
+        ['Ownership', 'Retest re'],
+      )
+      // Self-initiated reports are tagged apart from requested answers — that
+      // ratio is how the wording-only restraint gets measured later. The tag
+      // must NOT collide with the event's own `kind`, which appendEvent sets
+      // and the payload would otherwise overwrite.
+      assert.deepEqual(
+        reports.map(event => (event as Record<string, unknown>).via),
+        ['report', 'report'],
+      )
+
+      // Reporting is not delivering and not parking: the run carries on.
+      const after = await getTaskRun(child.id, 'alice')
+      assert.equal(after?.status, 'running')
+      assert.equal(after?.reportCode, reportCode, 'the code survives its own use')
+    } finally {
+      channelInterjectionQueue.drain('parent-report-session')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+
+  it('gives a root no report code and refuses another run\'s code', async () => {
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-report-code-scope-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'root work',
+        parentRunId: null,
+        chainId: 'chain-report-scope',
+        depth: 1,
+      })
+      // No requester to report to — main answers the user through the channel.
+      assert.equal(root.reportCode, undefined)
+
+      await markStarted(root.id, 'root-scope-session', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'root-scope-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: root.id,
+        chainId: 'chain-report-scope',
+        depth: 2,
+      })
+      const sibling = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'root-scope-session',
+        mode: 'background',
+        objective: 'sibling work',
+        parentRunId: root.id,
+        chainId: 'chain-report-scope',
+        depth: 2,
+      })
+      assert.notEqual(child.reportCode, sibling.reportCode)
+      await markStarted(child.id, 'child-scope-session', Date.now(), 'alice')
+
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-scope-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const borrowed = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Status', reply_code: sibling.reportCode! }, toolContext()),
+      )
+      assert.equal(borrowed.isError, true)
+      assert.match(borrowed.output, /report code/)
+    } finally {
+      channelInterjectionQueue.drain('root-scope-session')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+})
+
 describe('Message reply-code uplink replies', () => {
   it('routes a worker reply with a live reply-code to its running requester', async () => {
     resetReplyCodeRegistryForTest()
@@ -827,7 +991,11 @@ describe('Message reply-code uplink replies', () => {
       assert.match(reply.text, new RegExp(`<worker-reply childRunId="${child.id}">`))
       assert.match(reply.text, /job is still pending/)
       const events = await getTaskRunEvents(child.id, {}, 'alice')
-      assert.ok(events.some(event => event.kind === 'reported'))
+      const reported = events.find(event => event.kind === 'reported')
+      assert.ok(reported)
+      // The other half of the report/reply split: an answer the requester
+      // asked for is tagged apart from a self-initiated report.
+      assert.equal((reported as Record<string, unknown>).via, 'reply')
     } finally {
       channelInterjectionQueue.drain('parent-session')
       setLightclawHomeOverride(undefined)
