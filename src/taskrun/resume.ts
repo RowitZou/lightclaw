@@ -46,6 +46,7 @@ import type { TaskRunMeta, TaskRunResumedEvent } from './types.js'
 import {
   getTaskRun,
   getTaskRunEvents,
+  isTerminalTaskRunStatus,
   markDelivered,
   markRebuilt,
   markResumed,
@@ -59,7 +60,7 @@ export type ResumeRunBlock = {
 
 export type ResumeRunResult =
   | { ok: true; run: TaskRunMeta; mode: 'resume' | 'rebuild' | 'interjection'; assistantText: string }
-  | { ok: false; reason: 'not-found' | 'no-role' | 'no-session-context' | 'no-transcript' | 'no-checkpoint' | 'model-quarantined' | 'query-failed'; message: string }
+  | { ok: false; reason: 'not-found' | 'no-role' | 'no-session-context' | 'no-transcript' | 'no-checkpoint' | 'model-quarantined' | 'terminal' | 'query-failed'; message: string }
 
 export async function resumeRunWithBlock(
   runId: string,
@@ -75,6 +76,21 @@ export async function resumeRunWithBlock(
   if (!run) return { ok: false, reason: 'not-found', message: `TaskRun not found: ${runId}` }
   const role = getAgent(run.role)
   if (!role) return { ok: false, reason: 'no-role', message: `TaskRun role is not registered: ${run.role}` }
+
+  // Terminal verdicts are final. Scheduling and execution are separated by the
+  // per-run resume chain — a block scheduled while the run was alive can wait
+  // minutes behind an in-flight shift — so every caller's own status gate is a
+  // snapshot that may be stale by the time we get here. This is the one place
+  // all revivals funnel through, so the check belongs here: refuse BEFORE any
+  // transcript / ledger mutation, and report a reason the scheduler reads as
+  // "nothing to do" rather than a resume failure.
+  if (isTerminalTaskRunStatus(run.status)) {
+    return {
+      ok: false,
+      reason: 'terminal',
+      message: `TaskRun ${run.id} is ${run.status}; a settled run is never revived by a wake.`,
+    }
+  }
 
   // Awake-already guard ("没醒就唤醒、醒了就插嘴" applied to workers): if the
   // run's turn is still in flight — e.g. a worker asked, parked at

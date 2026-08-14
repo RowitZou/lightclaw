@@ -24,6 +24,7 @@ import { resetWorkerProgressForTest } from './worker-progress.js'
 import {
   createTaskRun,
   getTaskRun,
+  markCancelled,
   markWaiting,
   markStarted,
 } from './store.js'
@@ -969,3 +970,56 @@ function writeMinimalConfig(home: string): void {
 function fakeRuntime(workspaceRoot: string): Runtime {
   return { workspaceRoot, scratchRoot: workspaceRoot } as unknown as Runtime
 }
+
+test('a settled run is never revived by a wake that lands after it', async () => {
+  // Scheduling and execution are minutes apart (the per-run resume chain waits
+  // out the in-flight shift), so every caller's status gate is a snapshot that
+  // can go stale. resumeRunWithBlock is where all revivals funnel, so it must
+  // re-check finality itself — and refuse before touching transcript or ledger.
+  // 2026-08-14 prod: a timer armed at 08:07 executed at 08:57 against a run
+  // cancelled at 08:50 and restarted the worker.
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Watch the benchmark and report when it settles.',
+    parentRunId: null,
+    chainId: 'chain-resume-terminal',
+    depth: 1,
+  })
+  await markStarted(run.id, 'bg-terminal-session', Date.now(), 'alice')
+  await markWaiting(
+    run.id,
+    { reason: 'timer', wake: { kind: 'timer', at: Date.now() } },
+    Date.now(),
+    'alice',
+  )
+  await markCancelled(run.id, 'cancelled by main via TaskUpdate', Date.now(), 'alice')
+
+  const ctx = createSessionContext({
+    cwd: tmpHome,
+    model: 'fake-model',
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+  })
+  let queryCalls = 0
+  const result = await runWithSessionContext(ctx, () =>
+    resumeRunWithBlock(run.id, {
+      via: 'timer',
+      reason: 'your declared timer fired',
+      body: '<taskrun-timer-wake />',
+    }, 'alice', (async () => {
+      queryCalls += 1
+      throw new Error('a terminal run must never reach the agent loop')
+    }) as never),
+  )
+  assert.equal(result.ok, false)
+  assert.equal(result.ok === false && result.reason, 'terminal')
+  assert.equal(queryCalls, 0)
+  const after = await getTaskRun(run.id, 'alice')
+  assert.equal(after?.status, 'cancelled')
+})

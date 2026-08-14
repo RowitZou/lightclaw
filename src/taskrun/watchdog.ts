@@ -22,6 +22,7 @@ import { t } from '../i18n/index.js'
 import {
   appendEvent,
   getTaskRunEvents,
+  isTerminalTaskRunStatus as isTerminal,
   listTaskRunOwners,
   listTaskRuns,
   markCancelled,
@@ -1269,10 +1270,6 @@ function previewOutcome(run: TaskRunMeta): string | undefined {
   const text = run.outcome?.summary ?? run.outcome?.error
   if (!text) return undefined
   return text.length > 160 ? `${text.slice(0, 157)}...` : text
-}
-
-function isTerminal(status: TaskRunMeta['status']): boolean {
-  return status === 'done' || status === 'failed' || status === 'cancelled'
 }
 
 function escapeAttribute(value: string): string {

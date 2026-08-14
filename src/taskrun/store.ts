@@ -154,9 +154,15 @@ function titleFromObjective(objective: string): string {
   return (firstLine ?? 'Untitled task').slice(0, 120)
 }
 
-function isTerminalStatus(status: TaskRunMeta['status']): boolean {
+/** The absorbing statuses: a run that reached one never runs again — no wake,
+ *  resume, rebuild or late fire may take it back out. Single definition for
+ *  every module that enforces that finality (store transitions, the watchdog's
+ *  sweep/reconcile gates, the resume chokepoint). */
+export function isTerminalTaskRunStatus(status: TaskRunMeta['status']): boolean {
   return status === 'done' || status === 'failed' || status === 'cancelled'
 }
+
+const isTerminalStatus = isTerminalTaskRunStatus
 
 /** Whether `markDelivered` would actually transition a run at this status into
  *  `delivered` (vs. return it unchanged). True only for not-yet-concluded
@@ -514,6 +520,15 @@ export async function markResumed(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
+  // Same finality markStarted enforces, for the revival edge one level over: a
+  // wake that was armed while the run was alive and lands after it settled
+  // (an in-process timer whose resume queued behind a long shift, a watchdog
+  // due-wake scheduled a tick before the verdict) must not flip a terminal run
+  // back to running. 2026-08-14 prod: an accepted run resumed 3 minutes after
+  // its `finished` event and kept working as a zombie beside its successor.
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta) return null
+  if (isTerminalStatus(meta.status)) return meta
   const next = await appendEvent(
     id,
     'resumed',
@@ -535,6 +550,11 @@ export async function markRebuilt(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
+  // Terminal is absorbing here too — see markResumed. A cold rebuild revives a
+  // run just as a resume does, so a late wake must not reach it either.
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta) return null
+  if (isTerminalStatus(meta.status)) return meta
   const next = await appendEvent(
     id,
     'rebuilt',
@@ -740,6 +760,12 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
     }
   }
   if (isResumedEvent(event) || isRebuiltEvent(event)) {
+    // Terminal is an absorbing state for revival events, mirroring `started`'s
+    // guard in markStarted. The mark* helpers refuse to append these on a
+    // terminal run at all; this is the structural half of the same rule, so a
+    // future append path that skips them cannot resurrect a settled run by
+    // hitting the unconditional `status: 'running'` below.
+    if (isTerminalStatus(next.status)) return next
     return {
       ...next,
       status: 'running',

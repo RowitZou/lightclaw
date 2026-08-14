@@ -72,6 +72,14 @@ export function scheduleResumeRunWithBlock(
           : await resumeRunnerImpl(runId, block, ownerCanonicalUser)
       if (result.ok) {
         lastFailureByRun.delete(runId)
+      } else if (result.reason === 'terminal') {
+        // The run settled between scheduling and execution — the wake had
+        // nothing left to wake. Not a failure: recording it would raise a
+        // dead-wake-source finding about a run nobody is waiting on, and the
+        // finding's own remedy (settle it) already happened.
+        process.stderr.write(
+          `[taskrun-resume] scheduled resume skipped for ${runId}: ${result.message}\n`,
+        )
       } else if (result.reason === 'model-quarantined') {
         // Not a resume failure — the owner's model is known-dead (quota /
         // auth) and the shift was deferred before touching the ledger.
@@ -103,6 +111,47 @@ export function scheduleResumeRunWithBlock(
     pending.delete(task)
     if (chainByRun.get(runId) === task) chainByRun.delete(runId)
   })
+}
+
+/** Arm the in-process half of a declared timer wake. Promptness only: the
+ *  durable half is the watchdog's level-triggered due-wake sweep, which re-arms
+ *  from the ledger after a daemon restart. */
+export function armTaskRunTimerWake(owner: string, runId: string, at: number): void {
+  const delay = Math.max(0, at - Date.now())
+  setTimeout(() => {
+    void fireTaskRunTimerWake(owner, runId, at)
+  }, delay).unref?.()
+}
+
+/** Fire a timer wake IF it is still the run's live one. The armed timer is
+ *  edge-triggered and cannot be cancelled (no handle is kept, and the ledger —
+ *  not memory — owns the wait), so by fire time the wake it was armed for may
+ *  have been superseded: consumed by an earlier message / answer / watchdog
+ *  resume, replaced by a re-declared wait, or made moot by the run settling.
+ *  Re-reading the ledger here makes the in-process path level-triggered like
+ *  the watchdog's, which is what keeps a stale timer from starting a second
+ *  shift on a run that already moved on (2026-08-14 prod: a wake armed at 08:07
+ *  fired into a run that had been cancelled, restarting a zombie worker). */
+export async function fireTaskRunTimerWake(
+  owner: string,
+  runId: string,
+  at: number,
+): Promise<'scheduled' | 'stale'> {
+  const { getTaskRun } = await import('./store.js')
+  const run = await getTaskRun(runId, owner)
+  const wake = run?.wake
+  const live = run !== null &&
+    run.status === 'waiting' &&
+    wake?.kind === 'timer' &&
+    wake.at === at &&
+    wake.consumed !== true
+  if (!live) return 'stale'
+  scheduleResumeRunWithBlock(owner, runId, {
+    via: 'timer',
+    reason: 'your declared timer fired',
+    body: '<taskrun-timer-wake />\nYour timer wake fired. Check what you were waiting for; if it needs more time, declare a new wait — do not hold the turn open to watch it.',
+  })
+  return 'scheduled'
 }
 
 /** Test seam: await every resume scheduled so far (including ones scheduled

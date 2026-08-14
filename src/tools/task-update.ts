@@ -19,7 +19,7 @@ import {
   markWaiting,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
+import { armTaskRunTimerWake, scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import { holdRootTaskRun } from '../taskrun/stop.js'
 import { resolveBackingRun } from '../taskrun/resolve-run-id.js'
 import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, markConcludedRootThisTurn, requireCurrentUserId } from '../state.js'
@@ -414,7 +414,7 @@ export const taskUpdateTool = buildTool({
         return { output: `TaskRun ${own} could not be set waiting.`, isError: true }
       }
       if (wake.kind === 'timer') {
-        scheduleTaskRunTimerWake(owner, waitingRun.id, wake.at)
+        armTaskRunTimerWake(owner, waitingRun.id, wake.at)
       }
       // The shift ends HERE, enforced: a run cannot be waiting while its
       // session keeps executing. Aborting our own in-flight turn seals the
@@ -692,19 +692,6 @@ export const taskUpdateTool = buildTool({
     return { output: JSON.stringify({ runId: settled.id, status: settled.status }) }
   },
 })
-
-// In-process promptness only; the durable half is the watchdog reconcile,
-// which re-arms due timer wakes from the ledger after a daemon restart.
-function scheduleTaskRunTimerWake(owner: string, runId: string, at: number): void {
-  const delay = Math.max(0, at - Date.now())
-  setTimeout(() => {
-    scheduleResumeRunWithBlock(owner, runId, {
-      via: 'timer',
-      reason: 'your declared timer fired',
-      body: '<taskrun-timer-wake />\nYour timer wake fired. Check what you were waiting for; if it needs more time, declare a new wait — do not hold the turn open to watch it.',
-    })
-  }, delay).unref?.()
-}
 
 export const __toolDescriptionForSnapshot = {
   TaskUpdate: TASK_UPDATE_DESCRIPTION,

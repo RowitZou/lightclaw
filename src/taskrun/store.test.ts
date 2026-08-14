@@ -25,6 +25,7 @@ import {
   markFinished,
   markWaiting,
   markStarted,
+  markRebuilt,
   markResumed,
   rejectTaskRun,
   sweepAllTerminalTaskRuns,
@@ -38,6 +39,74 @@ import {
 } from './reply-code-registry.js'
 
 describe('TaskRun store', () => {
+  it('never revives a terminal run through a late resume or rebuild', async () => {
+    // 2026-08-14 prod: a wake armed while the worker was alive fired minutes
+    // after main had settled the run, and the unconditional `resumed` reducer
+    // flipped `cancelled` back to `running` — a zombie worker went on writing
+    // events beside the successor already doing its job. Terminal is absorbing:
+    // the late wake must be a no-op at the ledger, not a resurrection.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-terminal-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const cancelled = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Monitor the long run and report.',
+        chainId: 'chain-alice-terminal',
+        depth: 1,
+      })
+      await markStarted(cancelled.id, 'bg-alice-terminal', 1, 'alice')
+      await markWaiting(
+        cancelled.id,
+        { reason: 'timer', wake: { kind: 'timer', at: 50 } },
+        2,
+        'alice',
+      )
+      await markCancelled(cancelled.id, 'cancelled by main via TaskUpdate', 3, 'alice')
+
+      const afterResume = await markResumed(
+        cancelled.id,
+        { via: 'timer', sessionId: 'bg-alice-terminal', reason: 'your declared timer fired' },
+        60,
+        'alice',
+      )
+      assert.equal(afterResume?.status, 'cancelled')
+
+      const done = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Deliver once and settle.',
+        chainId: 'chain-alice-terminal-2',
+        depth: 1,
+      })
+      await markStarted(done.id, 'bg-alice-terminal-2', 1, 'alice')
+      await markFinished(done.id, { ok: true, summary: 'settled' }, 2, 'alice')
+      const afterRebuild = await markRebuilt(
+        done.id,
+        { via: 'timer', sessionId: 'taskrun-cold-rebuild', reason: 'your declared timer fired' },
+        60,
+        'alice',
+      )
+      assert.equal(afterRebuild?.status, 'done')
+
+      // The refusal is at the append, not just the projection: no revival event
+      // is written, so replays and event-stream readers agree with meta.
+      const events = await getTaskRunEvents(cancelled.id, {}, 'alice')
+      assert.equal(events.some(event => event.kind === 'resumed'), false)
+      const doneEvents = await getTaskRunEvents(done.id, {}, 'alice')
+      assert.equal(doneEvents.some(event => event.kind === 'rebuilt'), false)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
   it('persists event-log-first task runs with a meta snapshot', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-store-'))
     setLightclawHomeOverride(tmpHome)
