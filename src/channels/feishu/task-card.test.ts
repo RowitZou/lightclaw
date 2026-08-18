@@ -5,6 +5,8 @@ import { setLang } from '../../i18n/index.js'
 import {
   buildTaskCard,
   TASK_CARD_MAX_CHILDREN,
+  TASK_CARD_MAX_PAYLOAD_BYTES,
+  TASK_CARD_MAX_PAYLOAD_ELEMENTS,
   TASK_CARD_MAX_CHILD_TIMELINE,
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
@@ -515,4 +517,98 @@ test('emitted element_ids satisfy Feishu cardkit format (no colon, ≤20, letter
   for (const id of ids) {
     assert.ok(FORMAT.test(id), `emitted element_id "${id}" must match ${FORMAT}`)
   }
+})
+
+// --- payload limits (2026-08-18 prod: 230099 / ErrCode 11310) ---
+
+function measure(card: Record<string, unknown>): { bytes: number; elements: number } {
+  const count = (node: unknown): number => {
+    if (Array.isArray(node)) return node.reduce<number>((s, n) => s + count(n), 0)
+    if (node && typeof node === 'object') {
+      const rec = node as Record<string, unknown>
+      let n = typeof rec.tag === 'string' ? 1 : 0
+      for (const v of Object.values(rec)) n += count(v)
+      return n
+    }
+    return 0
+  }
+  return { bytes: Buffer.byteLength(JSON.stringify(card)), elements: count(card) }
+}
+
+/** A tree shaped like the prod card that Feishu rejected: many short-text
+ *  subtasks. Short text is the point — the character budget stays happy while
+ *  the serialized payload grows by a fixed ~7 components per child. */
+function manyChildren(count: number): TaskCardChildView[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `tr_child_${i}`,
+    title: `agentic-data-chain-paper-${i}`,
+    role: 'coder',
+    status: (i % 3 === 0 ? 'running' : 'done') as TaskCardChildView['status'],
+    latestProgress: `第 ${i} 步已完成`,
+    timeline: [
+      { at: TS + i * 1000, text: `子任务 ${i} 开始` },
+      { at: TS + i * 1000 + 500, text: `子任务 ${i} 结束` },
+    ],
+  }))
+}
+
+test('task card stays inside Feishu payload limits with many short subtasks', () => {
+  setLang('cn')
+  const card = buildTaskCard(baseView({ children: manyChildren(28) }))
+  const { bytes, elements } = measure(card)
+  assert.ok(
+    bytes <= TASK_CARD_MAX_PAYLOAD_BYTES,
+    `payload ${bytes} bytes must stay within ${TASK_CARD_MAX_PAYLOAD_BYTES}`,
+  )
+  assert.ok(
+    elements <= TASK_CARD_MAX_PAYLOAD_ELEMENTS,
+    `payload ${elements} components must stay within ${TASK_CARD_MAX_PAYLOAD_ELEMENTS}`,
+  )
+})
+
+test('a pathological subtask count still fits, and says what it folded', () => {
+  setLang('cn')
+  const children = manyChildren(200)
+  const card = buildTaskCard(baseView({ children }))
+  const { bytes, elements } = measure(card)
+  assert.ok(bytes <= TASK_CARD_MAX_PAYLOAD_BYTES, `payload ${bytes} bytes over budget`)
+  assert.ok(elements <= TASK_CARD_MAX_PAYLOAD_ELEMENTS, `payload ${elements} components over budget`)
+  // Nothing is dropped silently: the folded work is announced in the card.
+  const rendered = JSON.stringify(card)
+  const shownPanels = collectPanels(card).length
+  assert.ok(shownPanels < children.length, 'most children must fold rather than render a panel each')
+  assert.ok(/已完成|进行中/.test(rendered), 'folded children are summarized in the card text')
+})
+
+test('a long timeline is trimmed before children are folded', () => {
+  setLang('cn')
+  // Five children, each with a very long narration: the payload has to shrink,
+  // and detail is the thing that should give first.
+  const children: TaskCardChildView[] = Array.from({ length: 5 }, (_, i) => ({
+    id: `tr_verbose_${i}`,
+    title: `子任务 ${i}`,
+    role: 'coder',
+    status: 'running',
+    timeline: Array.from({ length: 10 }, (_, j) => ({
+      at: TS + j * 1000,
+      text: `${'详'.repeat(300)}${i}-${j}`,
+    })),
+  }))
+  const card = buildTaskCard(baseView({ children }))
+  const { bytes, elements } = measure(card)
+  assert.ok(bytes <= TASK_CARD_MAX_PAYLOAD_BYTES, `payload ${bytes} bytes over budget`)
+  assert.ok(elements <= TASK_CARD_MAX_PAYLOAD_ELEMENTS, `payload ${elements} components over budget`)
+  // All five keep their row + panel; only the timeline tails were cut.
+  assert.equal(collectPanels(card).length, children.length + 1, 'children keep their panels')
+})
+
+test('the minimal card carries status without any subtask panel', () => {
+  setLang('cn')
+  const card = buildTaskCard(baseView({ children: manyChildren(28) }), { minimal: true })
+  const { bytes, elements } = measure(card)
+  assert.ok(bytes <= TASK_CARD_MAX_PAYLOAD_BYTES, `minimal payload ${bytes} bytes over budget`)
+  assert.ok(elements <= TASK_CARD_MAX_PAYLOAD_ELEMENTS, `minimal payload ${elements} components over budget`)
+  assert.equal(collectPanels(card).length, 1, 'only the root overview panel remains')
+  const header = card.header as { title: { content: string } }
+  assert.ok(header.title.content.length > 0, 'header still names the task')
 })

@@ -81,7 +81,15 @@ export type TaskCardView = {
 // into summary lines (moreLive / earlierDone). This ceiling only bounds a
 // pathological tree (hundreds of subtasks) before the budget math runs — in
 // realistic cards the budget bites first.
-export const TASK_CARD_MAX_CHILDREN = 50
+//
+// 50 → 20 (2026-08-18 prod): each admitted child costs a FIXED 3 body elements
+// (title + progress line + panel) plus 4 nested tagged nodes, so the payload
+// grows ~7 components / ~800 bytes per child no matter how short its text is.
+// At 50 the backstop alone sat around 365 components / 46 KB — past both Feishu
+// limits, i.e. the "absolute backstop" was itself out of bounds. 20 keeps the
+// worst admitted card inside the payload caps below; the caps are enforced by
+// real measurement regardless (see buildTaskCard).
+export const TASK_CARD_MAX_CHILDREN = 20
 export const TASK_CARD_MAX_ROOT_TIMELINE = 30
 export const TASK_CARD_MAX_CHILD_TIMELINE = 10
 // Timeline-line cap raised 200→400 and per-entry latest-progress 60→160 so the
@@ -115,6 +123,22 @@ export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
 // entries coexist freely (many sub-tasks each keep their lines until the total
 // genuinely fills up, then the largest panel is trimmed first, root last).
 export const TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET = 12000
+
+// Feishu's own limits on a card payload, with headroom. The character budget
+// above counts CONTENT chars; Feishu counts the SERIALIZED CARD — tags,
+// element_ids, panel headers, JSON punctuation. The two decouple hard as
+// children multiply: 2026-08-18 prod, a root with 28 subtasks rendered 12000
+// chars of content into 31 KB / 211 components and every patch came back
+// `400 code=230099 ext=ErrCode: 11310 element exceeds the limit`, so the card
+// froze mid-run and stayed frozen for 94 consecutive flushes. An estimate can
+// never track this — the builder MEASURES the finished payload and shrinks
+// until it fits (see buildTaskCard).
+//
+// Feishu caps a card message at 30 KB and (per the 11310 family) ~200
+// components. Both are enforced at ~80% so a card that measures OK here also
+// survives the style-tag expansion Feishu applies server-side.
+export const TASK_CARD_MAX_PAYLOAD_BYTES = 24000
+export const TASK_CARD_MAX_PAYLOAD_ELEMENTS = 160
 
 type StatusStyle = {
   icon: string
@@ -474,9 +498,10 @@ function foldBreakdown(children: TaskCardChildView[]): string {
     .join(' · ')
 }
 
-export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
-  const view = input
-  const plan = planChildren(view)
+/** Render one card from an already-decided plan. Pure: same (view, plan) in,
+ *  same payload out — which is what lets `buildTaskCard` render, measure, and
+ *  re-render a smaller plan until the payload fits. */
+function renderCard(view: TaskCardView, plan: TaskCardPlan): Record<string, unknown> {
   const { root } = view
   const style = taskCardStatusStyle(root.status)
   const terminal = TASK_RUN_TERMINAL_STATUSES.has(root.status)
@@ -633,4 +658,118 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
       elements,
     },
   }
+}
+
+/** Every tagged node in the payload — body elements plus the ones nested inside
+ *  panels, panel headers and div texts. Feishu's component ceiling counts the
+ *  rendered tree, not just `body.elements`, so this counts the tree too (and
+ *  over-counts if anything, which is the safe direction). */
+function countTaggedNodes(node: unknown): number {
+  if (Array.isArray(node)) {
+    let total = 0
+    for (const item of node) total += countTaggedNodes(item)
+    return total
+  }
+  if (node !== null && typeof node === 'object') {
+    const record = node as Record<string, unknown>
+    let total = typeof record.tag === 'string' ? 1 : 0
+    for (const value of Object.values(record)) total += countTaggedNodes(value)
+    return total
+  }
+  return 0
+}
+
+/** What Feishu will actually weigh: serialized bytes + component count. */
+export function measureTaskCard(card: Record<string, unknown>): {
+  bytes: number
+  elements: number
+} {
+  return {
+    bytes: Buffer.byteLength(JSON.stringify(card)),
+    elements: countTaggedNodes(card),
+  }
+}
+
+function payloadFits(card: Record<string, unknown>): boolean {
+  const { bytes, elements } = measureTaskCard(card)
+  return bytes <= TASK_CARD_MAX_PAYLOAD_BYTES && elements <= TASK_CARD_MAX_PAYLOAD_ELEMENTS
+}
+
+/** The floor every shrink walks toward: no panels, no timelines — the header,
+ *  objective, roster and fold lines that say what the card is NOT showing. */
+function minimalPlan(view: TaskCardView): TaskCardPlan {
+  return {
+    rootTimelineCap: 0,
+    shown: [],
+    foldedLive: view.children.filter(c => !TASK_RUN_TERMINAL_STATUSES.has(c.status)),
+    foldedDone: view.children.filter(c => TASK_RUN_TERMINAL_STATUSES.has(c.status)),
+  }
+}
+
+/** One step smaller, or null when the plan is already the floor.
+ *
+ *  Detail goes before structure: halve every timeline tail first (geometric, so
+ *  a few steps reach zero), and only once no panel has a line left does a whole
+ *  child fold out — completed and oldest first, same priority planChildren
+ *  admits by, so in-flight work is the last thing to disappear. A folded child
+ *  is never silently dropped: it lands in the moreLive / earlierDone counts. */
+function shrinkPlan(plan: TaskCardPlan): TaskCardPlan | null {
+  if (plan.rootTimelineCap > 0 || plan.shown.some(entry => entry.timelineCap > 0)) {
+    return {
+      ...plan,
+      rootTimelineCap: Math.floor(plan.rootTimelineCap / 2),
+      shown: plan.shown.map(entry => ({ ...entry, timelineCap: Math.floor(entry.timelineCap / 2) })),
+    }
+  }
+  if (plan.shown.length > 0) {
+    const terminalIndex = plan.shown.findIndex(entry =>
+      TASK_RUN_TERMINAL_STATUSES.has(entry.child.status),
+    )
+    const index = terminalIndex >= 0 ? terminalIndex : 0
+    const dropped = plan.shown[index].child
+    const isTerminal = TASK_RUN_TERMINAL_STATUSES.has(dropped.status)
+    return {
+      rootTimelineCap: plan.rootTimelineCap,
+      shown: plan.shown.filter((_, i) => i !== index),
+      foldedLive: isTerminal ? plan.foldedLive : [...plan.foldedLive, dropped],
+      foldedDone: isTerminal ? [...plan.foldedDone, dropped] : plan.foldedDone,
+    }
+  }
+  return null
+}
+
+export type BuildTaskCardOptions = {
+  /** Skip straight to the floor plan. The flusher's retry after Feishu rejects
+   *  a payload outright (card-content-rejected), so a card that our own
+   *  measurement thought was fine still gets a frame through. */
+  minimal?: boolean
+}
+
+/** Build the card, then make it fit.
+ *
+ *  planChildren decides what SHOULD be shown from a character budget; this
+ *  loop enforces what Feishu will actually ACCEPT by measuring the finished
+ *  payload and re-rendering a smaller plan until it fits. The estimate stays
+ *  useful (it gets the common card right in one pass) but is no longer load
+ *  bearing — the measurement is. */
+export function buildTaskCard(
+  input: TaskCardView,
+  options: BuildTaskCardOptions = {},
+): Record<string, unknown> {
+  let plan = options.minimal ? minimalPlan(input) : planChildren(input)
+  let card = renderCard(input, plan)
+  if (options.minimal) return card
+  // Bounded by construction: each step either halves every timeline cap or
+  // folds one child out, so the walk ends at the floor plan in O(children +
+  // log(maxTimeline)) renders.
+  while (!payloadFits(card)) {
+    const smaller = shrinkPlan(plan)
+    // Already at the floor and still too big (a pathological objective/title):
+    // send it anyway — Feishu rejecting one frame beats rendering nothing, and
+    // the flusher's minimal retry is the next line of defence.
+    if (!smaller) return card
+    plan = smaller
+    card = renderCard(input, plan)
+  }
+  return card
 }

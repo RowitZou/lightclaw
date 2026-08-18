@@ -128,6 +128,22 @@ describe('classifyFeishuError', () => {
     })).kind, 'withdrawn-target')
   })
 
+  it('classifies a rejected card payload (230099 / 230025) as card-content-rejected', () => {
+    // The message id is fine — the CARD is what Feishu refuses: 230099 carries
+    // the card builder's own ceiling in ext ("ErrCode: 11310; ErrMsg: element
+    // exceeds the limit"), 230025 is the 30 KB message-length cap. Distinct
+    // from withdrawn-target: the same target accepts a SMALLER card, so the
+    // remedy is shrink-and-retry, not create-a-new-message.
+    for (const data of [
+      { code: 230099, msg: 'Failed to create card content' },
+      { code: 230025, msg: 'the length of the message content reaches its limit' },
+    ]) {
+      const c = classifyFeishuError(axiosLike({ status: 400, data }))
+      assert.equal(c.kind, 'card-content-rejected')
+      assert.equal(c.retryable, false, 'retrying the same payload is pointless')
+    }
+  })
+
   it('classifies an invalid/nonexistent open_message_id (99992354) as withdrawn-target', () => {
     // bg-wake synthetic messageIds the platform never saw 400 with this code;
     // the reply path treats it like a withdrawn target and falls back to create.

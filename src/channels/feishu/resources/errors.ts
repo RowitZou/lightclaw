@@ -9,6 +9,7 @@ export type FeishuErrorKind =
   | 'internal-server'
   | 'transient-network'
   | 'withdrawn-target'
+  | 'card-content-rejected'
   | 'unknown'
 
 export type FeishuScopeMissingInfo = {
@@ -66,6 +67,16 @@ const RATE_LIMIT_CODES = new Set([99991400, 99991403, 1000004, 1000005, 11232, 1
 // (2026-07-26 prod: two standing-root task cards outlived the window and
 // the flusher retried the 400 hundreds of times a day).
 const WITHDRAWN_TARGET_CODES = new Set([230011, 231003, 99992354, 230031])
+// The TARGET is fine, the PAYLOAD is not: 230025 is the message-length limit
+// (cards / rich text cap at 30 KB) and 230099 "Failed to create card content"
+// is the card-builder's own rejection — its `ext` names the specific ceiling
+// (`ErrCode: 11310; ErrMsg: element exceeds the limit`, i.e. too many
+// components). Distinct from withdrawn-target because retrying the SAME card
+// is hopeless while a SMALLER card at the same message id succeeds — the
+// task-card flusher's minimal-card retry. 2026-08-18 prod: a 28-subtask card
+// hit 230099 and every flush for the next 91 minutes repeated it verbatim, so
+// the card sat frozen on a stale frame for the rest of the run.
+const CARD_CONTENT_REJECTED_CODES = new Set([230025, 230099])
 const NOT_FOUND_CODES = new Set([1002, 600, 11244, 18066, 90304, 90305, 91005, 91205, 95007, 1069304, 95006, 91402, 99992355, 99992375, 99992379])
 // 1061xxx is the WHOLE drive submodule error space, not an already-exists
 // family: 1061002 is drive's generic "params error." (request-shape bug on
@@ -102,6 +113,8 @@ export function classifyFeishuError(error: unknown): FeishuErrorClassification {
     kind = 'rate-limited'
   } else if (code !== undefined && WITHDRAWN_TARGET_CODES.has(code)) {
     kind = 'withdrawn-target'
+  } else if (code !== undefined && CARD_CONTENT_REJECTED_CODES.has(code)) {
+    kind = 'card-content-rejected'
   } else if ((code !== undefined && (/^99992\d{3}$/.test(String(code)) || PARAMS_ERROR_CODES.has(code))) || envelope.fieldViolations.length > 0) {
     kind = 'validation-failed'
   } else if ((code !== undefined && ALREADY_EXISTS_CODES.has(code)) || /already exist|already been added|been added|duplicate|repeat/i.test(msg ?? '')) {
@@ -319,6 +332,8 @@ function buildMessages(
       return { agentMessage: `${withRaw}\nNetwork transient error. Retryable.`, adminMessage: withRaw }
     case 'withdrawn-target':
       return { agentMessage: `${withRaw}\nReply target message withdrawn or no longer exists. Caller should fallback to create.`, adminMessage: withRaw }
+    case 'card-content-rejected':
+      return { agentMessage: `${withRaw}\nFeishu rejected the card payload itself (size / component count). Retrying the same card will fail again — send a smaller one.`, adminMessage: withRaw }
     case 'unknown':
       return { agentMessage: withRaw, adminMessage: withRaw }
   }

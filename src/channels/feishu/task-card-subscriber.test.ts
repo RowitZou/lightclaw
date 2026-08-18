@@ -202,6 +202,83 @@ void describe('task-card pipeline', () => {
     assert.ok(!calls.some(c => c.kind === 'patch' && c.messageId === 'om_card_1'))
   })
 
+  void it('retries a minimal card when Feishu rejects the payload (230099), instead of freezing on a stale frame', async () => {
+    // The bound message is patchable; the CARD is what Feishu refuses (too
+    // many components / too large). Retrying the same payload fails forever,
+    // so the reader keeps seeing whichever frame last got through — 2026-08-18
+    // prod: 94 identical rejections while the run kept moving. The flusher must
+    // fall back to the floor card so status still tracks reality.
+    const calls: IoCall[] = []
+    let counter = 0
+    let rejectPatches = false
+    const io: TaskCardIo = {
+      async create(target, card) {
+        calls.push({ kind: 'create', target, card })
+        counter += 1
+        return { messageId: `om_card_${counter}` }
+      },
+      async patch(messageId, card) {
+        const panels = ((card as { body: { elements: Record<string, unknown>[] } }).body.elements)
+          .filter(el => el.tag === 'collapsible_panel').length
+        // Only the detailed card is refused; the floor card (root panel only)
+        // is accepted — that asymmetry is the whole point of the retry.
+        if (rejectPatches && panels > 1) {
+          throw Object.assign(new Error('Request failed with status code 400'), {
+            response: {
+              status: 400,
+              data: { code: 230099, msg: 'Failed to create card content' },
+            },
+          })
+        }
+        calls.push({ kind: 'patch', messageId, card })
+      },
+      async sendText(target, text) {
+        calls.push({ kind: 'sendText', target, text })
+      },
+    }
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+
+    const root = await createRootTaskRun(OWNER, DM_SESSION, {
+      objective: '十篇论文阅读',
+      title: '论文阅读',
+    })
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId === 'om_card_1',
+      { label: 'initial create binds om_card_1' },
+    )
+
+    rejectPatches = true
+    const child = await createTaskRun({
+      ownerCanonicalUser: OWNER,
+      parentRunId: root.id,
+      chainId: 'chain-big',
+      depth: 1,
+      role: 'coder',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      objective: '第一篇',
+      mode: 'background',
+    })
+    await markStarted(child.id, 'bg-session-big', Date.now(), OWNER)
+    await waitFor(
+      () => calls.some(c => c.kind === 'patch' && c.messageId === 'om_card_1'),
+      { label: 'a minimal frame lands despite the rejection' },
+    )
+
+    const patches = calls.filter(c => c.kind === 'patch')
+    const landed = patches[patches.length - 1]
+    assert.equal(landed.kind, 'patch')
+    if (landed.kind !== 'patch') return
+    const elements = (landed.card as { body: { elements: Record<string, unknown>[] } }).body.elements
+    assert.equal(
+      elements.filter(el => el.tag === 'collapsible_panel').length,
+      1,
+      'the accepted frame is the floor card: only the root overview panel',
+    )
+    // The card is NOT re-created: the message was fine, only its content was.
+    assert.equal(calls.filter(c => c.kind === 'create').length, 1)
+  })
+
   void it('freezes the card on root terminal WITHOUT a live settlement send, then goes silent', async () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
