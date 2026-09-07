@@ -5,6 +5,8 @@
  * query.ts <-> channels/runner.ts import cycle.
  */
 
+import { GATEWAY_INVALID_USER_MESSAGE_PATTERN } from './provider/capability-cache.js'
+
 // Network-error message fragments that are expected to be transient. This is
 // the LAST-resort fallback for errors that carry no structured signal (no
 // HTTP status, no Node/undici error `code`); structured classification in
@@ -52,8 +54,14 @@ export const ABORT_FAILURE_PATTERN = /Request was aborted/i
 // request just fails again, so they are never retried.
 const FATAL_HTTP_STATUS = new Set([400, 401, 403, 404, 405, 413, 422])
 
-const FATAL_5XX_REQUEST_VALIDATION_PATTERN =
-  /invalid_request_error|unknown parameter|invalid parameter/i
+// litellm's request validator rejects an unmapped user content block with
+// HTTP 500 "Invalid user message at index N" (2026-09-07 official: a
+// transcript image replayed to a text-only vLLM model was retried twice and
+// reported as network jitter). Same request → same rejection, so fatal.
+const FATAL_5XX_REQUEST_VALIDATION_PATTERN = new RegExp(
+  `invalid_request_error|unknown parameter|invalid parameter|${GATEWAY_INVALID_USER_MESSAGE_PATTERN.source}`,
+  'i',
+)
 
 // Node / OS socket error codes meaning "the connection broke" — a transient
 // network blip when the endpoint was working moments earlier.

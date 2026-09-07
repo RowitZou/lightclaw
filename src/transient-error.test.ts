@@ -157,6 +157,15 @@ describe('isTransientError', () => {
       false,
     )
     assert.equal(isTransientError(Object.assign(new Error('upstream exploded'), { status: 500 })), true)
+    // litellm request validator (2026-09-07 official): deterministic, must
+    // not be retried as network jitter.
+    assert.equal(
+      isTransientError(Object.assign(
+        new Error('500 {"error":{"message":"litellm.APIConnectionError: Hosted_vllmException - Invalid user message at index 187. Please ensure all user messages are valid OpenAI chat completion messages."}}'),
+        { status: 500 },
+      )),
+      false,
+    )
   })
 
   it('classifies provider overloaded errors as transient', () => {

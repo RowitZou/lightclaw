@@ -1320,6 +1320,12 @@ export class ChannelRunner {
         // attempts within the same inbound message — a kind that 4xx'd on
         // attempt N stays force-downgraded on attempts N+1, N+2.
         const forceFallbackInToolResultKinds = new Set<AttachmentKind>()
+        // `inUserMessage` counterpart: transcript-carried top-level blocks
+        // (a screenshot sent two days ago) are replayed on every turn, so
+        // after a rejection attributed to inUserMessage the retry must strip
+        // them via `finalizeUserMessageBlocks` — re-encoding the current
+        // message alone does not touch history.
+        const forceFallbackInUserMessageKinds = new Set<AttachmentKind>()
         // Interjections drained during the current query (accumulated across
         // tool-call boundaries within an attempt) so the retry path can put
         // them back at the head of the queue before `rewriteTranscript`
@@ -1607,6 +1613,9 @@ export class ChannelRunner {
               ...(forceFallbackInToolResultKinds.size > 0
                 ? { forceFallbackInToolResult: forceFallbackInToolResultKinds }
                 : {}),
+              ...(forceFallbackInUserMessageKinds.size > 0
+                ? { forceFallbackInUserMessage: forceFallbackInUserMessageKinds }
+                : {}),
             })
             break
           } catch (error) {
@@ -1653,22 +1662,22 @@ export class ChannelRunner {
                   p => !capabilityFlipped.has(`${missingSignal.kind}@${p}`),
                 )
               : []
-            // Gate: missing signal + at least one new position + at least one
-            // actionable recovery path. inUserMessage recovery requires a
-            // materialized user attachment to re-encode; inToolResult recovery
-            // only needs the forceFallback override to be installed on the
-            // next attempt, so it has no per-turn materialization prereq.
+            // Gate: missing signal + at least one new position. Both
+            // positions now have a per-call recovery path that needs no
+            // per-turn materialization: the forceFallback override installed
+            // for the next attempt makes streamChat downgrade the kind
+            // (tool_result side) or strip it from top-level user content
+            // (user-message side, transcript history included). A fresh
+            // attachment on the current turn is additionally re-encoded to
+            // its text breadcrumb and persisted, so the transcript itself
+            // stops carrying the rejected block.
             const inUserMessageFlipped =
               missingSignal !== null && affectedPositions.includes('inUserMessage')
             const inToolResultFlipped =
               missingSignal !== null && affectedPositions.includes('inToolResult')
             const canRecoverUserMessage =
               inUserMessageFlipped && materializedAttachment.length > 0
-            if (
-              missingSignal &&
-              affectedPositions.length > 0 &&
-              (canRecoverUserMessage || inToolResultFlipped)
-            ) {
+            if (missingSignal && affectedPositions.length > 0) {
               const flipSummaries: string[] = []
               let userMessageCounterKept = true
               for (const position of affectedPositions) {
@@ -1708,6 +1717,21 @@ export class ChannelRunner {
               // across remaining attempts so re-issued retries still benefit.
               if (inToolResultFlipped) {
                 forceFallbackInToolResultKinds.add(missingSignal.kind)
+              }
+              if (inUserMessageFlipped) {
+                forceFallbackInUserMessageKinds.add(missingSignal.kind)
+              }
+              if (inUserMessageFlipped && !canRecoverUserMessage) {
+                // The rejected block lives in transcript history, not on
+                // this turn: nothing to re-encode, and the cache stays at
+                // the runtime-authored `enabled:false` written above. A
+                // non-sticky flip would only turn every later turn into a
+                // rejected-request-then-retry pair, since the same
+                // historical block is re-sent verbatim each time.
+                process.stderr.write(
+                  `${channelId}: ${missingSignal.kind}@inUserMessage carried by transcript history; `
+                  + `cache pinned disabled for ${providerEntry.endpoint}/${providerEntry.upstreamModel}\n`,
+                )
               }
               if (canRecoverUserMessage) {
                 // Rebuild user-message encoding with the now-cached false.

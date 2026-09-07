@@ -81,6 +81,12 @@ export type StreamChatParams = {
    * per-call recovery the cache flip alone cannot deliver in time.
    */
   forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
+  /**
+   * Same contract for the `inUserMessage` position, consumed by
+   * `finalizeUserMessageBlocks`: kinds named here are stripped from top-level
+   * user content (transcript-carried channel attachments) for this call.
+   */
+  forceFallbackInUserMessage?: ReadonlySet<AttachmentKind>
 }
 
 export type WebSearchParams = {

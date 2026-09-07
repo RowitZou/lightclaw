@@ -87,6 +87,102 @@ function providerSupportsKindInToolResult(
   return entry?.enabled !== false
 }
 
+export type UserMessageFinalizationContext = {
+  endpoint: string
+  endpointBaseUrl: string | undefined
+  upstreamModel: string
+  /** Per-call override mirroring `forceFallbackInToolResult`: kinds named
+   *  here are stripped from top-level user content for THIS request even if
+   *  the persisted cache still says enabled. The channel autopilot sets it
+   *  on the retry right after a wire rejection, before (or instead of) the
+   *  sticky cache flip. */
+  forceFallbackInUserMessage?: ReadonlySet<AttachmentKind>
+}
+
+function providerSupportsKindInUserMessage(
+  ctx: UserMessageFinalizationContext,
+  kind: 'image' | 'pdf',
+): boolean {
+  if (ctx.forceFallbackInUserMessage?.has(kind)) {
+    return false
+  }
+  const entry = readCacheEntry({
+    endpoint: ctx.endpoint,
+    baseUrl: ctx.endpointBaseUrl,
+    upstreamModel: ctx.upstreamModel,
+    kind,
+    position: 'inUserMessage',
+  })
+  return entry?.enabled !== false
+}
+
+/** Model-facing replacement for a top-level binary block the destination
+ *  model does not accept. The channel breadcrumb (`[media attachment]` /
+ *  `path:`) that precedes the block in the same user message still names
+ *  the file, so the agent keeps a way to reach the content via Read.
+ *  English on purpose: model-visible strings stay English (i18n notes). */
+export function omittedUserBlockMarker(kind: 'image' | 'pdf'): ToolResultTextBlock {
+  return {
+    type: 'text',
+    text: kind === 'image'
+      ? '[inline image omitted: the current model does not accept image input. '
+        + 'If you need its content, call Read on the attachment path given in this message.]'
+      : '[inline PDF omitted: the current model does not accept document input. '
+        + 'If you need its content, call Read (with `pages`) on the attachment path given in this message.]',
+  }
+}
+
+/** Finalize TOP-LEVEL binary blocks in user messages (channel attachments
+ *  the user sent inline) against the destination model's `inUserMessage`
+ *  capability. The channel runner gates a *fresh* attachment at ingest time
+ *  (`encodeAttachmentsForInline` reads the same cache), but a block that
+ *  already sits in the transcript is replayed verbatim on every later turn
+ *  — so switching the session to a text-only model, or the cache flipping
+ *  after the fact, used to make every subsequent turn fail on the same
+ *  historical block (2026-09-07 official: litellm/vLLM `glm52_xsh` rejected
+ *  a two-day-old screenshot on each "你好", reported as network jitter).
+ *
+ *  Cheap and side-effect free: no describe call, just a text marker — the
+ *  agent can still Read the path named in the breadcrumb. Skipped entirely
+ *  (same array returned) when no user message carries a top-level block or
+ *  the model accepts every kind present. */
+export function finalizeUserMessageBlocks(
+  messages: ApiMessage[],
+  ctx: UserMessageFinalizationContext,
+): ApiMessage[] {
+  const hasAny = messages.some(
+    message => message.role === 'user'
+      && Array.isArray(message.content)
+      && message.content.some((block: unknown) => isImageBlock(block) || isDocumentBlock(block)),
+  )
+  if (!hasAny) {
+    return messages
+  }
+  const stripImages = !providerSupportsKindInUserMessage(ctx, 'image')
+  const stripDocuments = !providerSupportsKindInUserMessage(ctx, 'pdf')
+  if (!stripImages && !stripDocuments) {
+    return messages
+  }
+  return messages.map(message => {
+    if (message.role !== 'user' || !Array.isArray(message.content)) {
+      return message
+    }
+    let mutated = false
+    const content = message.content.map((block: unknown) => {
+      if (stripImages && isImageBlock(block)) {
+        mutated = true
+        return omittedUserBlockMarker('image')
+      }
+      if (stripDocuments && isDocumentBlock(block)) {
+        mutated = true
+        return omittedUserBlockMarker('pdf')
+      }
+      return block
+    })
+    return mutated ? { ...message, content } as ApiMessage : message
+  })
+}
+
 /** Walk every message and finalize binary blocks inside `tool_result.content`
  *  arrays so the destination provider can accept the request:
  *

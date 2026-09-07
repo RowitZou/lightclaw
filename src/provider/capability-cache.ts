@@ -49,6 +49,12 @@ type LegacyCapabilityCacheShape = {
 const CACHE_FILE_VERSION = 2
 export const FAILURE_THRESHOLD = 5
 const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
+
+/** litellm `validate_chat_completion_user_messages` rejection text. Emitted
+ *  with HTTP 500 by litellm proxies fronting hosted_vllm / OpenAI-compatible
+ *  backends when a user content block survives translation with a type the
+ *  OpenAI schema does not know. Shared with `isTransientError` (→ fatal). */
+export const GATEWAY_INVALID_USER_MESSAGE_PATTERN = /invalid user message at index \d+/i
 const ALL_POSITIONS: readonly AttachmentPosition[] = ['inUserMessage', 'inToolResult']
 
 let cached: CapabilityCacheShape | null = null
@@ -376,16 +382,32 @@ export function isCapabilityMissingError(
   }
   const status = (error as { status?: number; statusCode?: number }).status
     ?? (error as { statusCode?: number }).statusCode
-  // Auth / quota / network errors are not capability signals.
-  if (status && status !== 400 && status !== 415 && status !== 422) {
-    return null
-  }
   const message = (() => {
     const e = error as { message?: unknown }
     if (typeof e.message === 'string') return e.message.toLowerCase()
     return ''
   })()
   if (!message) {
+    return null
+  }
+  // litellm gateways run `validate_chat_completion_user_messages` on the
+  // translated request and surface a block type their converter did not
+  // map (e.g. an Anthropic `image` block bound for a text-only vLLM model)
+  // as HTTP 500 "Invalid user message at index N ...". It is a deterministic
+  // request-validation rejection, not a transport failure, and it names no
+  // kind — so attribute the kind from the request body: the only kinds that
+  // can have tripped it are the ones the caller actually sent. Ambiguous
+  // (several kinds present, or none) → don't flip.
+  if (GATEWAY_INVALID_USER_MESSAGE_PATTERN.test(message)) {
+    const present = requestContext?.messages
+      ? ALL_KINDS.filter(
+          kind => scanMessagesForKindPositions(requestContext.messages!, kind).length > 0,
+        )
+      : []
+    return present.length === 1 ? signal(present[0]!, requestContext) : null
+  }
+  // Auth / quota / network errors are not capability signals.
+  if (status && status !== 400 && status !== 415 && status !== 422) {
     return null
   }
   // Distinguishing image vs pdf rejections: providers usually mention the

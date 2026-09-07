@@ -396,6 +396,44 @@ describe('isCapabilityMissingError', () => {
     )
   })
 
+  it('attributes a litellm 500 "Invalid user message at index N" to the single kind present in the request', () => {
+    // 2026-09-07 official: litellm/vLLM `glm52_xsh` rejected a transcript
+    // image with this exact shape — HTTP 500, no kind word in the text.
+    const error = {
+      status: 500,
+      message: '500 {"error":{"message":"litellm.APIConnectionError: APIConnectionError: Hosted_vllmException - Invalid user message at index 187. Please ensure all user messages are valid OpenAI chat completion messages.","type":null,"param":null,"code":"500"}}',
+    }
+    const image = { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: 'AA' } }
+    const document = { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'AA' } }
+    assert.deepEqual(
+      isCapabilityMissingError(error, {
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'see' }, image] },
+          { role: 'user', content: 'hello' },
+        ],
+      }),
+      { kind: 'image', positions: ['inUserMessage'] },
+    )
+    // Without a request body there is nothing to attribute → no flip.
+    assert.equal(isCapabilityMissingError(error), null)
+    assert.equal(isCapabilityMissingError(error, { messages: [{ role: 'user', content: 'hi' }] }), null)
+    // Several kinds present → ambiguous → no flip.
+    assert.equal(
+      isCapabilityMissingError(error, {
+        messages: [{ role: 'user', content: [image, document] }],
+      }),
+      null,
+    )
+    // A 500 without the validator phrase stays a transport error.
+    assert.equal(
+      isCapabilityMissingError(
+        { status: 500, message: 'upstream exploded' },
+        { messages: [{ role: 'user', content: [image] }] },
+      ),
+      null,
+    )
+  })
+
   it('detects pdf rejection separately from image', () => {
     assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'document blocks not supported' }),

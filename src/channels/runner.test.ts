@@ -17,6 +17,7 @@ import {
   runWithSessionContext,
 } from '../session-context.js'
 import { setStreamChatForTest } from '../query.js'
+import { readCacheEntry } from '../provider/capability-cache.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setLang } from '../i18n/index.js'
 import { setAbortControllerForSession } from '../state.js'
@@ -1151,6 +1152,89 @@ describe('ChannelRunner history load under a leaked ambient SessionContext', () 
         JSON.stringify(wire[0]),
         /请翻译这封英文邮件/,
         'first wire message is the persisted prior turn',
+      )
+    } finally {
+      setStreamChatForTest(null)
+    }
+  })
+})
+
+describe('ChannelRunner capability autopilot for transcript-carried attachments', () => {
+  // 2026-09-07 official: a DM whose history held a screenshot was switched to
+  // a text-only model behind a litellm gateway. Every later turn replayed the
+  // image, litellm answered HTTP 500 "Invalid user message at index N", the
+  // runner retried it as network jitter and the session was stuck until
+  // compaction. The autopilot must (a) attribute the rejection to
+  // image@inUserMessage from the request body, (b) retry with the per-call
+  // strip override, (c) pin the cache disabled so the next turn never
+  // re-sends the block.
+  it('recovers a litellm 500 on a historical image by retrying with forceFallbackInUserMessage and pinning the cache', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_history_image'
+    strategy.resolveSessionId = () => sessionId
+
+    const aliceSessions = path.join(tmpHome, 'users', 'alice', 'sessions')
+    const priorUser = createUserMessage(
+      [
+        { type: 'text', text: '你看一下这个\n\n[media attachment]\n- type: image/jpeg\n- inline, path: /workspace/inbox/a.jpg' },
+        { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: 'AAAA' } },
+      ],
+      null,
+    )
+    const priorAssistant = createAssistantMessage({
+      content: [{ type: 'text', text: '这是一张截图' }],
+      stopReason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      parentUuid: priorUser.uuid,
+    })
+    await runWithSessionContext(
+      createEmptySessionContext({ sessionsDir: aliceSessions }),
+      () => appendMessages(sessionId, [priorUser, priorAssistant]),
+    )
+
+    const calls: Array<{ forceFallbackInUserMessage?: ReadonlySet<string> }> = []
+    setStreamChatForTest(async function* (params: {
+      messages: unknown[]
+      forceFallbackInUserMessage?: ReadonlySet<string>
+    }): AsyncGenerator<StreamEvent> {
+      calls.push({ forceFallbackInUserMessage: params.forceFallbackInUserMessage })
+      if (!params.forceFallbackInUserMessage?.has('image')) {
+        throw Object.assign(
+          new Error('500 {"error":{"message":"litellm.APIConnectionError: APIConnectionError: Hosted_vllmException - Invalid user message at index 2. Please ensure all user messages are valid OpenAI chat completion messages.","type":null,"param":null,"code":"500"}}'),
+          { status: 500 },
+        )
+      }
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: '你好！' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+
+    try {
+      await runner.handleMessage(
+        makeFakeFeishuMessage({ sender: 'ou_alice', text: '你好', chatId: sessionId }),
+      )
+      assert.equal(calls.length, 2, 'one rejected call, one recovered retry')
+      assert.equal(calls[0]!.forceFallbackInUserMessage, undefined)
+      assert.ok(calls[1]!.forceFallbackInUserMessage?.has('image'), 'retry carries the strip override')
+      const cache = readCacheEntry({
+        endpoint: 'fake',
+        baseUrl: undefined,
+        upstreamModel: 'claude-fake',
+        kind: 'image',
+        position: 'inUserMessage',
+      })
+      assert.equal(cache?.enabled, false, 'cache pinned disabled for the next turn')
+      assert.equal(cache?.source, 'runtime')
+      assert.ok(
+        strategy.replies.some(r => r.text.includes('你好！')),
+        `model reply must reach the channel, got replies=${JSON.stringify(strategy.replies)} notices=${JSON.stringify(strategy.notices)}`,
       )
     } finally {
       setStreamChatForTest(null)

@@ -2,7 +2,7 @@ import { type LightClawConfig } from './config.js'
 import { resolveToolModuleModel } from './model-resolution.js'
 import { getProviderFor } from './provider/index.js'
 import { resetAllFailureCountersFor } from './provider/capability-cache.js'
-import { finalizeToolResultBlocks } from './provider/multimodal-finalization.js'
+import { finalizeToolResultBlocks, finalizeUserMessageBlocks } from './provider/multimodal-finalization.js'
 import type {
   DescribeImageParams,
   DescribeImageResult,
@@ -85,10 +85,21 @@ export async function* streamChat(
   // through. Adaptive batching + size-class halving live inside the
   // describe call. Skipped (returns input unchanged) when no tool_result
   // image blocks are present, so plain text turns pay zero cost.
-  let finalizedMessages = rest.messages
+  // Top-level user blocks first: a transcript-carried image / PDF the
+  // destination model rejects is replaced by a text marker. Pure and
+  // describe-independent, so it runs even when the tool_result pass below
+  // has to skip (no vision-capable describe route configured).
+  let finalizedMessages = finalizeUserMessageBlocks(rest.messages, {
+    endpoint: entry.endpoint,
+    endpointBaseUrl: baseUrl,
+    upstreamModel: entry.upstreamModel,
+    ...(rest.forceFallbackInUserMessage
+      ? { forceFallbackInUserMessage: rest.forceFallbackInUserMessage }
+      : {}),
+  })
   try {
     const describeRoute = resolveDescribeRoute({ config })
-    finalizedMessages = await finalizeToolResultBlocks(rest.messages, {
+    finalizedMessages = await finalizeToolResultBlocks(finalizedMessages, {
       provider,
       endpoint: entry.endpoint,
       endpointBaseUrl: baseUrl,

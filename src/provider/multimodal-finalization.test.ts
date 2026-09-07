@@ -10,7 +10,7 @@ import {
 } from './capability-cache.js'
 import { _resetCacheForTests as resetBatchCache } from './batch-size-cache.js'
 import { _clearDescribeCacheForTests } from './describe-cache.js'
-import { finalizeToolResultImageBlocks } from './multimodal-finalization.js'
+import { finalizeToolResultImageBlocks, finalizeUserMessageBlocks } from './multimodal-finalization.js'
 import type { ApiMessage, Provider } from './types.js'
 import type { LightClawConfig } from '../config.js'
 
@@ -514,5 +514,78 @@ describe('finalizeToolResultImageBlocks', () => {
     assert.equal(inner[2].text, 'B')
     assert.match(String(inner[3].text), /desc-2/)
     assert.equal(inner[4].text, 'C')
+  })
+})
+
+describe('finalizeUserMessageBlocks', () => {
+  const ctx = { endpoint: 'e', endpointBaseUrl: undefined, upstreamModel: 'm' }
+  const history = (): ApiMessage[] => [
+    { role: 'user', content: [{ type: 'text', text: 'look' }, imageBlock(1)] },
+    { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [imageBlock(2)] }] },
+    { role: 'user', content: 'hello' },
+  ]
+
+  it('returns the same array when the cache is unset / enabled', () => {
+    const messages = history()
+    assert.equal(finalizeUserMessageBlocks(messages, ctx), messages)
+    writeCacheEntry({
+      endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', position: 'inUserMessage',
+      entry: { enabled: true, failures: 0 },
+    })
+    assert.equal(finalizeUserMessageBlocks(messages, ctx), messages)
+  })
+
+  it('replaces a transcript-carried top-level image with a text marker when image@inUserMessage is false', () => {
+    writeCacheEntry({
+      endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', position: 'inUserMessage',
+      entry: { enabled: false, failures: 0, source: 'runtime' },
+    })
+    const messages = history()
+    const out = finalizeUserMessageBlocks(messages, ctx)
+    assert.notEqual(out, messages)
+    const first = out[0]!.content as Array<{ type: string; text?: string }>
+    assert.equal(first[0]!.text, 'look')
+    assert.equal(first[1]!.type, 'text')
+    assert.match(String(first[1]!.text), /inline image omitted/)
+    // tool_result-side blocks are the other finalizer's business.
+    const toolResult = (out[2]!.content as Array<{ content: unknown[] }>)[0]!
+    assert.equal((toolResult.content[0] as { type: string }).type, 'image')
+    // Untouched messages keep identity; the input array is not mutated.
+    assert.equal(out[1], messages[1])
+    assert.equal(((messages[0]!.content as unknown[])[1] as { type: string }).type, 'image')
+  })
+
+  it('forceFallbackInUserMessage strips for this call even when the cache says enabled', () => {
+    writeCacheEntry({
+      endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', position: 'inUserMessage',
+      entry: { enabled: true, failures: 0 },
+    })
+    const out = finalizeUserMessageBlocks(history(), {
+      ...ctx,
+      forceFallbackInUserMessage: new Set(['image'] as const),
+    })
+    const first = out[0]!.content as Array<{ type: string }>
+    assert.equal(first[1]!.type, 'text')
+  })
+
+  it('handles document blocks independently of image blocks', () => {
+    writeCacheEntry({
+      endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'pdf', position: 'inUserMessage',
+      entry: { enabled: false, failures: 0, source: 'runtime' },
+    })
+    const messages: ApiMessage[] = [
+      {
+        role: 'user',
+        content: [
+          imageBlock(1),
+          { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'AA' } } as never,
+        ],
+      },
+    ]
+    const out = finalizeUserMessageBlocks(messages, ctx)
+    const content = out[0]!.content as Array<{ type: string; text?: string }>
+    assert.equal(content[0]!.type, 'image')
+    assert.match(String(content[1]!.text), /inline PDF omitted/)
   })
 })

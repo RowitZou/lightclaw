@@ -123,6 +123,8 @@ type QueryParams = {
    * `StreamChatParams.forceFallbackInToolResult` for the autopilot rationale.
    */
   forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
+  /** `inUserMessage` counterpart, forwarded to `finalizeUserMessageBlocks`. */
+  forceFallbackInUserMessage?: ReadonlySet<AttachmentKind>
 }
 
 let streamIdleCheckIntervalMs = 5_000
@@ -773,6 +775,9 @@ export async function query(params: QueryParams): Promise<{
             signal: combinedSignal,
             ...(params.forceFallbackInToolResult
               ? { forceFallbackInToolResult: params.forceFallbackInToolResult }
+              : {}),
+            ...(params.forceFallbackInUserMessage
+              ? { forceFallbackInUserMessage: params.forceFallbackInUserMessage }
               : {}),
             apiLogContext: {
               kind: apiLogKind,
