@@ -301,40 +301,6 @@ export async function reconcileTaskRunsOnce(
     reportableFindings.splice(0, reportableFindings.length, ...remaining)
   }
 
-  const block = formatTaskRunReconcileBlock(ownerCanonicalUser, reportableFindings, fingerprint)
-  const delivery = deps.reportFindings
-    ? await deps.reportFindings(ownerCanonicalUser, reportableFindings, block, fingerprint)
-    : undefined
-  if (delivery && !delivery.ok) {
-    return {
-      ownerCanonicalUser,
-      findings,
-      fingerprint,
-      reported: false,
-      deduped: false,
-      escalatedRootRunIds: escalation.escalatedRootRunIds,
-      delivery,
-    }
-  }
-  if (delivery && delivery.ok && delivery.coalesced) {
-    // The previous reconcile block is still sitting undrained in the wake
-    // session's queue (e.g. the turn is parked on a long AskUserQuestion) —
-    // the model never saw it. The push above refreshed that queued block in
-    // place; treat this sweep as deduped and append NO watchdog-report event,
-    // so the escalation budget counts only reports the model actually
-    // received (2026-07-09 prod: 3 undrained re-reports burned the budget and
-    // fired a false "repeatedly reminded, change approach now" escalation at
-    // a model that was legitimately waiting on the user).
-    return {
-      ownerCanonicalUser,
-      findings,
-      fingerprint,
-      reported: false,
-      deduped: true,
-      escalatedRootRunIds: escalation.escalatedRootRunIds,
-      delivery,
-    }
-  }
   if (!deps.reportFindings) {
     return {
       ownerCanonicalUser,
@@ -346,7 +312,36 @@ export async function reconcileTaskRunsOnce(
     }
   }
 
-  await Promise.all(reportableFindings.map(finding =>
+  // One wake per chat home, never one batch per owner. A finding's
+  // originSessionId is the chat the goal was opened in; the owner's other
+  // chats have no business seeing it. Batched by owner, the wake landed in
+  // the first finding's chat with every other chat's goals in tow, and the
+  // model settled them there — 2026-09-09 prod: an idle-root from a topic
+  // thread rode along with a held root from a plain group, and the model
+  // delivered the thread's full conclusion into the group. Findings with no
+  // origin share a fallback group (the reporter picks the owner's wake
+  // session for those).
+  let firstOk: Extract<TaskRunReconcileDelivery, { ok: true }> | undefined
+  let failure: Extract<TaskRunReconcileDelivery, { ok: false }> | undefined
+  const freshlyDelivered: TaskRunWatchdogFinding[] = []
+  for (const [, group] of groupFindingsByOrigin(reportableFindings)) {
+    const block = formatTaskRunReconcileBlock(ownerCanonicalUser, group, fingerprint)
+    const delivery = await deps.reportFindings(ownerCanonicalUser, group, block, fingerprint)
+    if (!delivery.ok) {
+      failure ??= delivery
+      continue
+    }
+    firstOk ??= delivery
+    // A coalesced push replaced a block the session never drained (turn
+    // parked on a long AskUserQuestion) — the model has not seen it, so it
+    // earns no watchdog-report event and no escalation-budget consumption
+    // (2026-07-09 prod: 3 undrained re-reports fired a false escalation).
+    if (!delivery.coalesced) {
+      freshlyDelivered.push(...group)
+    }
+  }
+
+  await Promise.all(freshlyDelivered.map(finding =>
     appendEvent(
       finding.runId,
       'watchdog-report',
@@ -359,14 +354,29 @@ export async function reconcileTaskRunsOnce(
       ownerCanonicalUser,
     ),
   ))
+  if (failure) {
+    // Groups that did land keep their report events (the model saw them);
+    // the caller's delivery retry re-runs the owner and the coalesce key
+    // absorbs the re-push for sessions whose block is still queued.
+    return {
+      ownerCanonicalUser,
+      findings,
+      fingerprint,
+      reported: freshlyDelivered.length > 0,
+      deduped: false,
+      escalatedRootRunIds: escalation.escalatedRootRunIds,
+      delivery: failure,
+    }
+  }
+  const allCoalesced = freshlyDelivered.length === 0
   return {
     ownerCanonicalUser,
     findings,
     fingerprint,
-    reported: true,
-    deduped: false,
+    reported: !allCoalesced,
+    deduped: allCoalesced,
     escalatedRootRunIds: escalation.escalatedRootRunIds,
-    delivery,
+    delivery: allCoalesced && firstOk ? { ...firstOk, coalesced: true } : firstOk,
   }
 }
 
@@ -1202,6 +1212,21 @@ async function appendEscalatedEvent(
   if (!root && fallbackRunId !== rootRunId) {
     await appendEvent(fallbackRunId, 'escalated', payload, input.now, ownerCanonicalUser)
   }
+}
+
+/** Chat-home partition for the main-level wake: findings that share an
+ *  originSessionId travel together; the origin-less ones share the '' key. */
+function groupFindingsByOrigin(
+  findings: TaskRunWatchdogFinding[],
+): Map<string, TaskRunWatchdogFinding[]> {
+  const groups = new Map<string, TaskRunWatchdogFinding[]>()
+  for (const finding of findings) {
+    const key = finding.originSessionId ?? ''
+    const list = groups.get(key) ?? []
+    list.push(finding)
+    groups.set(key, list)
+  }
+  return groups
 }
 
 function groupFindingsByRoot(

@@ -31,7 +31,7 @@ import {
   formatTaskRunReconcileBlock,
   reconcileTaskRunsOnce,
 } from './watchdog.js'
-import type { ExpiredUserStopCancellation } from './watchdog.js'
+import type { ExpiredUserStopCancellation, TaskRunWatchdogFinding } from './watchdog.js'
 import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
 describe('TaskRun watchdog', () => {
@@ -876,6 +876,100 @@ describe('TaskRun watchdog', () => {
       await reconcileTaskRunsOnce('alice', sweepDeps(30_000))
       await reconcileTaskRunsOnce('alice', sweepDeps(40_000))
       assert.equal(escalations, 0)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('wakes each chat home separately: a finding never rides into another session\'s reconcile block', async () => {
+    // 2026-09-09 prod: one owner had a held root in a plain group and an
+    // idle-root in a topic thread. Batched per owner, the single wake landed
+    // in the plain group (first finding's origin) carrying the thread's root
+    // too — and the model delivered the thread's conclusion into the group.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-origin-split-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const plain = 'feishu:group:oc_plain:ou_alice'
+      const thread = 'feishu:group:oc_topic:omt_1:ou_alice'
+      const groupRoot = await createRootTaskRun('alice', plain, {
+        objective: 'Query GPU partition usage.',
+        title: 'GPU usage',
+        now: 100,
+      })
+      const threadRoot = await createRootTaskRun('alice', thread, {
+        objective: 'Verify KV-aware routing.',
+        title: 'KV-aware routing',
+        now: 200,
+      })
+
+      const calls: Array<{ findings: TaskRunWatchdogFinding[]; block: string }> = []
+      const result = await reconcileTaskRunsOnce('alice', {
+        now: 100_000,
+        deliveredGraceMs: 1,
+        rootIdleGraceMs: 1,
+        reportFindings: async (_owner, findings, block) => {
+          calls.push({ findings, block })
+          return { ok: true, mode: 'interjection', coalesced: false }
+        },
+      })
+
+      assert.equal(result.findings.length, 2, 'both roots are idle findings')
+      assert.equal(calls.length, 2, 'one wake per chat home')
+      const byOrigin = new Map(calls.map(call => [call.findings[0]!.originSessionId, call]))
+      const plainCall = byOrigin.get(plain)
+      const threadCall = byOrigin.get(thread)
+      assert.ok(plainCall && threadCall, `expected one call per origin, got ${[...byOrigin.keys()].join(',')}`)
+      assert.deepEqual(plainCall.findings.map(f => f.runId), [groupRoot.id])
+      assert.deepEqual(threadCall.findings.map(f => f.runId), [threadRoot.id])
+      assert.ok(plainCall.block.includes(groupRoot.id) && !plainCall.block.includes(threadRoot.id),
+        'the plain-group block must not mention the thread root')
+      assert.ok(threadCall.block.includes(threadRoot.id) && !threadCall.block.includes(groupRoot.id),
+        'the thread block must not mention the group root')
+      assert.equal(result.reported, true)
+      for (const id of [groupRoot.id, threadRoot.id]) {
+        assert.equal(
+          (await getTaskRunEvents(id, {}, 'alice')).filter(e => e.kind === 'watchdog-report').length,
+          1,
+          `each delivered group records its own watchdog-report (${id})`,
+        )
+      }
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('a failed wake for one chat home keeps the other home\'s report and surfaces the failure', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-origin-partial-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const okRoot = await createRootTaskRun('alice', 'feishu:dm:oc_ok', {
+        objective: 'A', title: 'A', now: 100,
+      })
+      const badRoot = await createRootTaskRun('alice', 'feishu:dm:oc_bad', {
+        objective: 'B', title: 'B', now: 200,
+      })
+      const result = await reconcileTaskRunsOnce('alice', {
+        now: 100_000,
+        deliveredGraceMs: 1,
+        rootIdleGraceMs: 1,
+        reportFindings: async (_owner, findings) =>
+          findings[0]!.runId === badRoot.id
+            ? { ok: false, reason: 'no-wake-session' }
+            : { ok: true, mode: 'interjection', coalesced: false },
+      })
+      assert.equal(result.delivery?.ok, false, 'the failure is surfaced for the delivery retry path')
+      assert.equal(result.reported, true, 'the home that did land counts as reported')
+      assert.equal(
+        (await getTaskRunEvents(okRoot.id, {}, 'alice')).filter(e => e.kind === 'watchdog-report').length,
+        1,
+      )
+      assert.equal(
+        (await getTaskRunEvents(badRoot.id, {}, 'alice')).filter(e => e.kind === 'watchdog-report').length,
+        0,
+        'an undelivered home earns no report event',
+      )
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
