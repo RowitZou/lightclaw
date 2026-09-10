@@ -50,6 +50,7 @@ import {
 import { getCurrentSessionContext } from './session-context.js'
 import {
   buildTurnToolCatalog,
+  findDeferredTool,
   type TurnToolCatalog,
 } from './tools/deferred-loading.js'
 import { addTaskRunUsage } from './taskrun/store.js'
@@ -63,6 +64,7 @@ import {
   toolToAPISchema,
   type Tool,
 } from './tool.js'
+import { buildToolCallLeakReminder, detectToolCallLeak } from './tool-call-leak.js'
 import {
   dispatchToolCall,
   throwIfAborted,
@@ -358,6 +360,15 @@ export async function query(params: QueryParams): Promise<{
   // of looping forever — while a spurious stop after genuine progress can be
   // rescued again.
   let pendingEmptyStopRescue = false
+  // Tool-call-leak rescue guard (2026-09-10, official 0904a/GLM leak). Set
+  // when the model wrote a tool call out as `<tool_call>` text — the serving
+  // side's parser dropped it (typically a deferred tool it never loaded, so
+  // the name was absent from the request's tools array) and nothing ran —
+  // and a corrective reminder was injected; cleared by the next turn that
+  // issues a real tool call. Two consecutive leaks are therefore NOT both
+  // rescued: a model that keeps typing its calls out falls through to a
+  // normal end_turn instead of looping.
+  let pendingToolCallLeakRescue = false
 
   // Open per-query API logger and push it on the AsyncLocalStorage scope so
   // every nested streamChat call (main loop turns + recall + session-memory
@@ -925,10 +936,38 @@ export async function query(params: QueryParams): Promise<{
     // ensures the channel reply / Dispatch tool_result preserve everything
     // the model actually said, not just whatever the final turn happened to
     // emit.
-    const turnText = collectAssistantText(stopEvent.content)
+    const rawTurnText = collectAssistantText(stopEvent.content)
     const toolUses = stopEvent.content.filter(
       (block): block is ToolUseBlock => block.type === 'tool_use',
     )
+    // A no-tool response whose text carries `<tool_call>` markup is a tool
+    // call the serving side failed to parse, not a reply: the model thinks it
+    // acted, nothing ran, and the user would see bare XML. Treat it like a
+    // tool-bearing turn — its narration is interim, the markup is dropped —
+    // and hand the model a correction below instead of ending the turn.
+    let turnText = rawTurnText
+    let toolCallLeakReminder: string | null = null
+    if (toolUses.length === 0 && !pendingToolCallLeakRescue) {
+      const leak = detectToolCallLeak(rawTurnText)
+      if (leak) {
+        pendingToolCallLeakRescue = true
+        turnText = leak.narration
+        toolCallLeakReminder = buildToolCallLeakReminder(leak, name =>
+          findToolByName(turnCatalog.tools, name)
+            ? 'loaded'
+            : findDeferredTool(params.tools, name)
+              ? 'deferred'
+              : 'unknown',
+        )
+        process.stderr.write(
+          `query: tool call written as text (${leak.names.join(', ') || 'unnamed'}) sid=${getSessionId()} — injecting correction\n`,
+        )
+      }
+    }
+    if (toolUses.length > 0) {
+      pendingToolCallLeakRescue = false
+    }
+    const turnEndsQuery = toolUses.length === 0 && toolCallLeakReminder === null
     if (turnText.length > 0) {
       assistantTexts.push(turnText)
     }
@@ -941,7 +980,7 @@ export async function query(params: QueryParams): Promise<{
     // An empty no-tool response stays silent (nothing to deliver).
     if (invocation.onAssistantTurn && (turnText.length > 0 || toolUses.length > 0)) {
       try {
-        await invocation.onAssistantTurn(turnText, { isFinal: toolUses.length === 0 })
+        await invocation.onAssistantTurn(turnText, { isFinal: turnEndsQuery })
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
@@ -997,6 +1036,11 @@ export async function query(params: QueryParams): Promise<{
           lateInterjections,
           messages,
         )
+        if (toolCallLeakReminder !== null) {
+          // The user's interjection revives the loop on its own; the
+          // correction rides along so the dropped call is still redone.
+          lateContent.push({ type: 'text', text: toolCallLeakReminder })
+        }
         if (lateContent.length > 0) {
           const lateUserMessage = createUserMessage(lateContent, getLastUuid(messages))
           lateUserMessage.metadata = {
@@ -1016,6 +1060,11 @@ export async function query(params: QueryParams): Promise<{
           // Loop back to send the new user message to the LLM.
           continue
         }
+      }
+      if (toolCallLeakReminder !== null) {
+        messages.push(createUserMessage(toolCallLeakReminder, getLastUuid(messages)))
+        await flushTranscript()
+        continue
       }
       // Empty-stop backstop (dogfood 5/29 Bug 2). The model ended the turn with
       // no text and no tool call. An empty turn is never a finished state —
