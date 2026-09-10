@@ -82,13 +82,18 @@ export type SessionContext = {
   /** name → turn index of last use (ToolSearch match OR actual tool_use).
    *  Map preserves insertion order for LRU cap; the value lets the per-turn
    *  catalog builder drop entries unused for `tools.discoveredToolsTtlTurns`
-   *  turns. Session-scoped; daemon restart and dispatched-worker forks wipe it. */
+   *  turns. Session-scoped: the channel runner builds a fresh SessionContext
+   *  per inbound message and re-attaches this map from its per-session
+   *  `ToolDiscoveryStore` (`tools/discovery-store.ts`), so discoveries carry
+   *  over to the next message; daemon restart and dispatched-worker forks
+   *  wipe it. */
   discoveredTools: Map<string, number>
   /** Monotone counter incremented at the start of each query-loop turn.
    *  Survives across multiple `query()` invocations within the same channel
-   *  session (one user message = one query() = one or more turns; the
-   *  channel runner shares the SessionContext, so the counter accumulates).
-   *  Used by `markDiscovered` / `pruneStaleDiscoveredTools` for TTL eviction. */
+   *  session (one user message = one query() = one or more turns): the
+   *  runner copies it back into the `ToolDiscoveryStore` at turn end and
+   *  restores it on the next message. Used by `markDiscovered` /
+   *  `pruneStaleDiscoveredTools` for TTL eviction and by the memory nudge. */
   turnCounter: number
   /** `turnCounter` value at the last Memory Nudge injection. The next nudge
    *  is due once `turnCounter - lastMemoryNudgeTurn >= memoryNudge.everyTurns`.

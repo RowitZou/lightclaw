@@ -31,7 +31,10 @@
  *
  * Daemon restart / fork wipe the whole Map. `turnCounter` is also
  * session-scoped (lives on SessionContext, incremented at every query-loop
- * turn) so it doesn't drift across daemon restarts.
+ * turn) so it doesn't drift across daemon restarts. On a channel, both are
+ * carried from one inbound message to the next by the runner's
+ * `ToolDiscoveryStore` (`discovery-store.ts`) — without it every message
+ * started from an empty map and the cap / TTL never had anything to trim.
  */
 export function markDiscovered(
   map: Map<string, number>,

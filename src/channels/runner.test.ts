@@ -2983,3 +2983,57 @@ describe('ChannelRunner synthetic-turn task-card reply anchor', () => {
     }
   })
 })
+
+describe('ChannelRunner tool discovery persists across inbound messages', () => {
+  // Official 2026-09-09 (0904a / GLM in a topic group): the model loaded
+  // MemoryWrite with ToolSearch at 13:28; by the next user message at 13:32 —
+  // 12 API turns later, TTL 20 — the tool was absent from the request's tools
+  // array again, because every inbound message builds a fresh SessionContext
+  // with an empty discoveredTools map. The model then typed the call out as
+  // text and the serving side dropped it. Discoveries must survive to the next
+  // message on the same session (the LRU cap / turn TTL take it from there).
+  it('a deferred tool loaded via ToolSearch is still in the tools array on the next message', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const toolsPerCall: string[][] = []
+    let calls = 0
+    setStreamChatForTest(async function* (params: { tools?: Array<{ name: string }> }): AsyncGenerator<StreamEvent> {
+      toolsPerCall.push((params.tools ?? []).map(tool => tool.name))
+      calls += 1
+      if (calls === 1) {
+        yield {
+          type: 'stop',
+          stopReason: 'tool_use',
+          usage: { input_tokens: 1, output_tokens: 1 },
+          content: [
+            { type: 'tool_use', id: 'tu_search', name: 'ToolSearch', input: { query: 'select:MemoryWrite' } },
+          ],
+        }
+        return
+      }
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: 'text', text: 'ok' }],
+      }
+    } as unknown as Parameters<typeof setStreamChatForTest>[0])
+    try {
+      await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_alice', text: 'remember this' }))
+      assert.equal(calls, 2, 'message 1: ToolSearch turn + final turn')
+      assert.ok(!toolsPerCall[0]!.includes('MemoryWrite'), 'MemoryWrite starts deferred (absent from the first request)')
+      assert.ok(toolsPerCall[1]!.includes('MemoryWrite'), 'the turn after ToolSearch carries MemoryWrite')
+
+      await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_alice', text: 'and this too' }))
+      assert.equal(calls, 3)
+      assert.ok(
+        toolsPerCall[2]!.includes('MemoryWrite'),
+        'the next inbound message on the same session must still carry the loaded tool',
+      )
+    } finally {
+      setStreamChatForTest(null)
+    }
+  })
+})

@@ -5,6 +5,7 @@ import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { type TaskCardTarget } from './feishu/task-card-patcher.js'
 import { appendProgress, getTaskRun } from '../taskrun/store.js'
+import { ToolDiscoveryStore, type ToolDiscoveryState } from '../tools/discovery-store.js'
 import { recallRootIndex } from '../taskrun/recall-index.js'
 import { wakeOrInterject } from './feishu/wake-or-interject.js'
 import { formatRecalledInterjectionNote, formatRecalledRootBlock } from './feishu/recall-blocks.js'
@@ -100,6 +101,7 @@ import {
   createEmptySessionContext,
   createSessionContext,
   runWithSessionContext,
+  type SessionContext,
   type ChannelFileSendOutput,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
@@ -568,6 +570,9 @@ export function turnCardTargetForMessage(
  */
 export class ChannelRunner {
   private locks = channelSessionLock
+  // ToolSearch discoveries + turn counters, kept per sessionId across inbound
+  // messages (each message builds a fresh SessionContext; see the store).
+  private readonly discoveryStore = new ToolDiscoveryStore()
   private initialized = false
   // Interjection-/slash-ack emoji reactions awaiting cleanup, keyed by the
   // in-flight sessionId. An interjection (or queued write slash) enqueued by
@@ -960,6 +965,10 @@ export class ChannelRunner {
     // runs outside the per-turn SessionContext scope where an ambient
     // re-resolution can land on another identity's directory.
     let markedPendingTurnDir: string | null = null
+    // Set once the per-message context is hydrated; the session-lifetime
+    // discovery state is written back in the finally below so the next
+    // message on this session continues from it.
+    let discovery: { state: ToolDiscoveryState; ctx: SessionContext } | null = null
     try {
     await this.locks.runExclusive(sessionId, async () => {
       // In-flight typing indicator: fire BEFORE any work so the user sees
@@ -1080,6 +1089,14 @@ export class ChannelRunner {
         sessionContext.channelFileSender = pinnedChannelFileSender
         sessionContext.resourceGrantTarget = pinnedResourceGrantTarget
         sessionContext.openerMessageId = pinnedOpenerMessageId
+        // Session-lifetime discovery state: resetSessionContext returns empty
+        // `discoveredTools` / zeroed counters (it knows nothing about earlier
+        // messages), so a deferred tool the model loaded last message would
+        // be gone from this message's tools array. Attach the persisted state.
+        discovery = {
+          state: this.discoveryStore.attach(sessionId, sessionContext),
+          ctx: sessionContext,
+        }
         await refreshSkillRegistry(getCwd(), getCurrentUserId())
         if (!meta) {
           await runHook('onSessionStart', {
@@ -1949,6 +1966,9 @@ export class ChannelRunner {
         }
         throw error
       } finally {
+        if (discovery) {
+          this.discoveryStore.persist(discovery.state, discovery.ctx)
+        }
         turnCard?.finalize({ interrupted: true })
         // Backstop: a turn that parked / errored / card-routed without ever
         // sending a chat reply never hit stopTypingOnce above, so retire the
