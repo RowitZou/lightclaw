@@ -28,7 +28,7 @@ import {
   type UserToolResultBlock,
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
-import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
+import { normalizeToolInputSchema } from './tool-input-schema.js'
 import { isReasoningUnsupportedError } from './reasoning.js'
 import {
   isReasoningKnownUnsupported,
@@ -303,7 +303,7 @@ export function convertToolsToResponsesShape(
     type: 'function',
     name: tool.name,
     description: tool.description,
-    parameters: normalizeToolParametersForOpenAI(
+    parameters: normalizeToolInputSchema(
       tool.input_schema as Record<string, unknown>,
     ),
     strict: false,

@@ -2,8 +2,8 @@ import Anthropic from '@anthropic-ai/sdk'
 
 import type { ApiKeyEndpoint } from '../config.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
-import { normalizeToolInputSchemaForAnthropic } from './anthropic-tool-schema.js'
 import { attachProviderRetryAfter } from './retry-after.js'
+import { normalizeToolInputSchema } from './tool-input-schema.js'
 import { anthropicEffort, isReasoningUnsupportedError } from './reasoning.js'
 import {
   isReasoningKnownUnsupported,
@@ -99,17 +99,17 @@ function cacheSystem(system: string): Array<Record<string, unknown>> {
   ]
 }
 
-// Stamp each tool's `input_schema` into an Anthropic-legal shape (top-level
-// `type: "object"`). A Zod discriminatedUnion serializes to a bare top-level
-// `oneOf` that a Bedrock-fronted endpoint rejects with
-// `input_schema.type: Field required`; native Anthropic tolerates the gentler
-// `type` + `oneOf` shape this produces. See anthropic-tool-schema.ts.
+// Flatten each tool's `input_schema` into a plain top-level object. A Zod
+// discriminatedUnion serializes to a bare top-level `oneOf`, which native
+// Anthropic tolerates but a Bedrock-fronted endpoint rejects outright
+// (`input_schema does not support oneOf, allOf, or anyOf at the top level`).
+// See tool-input-schema.ts.
 function normalizeToolSchemas(tools: unknown[]): unknown[] {
   return tools.map(tool => {
     if (!isRecord(tool) || !isRecord(tool.input_schema)) {
       return tool
     }
-    const normalized = normalizeToolInputSchemaForAnthropic(tool.input_schema)
+    const normalized = normalizeToolInputSchema(tool.input_schema)
     if (normalized === tool.input_schema) {
       return tool
     }

@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net'
 
 import { createAnthropicProvider } from './anthropic.js'
 import type { StreamEvent } from '../types.js'
+import { toolToAPISchema } from '../tool.js'
+import { brainppClusterTool } from '../tools/cluster-job.js'
 import { isTransientError } from '../transient-error.js'
 
 // The anthropic stream-reduction loop is inline in streamChat (no exported
@@ -20,8 +22,15 @@ type SseScript = {
 }
 
 let script: SseScript = { frames: [] }
+/** JSON body of the most recent request the fake upstream received */
+let lastRequestBody: Record<string, unknown> | null = null
 
-const server = http.createServer((_req, res) => {
+const server = http.createServer(async (req, res) => {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer)
+  }
+  lastRequestBody = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -180,6 +189,45 @@ describe('anthropic: stream truncation guards', () => {
       if (block.type === 'tool_use') {
         assert.deepEqual(block.input, { label: 'ok' })
       }
+    }
+  })
+})
+
+describe('anthropic: tool input_schema on the wire', () => {
+  // Regression (2026-09-29 official incident): a Bedrock-fronted Anthropic
+  // relay rejected every request carrying BrainppCluster with
+  // `input_schema does not support oneOf, allOf, or anyOf at the top level`.
+  // The 06-27 normalizer only stamped `type:"object"` and kept the `oneOf`,
+  // so every Bedrock-routed worker turn 400'd before inference. What the
+  // upstream actually receives must carry no top-level combinator.
+  it('sends a union-typed tool schema flattened to a plain object', async () => {
+    script = {
+      frames: [
+        MESSAGE_START,
+        sse('message_delta', {
+          delta: { stop_reason: 'end_turn' },
+          usage: { output_tokens: 1 },
+        }),
+        sse('message_stop', {}),
+      ],
+      end: true,
+    }
+    lastRequestBody = null
+    const provider = makeProvider()
+    await collect(
+      provider.streamChat({
+        model: 'claude-test',
+        messages: [{ role: 'user', content: 'hi' }],
+        system: 'test system',
+        tools: [toolToAPISchema(brainppClusterTool)],
+      }),
+    )
+    const tools = (lastRequestBody as { tools?: Array<Record<string, unknown>> } | null)?.tools
+    assert.ok(tools && tools.length === 1, 'request must carry the tool')
+    const inputSchema = tools[0]!.input_schema as Record<string, unknown>
+    assert.equal(inputSchema.type, 'object')
+    for (const key of ['oneOf', 'anyOf', 'allOf']) {
+      assert.equal(inputSchema[key], undefined, `top-level ${key} must not reach the wire`)
     }
   })
 })
